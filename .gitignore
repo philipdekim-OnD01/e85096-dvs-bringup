@@ -1,0 +1,32 @@
+
+.DS_Store
+.work/
+*.bin
+*.dtb
+*.dtbo
+*.elf
+*.Image
+*.img
+*.key
+*.ko
+*.o
+*.p12
+*.pem
+# Build products
+# Do not import complete kernel trees
+# Local upstream kernel worktree
+build/
+confidential/
+credentials*
+e850-96-kernel-*/
+exynos2700/
+galaxy27/
+Image
+internal/
+linux-*/
+out/
+private*
+samsung_internal/
+secret*
+tmp/
+zImage
