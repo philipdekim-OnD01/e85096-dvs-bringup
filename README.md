@@ -85,11 +85,11 @@ Mainline Linux
 
 ## Current Status
 
-Power:
-Under test
+CN4 power configuration:
+Confirmed in Device Tree / Hardware not tested
 
-HSI2C2:
-Under test
+HSI2C2 configuration:
+Confirmed in Device Tree / Hardware not tested
 
 DVS I2C:
 Not verified
