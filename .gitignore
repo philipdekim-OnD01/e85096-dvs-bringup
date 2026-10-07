@@ -30,3 +30,13 @@ samsung_internal/
 secret*
 tmp/
 zImage
+
+# External module artifacts
+*.cmd
+*.mod
+*.mod.c
+Module.symvers
+modules.order
+compile_commands.json
+__pycache__/
+modules/dvs/.cache
