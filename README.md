@@ -9,6 +9,7 @@ Status: Work in Progress / Experimental
 
 - **[E850-96 Android → Linux conversion / flashing guide](docs/E85096-ANDROID-TO-LINUX.md)**: supported architecture, preparation, official U-Boot sequence, recovery warnings, and post-boot checks.
 - **[Student Fork and Pull Request guide](docs/STUDENT-FORK-PR.md)**: fork this repository, work on a branch, and submit changes for review.
+- **[Windows 11 + WSL2 Ubuntu: Linux/Android driver development](docs/WINDOWS-WSL2-DRIVER-DEV.md)**: setup commands, ARM64 cross-build prerequisites, Android kernel differences, USB/ADB/Fastboot access; students can keep Windows installed.
 - **[DVS I2C/RESET driver](modules/dvs/src/main.c)** and **[module build notes](modules/dvs/README.md)**: reference implementation merged through [PR #1](https://github.com/philipdekim-OnD01/e85096-dvs-bringup/pull/1).
 
 This repository is the **upstream** project. The student/developer repositories should be **forks of this repository**, not additional forks created inside the same owner account. The I2C/RESET module was tested on a Linux 7.2.8 E850-96; **MIPI/CSIS DMA capture and full DVS decoding are not yet implemented in this repository**. Review the Linux package README and verify board-specific images before destructive eMMC flashing.

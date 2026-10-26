@@ -9,6 +9,46 @@
 - [병합 완료된 I2C/RESET 드라이버 소스](../modules/dvs/src/main.c)
 - [Android → Linux 전환 및 설치 주의사항](E85096-ANDROID-TO-LINUX.md)
 - [커널 모듈 빌드 안내](../modules/dvs/README.md)
+- [Windows/WSL2 설치 및 Android/Linux 드라이버 개발](WINDOWS-WSL2-DRIVER-DEV.md)
+
+
+## PC 운영체제 안내 — Windows를 지울 필요 없습니다
+
+**학생 PC가 Windows여도 괜찮습니다.** Windows 11에 **WSL2 + Ubuntu**만 설치하면 Linux 개발 도구로 E850-96용 ARM64 드라이버 소스를 분석하고 해당 커널용 교차 빌드를 할 수 있습니다. 실제 보드의 Android를 Linux로 바꾸는 것은 **별도 선택 사항**입니다.
+
+| PC 개발 환경 | 개발 가능한 대상 | 학생 권장 |
+| --- | --- | --- |
+| Windows 11 + WSL2(Ubuntu) | Linux용 E850 드라이버, Android용 **Linux 커널** 드라이버 | **기본 권장** |
+| Windows만 사용 | Git/편집 및 Windows ADB/Fastboot 가능; 커널 빌드는 WSL2 또는 Linux 빌드 머신 권장 | 보조 |
+| Ubuntu 네이티브 PC | 두 종류 모두, USB/UART 보드 연결에 유리 | 하드웨어 집중 실습 |
+
+**핵심:** Android 커널도 Linux 커널이지만 **Linux 7.2.8의 모듈을 Android 4.14에 그대로 사용할 수 없습니다.** 실제 보드 OS/커널 버전에 맞는 소스와 툴체인이 필요합니다. 현 드라이버는 Linux 7.2.8에서 I2C/RESET만 시험된 상태입니다.
+
+### Windows 11 → WSL2 Ubuntu 설치 방법 (PowerShell 관리자 권한)
+
+~~~powershell
+wsl --install -d Ubuntu
+~~~
+
+재부팅 후 Ubuntu를 실행하여 계정을 만들고, PowerShell에서 상태를 확인합니다.
+
+~~~powershell
+wsl --list --verbose
+~~~
+
+### Ubuntu(WSL2) 터미널에서 개발 도구 설치
+
+~~~bash
+sudo apt update
+sudo apt install -y git build-essential make bc bison flex \
+  libssl-dev libelf-dev device-tree-compiler \
+  gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+~~~
+
+이제 아래 **Fork → Clone → 브랜치 생성** 단계를 진행하면 됩니다. 보드 USB 연결이 필요하면 Windows 네이티브 ADB/Fastboot를 사용하거나 `usbipd-win`으로 WSL2에 전달합니다.
+
+자세한 절차: **[Windows+WSL2 설치, ARM64 빌드, Android 커널 포팅, USB 연결 가이드](WINDOWS-WSL2-DRIVER-DEV.md)**
+
 
 ## GitHub 웹에서 Fork
 
