@@ -2,6 +2,21 @@
 
 > 상태 기준: 2026-10-26. **E850-96 보드 자체의 OS를 Android에서 Linux로 교체**하는 절차입니다. PC의 Windows를 Ubuntu로 바꾸는 안내가 아닙니다.
 
+
+## PC는 Windows 그대로 사용할 수 있습니다
+
+학생 개발 PC에서 Windows를 삭제하거나 Ubuntu를 별도 설치할 필요는 없습니다. **Windows 11 + WSL2(Ubuntu)**로 Linux/Android 커널 소스 분석 및 대상 ARM64 커널의 교차 빌드가 가능합니다.
+
+- Windows에 `wsl --install -d Ubuntu`를 실행하고 WSL2 Ubuntu를 설치합니다.
+- **Linux 드라이버**: E850-96에서 사용할 Linux 버전에 맞는 커널 소스/빌드 환경으로 빌드합니다.
+- **Android 드라이버**: Android도 Linux 커널 기반이지만 **해당 Android BSP 커널** 소스/툴체인에서 별도로 빌드해야 합니다. Linux 7.2.8 모듈을 Android 4.14에서 그대로 사용할 수 없습니다.
+- USB/ADB/Fastboot는 Windows 네이티브 도구를 사용할 수 있고, WSL2로 USB를 전달하려면 `usbipd-win` 등의 설정이 필요합니다.
+
+**[학생용 Windows + WSL2 개발 환경 설치/빌드/USB 연결 가이드](WINDOWS-WSL2-DRIVER-DEV.md)**를 먼저 참고하세요.
+
+**주의:** 아래 Ubuntu PC/호스트는 **네이티브 Ubuntu** 기준의 공식 보드 플래싱 예시입니다. WSL2도 도구 설치는 가능하나 USB 패스스루·복구 절차가 추가되므로, 첫 부트로더/eMMC 플래싱은 검증된 네이티브 Ubuntu 환경을 권장합니다.
+
+
 ## 0. 확인된 사실과 미확인 사항
 
 | 항목 | 확인된 정보 | 한계 |
