@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: GPL-2.0
+/* E850-96 CN4 DVS I2C and active-low RESET integration. */
+#include <dt-bindings/gpio/gpio.h>
+#include "exynos-pinctrl.h"
+
+/* BSP camera control bus: GPC1[4:5], 400 kHz, MMIO 0x138c0000.
+ * Linux models the USI mux as a parent: both parent and bus must be enabled.
+ * The base SoC DTS already provides registers, interrupts, clocks and pins.
+ */
+&usi_hsi2c_2 {
+	status = "okay";
+};
+
+&hsi2c_2 {
+	clock-frequency = <400000>;
+	status = "okay";
+};
+
+/* CN4 CLK2 (pin 12) -> NRV carrier pin 18 DVS_Reset, active low.
+ * This group is selected by the DVS consumer, never a GPIO hog.
+ * Start in input mode; the consumer selects output and reset state with
+ * gpiod_get(). No MCLK output and no assumed external pull voltage.
+ */
+&pinctrl_peri {
+	dvs_reset_pin: dvs-reset-pin {
+		samsung,pins = "gpc0-2";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+	};
+};
+
+/* RC1S reference firmware i2c_dvs.h: DVS_I2C_ADDR = (0x20 >> 1).
+ * Register the device for driver development; no reset GPIO hog is used.
+ * nrv,rc1s is our project-local binding name, not a BSP compatible.
+ */
+&hsi2c_2 {
+	dvs: dvs@10 {
+		compatible = "nrv,rc1s";
+		reg = <0x10>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&dvs_reset_pin>;
+		reset-gpios = <&gpc0 2 GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
+};

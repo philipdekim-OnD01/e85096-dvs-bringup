@@ -112,6 +112,13 @@ Not tested
 Userspace event decoding:
 Not tested
 
+### Additional verification — 2026-10-07
+
+DVS I2C communication was verified on E850-96 running Linux 7.2.8 after
+flashing the prepared DTB. The driver completed a register 0x303B
+write/readback test with value 0x55. CHIP_ID and MIPI reception remain
+unverified. See [the DVS module README](modules/dvs/README.md) for details.
+
 ## Directory Structure
 
     patches/
@@ -122,6 +129,11 @@ Not tested
 
     tools/
         I2C and sensor bring-up tools
+
+    modules/
+        External kernel drivers
+        dvs/
+            DVS I2C/RESET driver and build instructions
 
     logs/
         Boot, kernel, I2C and CSIS logs
