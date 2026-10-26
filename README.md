@@ -5,6 +5,15 @@ development board based on Samsung Exynos850.
 
 Status: Work in Progress / Experimental
 
+## Start Here: Linux Migration and Student Forks (2026-10-26)
+
+- **[E850-96 Android → Linux conversion / flashing guide](docs/E85096-ANDROID-TO-LINUX.md)**: supported architecture, preparation, official U-Boot sequence, recovery warnings, and post-boot checks.
+- **[Student Fork and Pull Request guide](docs/STUDENT-FORK-PR.md)**: fork this repository, work on a branch, and submit changes for review.
+- **[DVS I2C/RESET driver](modules/dvs/src/main.c)** and **[module build notes](modules/dvs/README.md)**: reference implementation merged through [PR #1](https://github.com/philipdekim-OnD01/e85096-dvs-bringup/pull/1).
+
+This repository is the **upstream** project. The student/developer repositories should be **forks of this repository**, not additional forks created inside the same owner account. The I2C/RESET module was tested on a Linux 7.2.8 E850-96; **MIPI/CSIS DMA capture and full DVS decoding are not yet implemented in this repository**. Review the Linux package README and verify board-specific images before destructive eMMC flashing.
+
+
 ## Objective
 
 The objective of this project is to connect an event-based
@@ -83,7 +92,7 @@ Mainline Linux
 
 11. Decode events in userspace
 
-## Current Status
+## Initial Bring-up Status (Historical; See 2026-10-07 Verification Below)
 
 CN4 power configuration:
 Confirmed in Device Tree / Hardware not tested
