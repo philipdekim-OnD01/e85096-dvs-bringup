@@ -11,6 +11,7 @@ Status: Work in Progress / Experimental
 - **[Student Fork and Pull Request guide](docs/STUDENT-FORK-PR.md)**: fork this repository, work on a branch, and submit changes for review.
 - **[Windows 11 + WSL2 Ubuntu: Linux/Android driver development](docs/WINDOWS-WSL2-DRIVER-DEV.md)**: setup commands, ARM64 cross-build prerequisites, Android kernel differences, USB/ADB/Fastboot access; students can keep Windows installed.
 - **[DVS I2C/RESET driver](modules/dvs/src/main.c)** and **[module build notes](modules/dvs/README.md)**: reference implementation merged through [PR #1](https://github.com/philipdekim-OnD01/e85096-dvs-bringup/pull/1).
+- **[CSIS → DMA → DRAM capture and event decoder](docs/CSIS-DMA-DECODER.md)** (2026-10-27): [modules/csis](modules/csis/README.md), [CSIS Device Tree](dts/exynos850-e850-96-dvs-csis.dtsi), [tools/dvs-decoder](tools/dvs-decoder). Build-tested on Linux 7.2.8; hardware reception not yet verified.
 
 This repository is the **upstream** project. The student/developer repositories should be **forks of this repository**, not additional forks created inside the same owner account. The I2C/RESET module was tested on a Linux 7.2.8 E850-96; **MIPI/CSIS DMA capture and full DVS decoding are not yet implemented in this repository**. Review the Linux package README and verify board-specific images before destructive eMMC flashing.
 
@@ -128,6 +129,15 @@ DVS I2C communication was verified on E850-96 running Linux 7.2.8 after
 flashing the prepared DTB. The driver completed a register 0x303B
 write/readback test with value 0x55. CHIP_ID and MIPI reception remain
 unverified. See [the DVS module README](modules/dvs/README.md) for details.
+
+### Additional development — 2026-10-27
+
+Added a CSIS v1.2 / D-PHY / WDMA raw capture driver (`modules/csis`), its
+Device Tree include, NRV settings-file loading and stream control in the DVS
+driver, and a capture/decoder toolchain (`tools/dvs-decoder`). All of it
+builds against Linux 7.2.8 arm64 and the decoder passes synthetic tests;
+MIPI reception on the board and the sensor's native MGROUP format are still
+unverified. See [docs/CSIS-DMA-DECODER.md](docs/CSIS-DMA-DECODER.md).
 
 ## Directory Structure
 
