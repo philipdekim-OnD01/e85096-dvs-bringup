@@ -40,3 +40,5 @@ modules.order
 compile_commands.json
 __pycache__/
 modules/dvs/.cache
+# DVS captures
+*.dvsc
