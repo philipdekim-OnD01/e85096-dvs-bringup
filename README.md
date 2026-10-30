@@ -7,7 +7,8 @@ Status: Work in Progress / Experimental
 
 ## Start Here: Linux Migration and Student Forks (2026-10-26)
 
-- [OV5647 5MP / Android 10 I²C 통신 검증 매뉴얼](docs/E85096-OV5647-ANDROID10-I2C-BRINGUP.md): E850-96 CN4, ADB, HSI2C2→i2c-8, 주소 0x36 ACK 성공, Chip ID·영상 미검증을 구분한 실측 절차.
+- [OV5647 개발 후속 상태: Chip ID 확인, 벤더 5.10 + Debian 전략, Docker 및 Android 백업 진행](docs/E85096-OV5647-VENDOR510-DEBIAN-PLAN.md): MIPI/RAW10 미완료, boot0 읽기 중 재부팅 보고 및 백업 검증 조건.
+- [OV5647 5MP / Android 10 I²C 통신 검증 매뉴얼](docs/E85096-OV5647-ANDROID10-I2C-BRINGUP.md): E850-96 CN4, ADB, HSI2C2→i2c-8, 주소 0x36 ACK 성공 당시의 실측 기록(Chip ID는 2026-10-31 후속 보고로 완료, 영상은 미검증).
 - **[E850-96 Android → Linux conversion / flashing guide](docs/E85096-ANDROID-TO-LINUX.md)**: supported architecture, preparation, official U-Boot sequence, recovery warnings, and post-boot checks.
 - **[Student Fork and Pull Request guide](docs/STUDENT-FORK-PR.md)**: fork this repository, work on a branch, and submit changes for review.
 - **[Windows 11 + WSL2 Ubuntu: Linux/Android driver development](docs/WINDOWS-WSL2-DRIVER-DEV.md)**: setup commands, ARM64 cross-build prerequisites, Android kernel differences, USB/ADB/Fastboot access; students can keep Windows installed.
