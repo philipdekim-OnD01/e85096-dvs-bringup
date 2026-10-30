@@ -275,3 +275,36 @@ serial-getty@ttySAC0 : root 자동 로그인
 6. 크기가 작으면: boot.img를 `img2simg`로 sparse로 바꿔 `fastboot flash boot`로 시험한다(RAM 부팅 대신 eMMC 기록, 백업으로 복구 가능).
 
 이 단계부터는 보드를 직접 다뤄야 하므로 결과가 나오는 대로 이 문서에 이어서 기록한다.
+
+## 7. 전원 재투입 후 확인 (2026-10-31 오전)
+
+Chrome을 ⌘Q로 종료한 뒤 Android 10으로 정상 부팅했다(`adb devices` → `device`).
+
+### 7.1 USB-TTL이 맥에 잡히지 않음
+
+`/dev/cu.usbserial-*`가 없다. USB 장치 목록에도 FTDI(idVendor 0x0403)가 보이지 않는다. 드라이버보다 케이블·포트·어댑터 쪽 문제다.
+
+```bash
+ioreg -p IOUSB -l -w0 | grep -E '"USB Product Name"|"idVendor"'
+# USB2.0 HUB / Billboard / Flash Card Reader/Writer / Exynos  ← FT232R 없음
+```
+
+허브를 거치지 말고 맥 본체 포트에 직접 꽂는다. 다른 케이블로도 바꿔 본다. 꽂았을 때 어댑터 LED가 켜지는지 확인한다.
+
+### 7.2 이 보드의 LK는 모르는 `getvar`에 멈춘다
+
+```bash
+adb reboot bootloader
+fastboot getvar max-download-size   # max-download-size: 805306368  (768 MB, 0.004 s)
+fastboot getvar product             # 응답 없음 → 이후 모든 명령 무응답
+fastboot reboot                     # FAILED (usb_read failed with status e00002ed)
+```
+
+- 한도는 768 MB다. 55 MB boot.img는 크기 문제가 아니다.
+- 온보드 Android 10 LK는 `getvar product`에 응답하지 않고 그대로 멈춘다. Linaro `lk.bin`과는 다른 바이너리다.
+- 복구 방법은 **전원 재투입**뿐이다. eMMC는 바뀌지 않는다.
+- 시험 1의 멈춤도 같은 종류일 수 있다. 최신 `fastboot` 클라이언트는 `boot`·`flash` 전에 `getvar`(has-slot, partition-type, is-logical 등)를 먼저 보낸다.
+
+**규칙:** 이 LK에는 `getvar max-download-size` 말고는 `getvar`를 보내지 않는다.
+
+다음 시험에서는 `fastboot -v boot`로 실제로 오가는 명령을 남기고, UART로 LK 출력을 함께 기록한다.
