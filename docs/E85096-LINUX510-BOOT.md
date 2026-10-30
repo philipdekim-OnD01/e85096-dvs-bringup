@@ -224,3 +224,30 @@ modules: 140 copied, 92 autoload            ← is-cis-ov5647.ko 포함(자동 �
 ```
 
 `.config` 변경은 `CONFIG_CAMERA_CIS_OV5647_OBJ=m` 한 줄뿐이다(변경 전 사본: `/work/out/.config.before-ov5647`).
+
+---
+
+## 5. Debian rootfs 이미지
+
+스크립트: [`tools/linux510/build-rootfs.sh`](../tools/linux510/build-rootfs.sh) — Debian 12 bookworm arm64 minbase + systemd, ssh, i2c-tools, v4l-utils, python3-numpy.
+
+```bash
+docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v "$PWD/out:/out" \
+    ubuntu:22.04 sh /t/build-rootfs.sh
+```
+
+결과(2026-10-31 01:21 KST): `rootfs.simg` 398,062,088 B(sparse, 펼치면 3 GiB ext4).
+
+이미지를 풀어 확인한 내용:
+
+```text
+/etc/fstab    : /dev/mmcblk0p24  /  ext4  defaults,noatime  0  1
+/etc/hostname : e850-96
+/etc/passwd   : root, e850 (uid 1000)        그룹: sudo, video, i2c
+/lib/modules/5.10.157-00010-g3b6b9ca51034-dirty : .ko 140개 (is-cis-ov5647.ko 포함)
+serial-getty@ttySAC0 : root 자동 로그인
+```
+
+- 계정: `e850` / 비밀번호 `e850`(실습용, 네트워크에 연결하기 전에 바꾼다).
+- userdata(p24)에 굽는다: `fastboot flash userdata rootfs.simg`. Android 10의 사용자 데이터는 지워진다(백업 대상에서 제외했던 영역).
+- 첫 빌드는 마지막 확인용 `du`가 `/proc` 항목 때문에 오류를 내 종료 코드 1로 끝났다(이미지는 정상). 스크립트에서 그 줄을 뺐다.

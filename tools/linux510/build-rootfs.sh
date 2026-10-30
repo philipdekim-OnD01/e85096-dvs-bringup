@@ -45,6 +45,7 @@ done < /o/modules.order
 for extra in /o/ext-*/*.ko; do
     [ -f "$extra" ] && strip --strip-debug -o $R/lib/modules/$KVER/$(basename "$extra") "$extra" || true
 done
+cp /o/modules.order /o/modules.builtin /o/modules.builtin.modinfo $R/lib/modules/$KVER/ 2>/dev/null || true
 chroot $R depmod "$KVER"
 
 rm -rf $R/var/cache/apt/archives/*.deb $R/var/lib/apt/lists/*
@@ -54,4 +55,3 @@ mke2fs -q -t ext4 -L rootfs -d $R /out/rootfs.ext4 $SIZE
 img2simg /out/rootfs.ext4 /out/rootfs.simg
 rm /out/rootfs.ext4
 ls -l /out/rootfs.simg
-du -sh $R
