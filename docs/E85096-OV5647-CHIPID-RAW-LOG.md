@@ -185,12 +185,46 @@ Chrome이 Exynos USB 장치를 독점으로 잡고 있었고, ChatGPT 앱도 같
 
 부수 사항: 부팅 직후(약 230초 시점)에도 Android가 USB 설정을 다시 하면서 `adbd`가 재시작되어 한 번 끊긴다. `adb shell getprop sys.boot_completed`가 `1`이 된 뒤 시작한다.
 
-### 4.3 결과
+### 4.3 결과 — 완료, 검증 통과 (2026-10-31 00:43 KST)
 
-2026-10-31 00:40 KST 기준 **진행 중**(Chrome·ChatGPT 종료 후 재시도).
+Chrome·ChatGPT를 종료한 뒤 `super`부터 다시 받아 끝까지 완료했다.
 
-| 파티션 | 이름 | 상태 |
-| --- | --- | --- |
+| 파티션 | 이름 | 원본 크기(B) | 압축해제 크기 일치 |
+| --- | --- | ---: | --- |
+| p1 | efs | 20,971,520 | OK |
+| p5 | dtbo | 1,048,576 | OK |
+| p12 | super | 3,774,873,600 | OK |
+| p13 | cache | 314,572,800 | OK |
+| p14 | modem | 104,857,600 | OK |
+| p15 | boot | 104,857,600 | OK |
+| p16 | persist | 31,457,280 | OK |
+| p17 | recovery | 41,943,040 | OK |
+| p18 | misc | 41,943,040 | OK |
+| p19 | mnv | 20,971,520 | OK |
+| p20 | frp | 524,288 | OK |
+| p21 | vbmeta | 65,536 | OK |
+| p22 | metadata | 16,777,216 | OK |
+| GPT | 앞 34섹터 / 뒤 33섹터 | 17,408 / 16,896 | 두 사본 모두 `EFI PART` 서명 확인 |
+| p24 | userdata | 57,950,552,064 | **제외**(사용자 데이터) |
+| boot0 / boot1 | 부트로더 | — | **제외**(4.1) |
+
+- 압축 후 전체 크기 663 MB. 파일별 SHA-256은 백업 폴더의 `SHA256SUMS`에 있다.
+- 검증 명령:
+
+```bash
+cd ~/Desktop/E850_Android10_backup_20261031
+awk '$4 ~ /mmcblk0p/ && $4!="mmcblk0p24" {print $4, $3*1024}' partitions.txt | while read p sz; do
+  g=$(gzip -l $p.img.gz 2>/dev/null | tail -1 | awk '{print $2}')
+  [ "$g" = "$sz" ] && echo "$p OK" || echo "$p MISMATCH $g vs $sz"
+done
+xxd -s 512 -l 8 gpt_primary.bin            # 00000200: 4546 4920 5041 5254  EFI PART
+xxd -s $((32*512)) -l 8 gpt_backup.bin      # 00004000: 4546 4920 5041 5254  EFI PART
+shasum -a 256 -c SHA256SUMS
+```
+
+- Android 10으로 되돌릴 때(복구 절차): LK fastboot에서 `gunzip -c mmcblk0p15.img.gz > boot.img && fastboot flash boot boot.img`처럼 바꾼 파티션만 다시 쓴다. 바꾸는 파티션은 이후 문서에 매번 기록한다.
+
+--- | --- | --- |
 | p1 | efs | 완료, 원본 크기(20,971,520 B)와 압축해제 크기 일치 |
 | p5 | dtbo | 완료, 원본 크기(1,048,576 B)와 일치 |
 | p12 | super | 받는 중 |
