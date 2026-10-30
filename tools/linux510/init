@@ -1,0 +1,57 @@
+#!/bin/busybox sh
+# First-stage init for the E850-96 vendor 5.10 (GKI) kernel without Android.
+#
+# Most SoC drivers (timer, pinctrl, clocks, eMMC, UART) are modules, so this
+# initramfs plays the role of Android's vendor_boot: load every module in
+# modules.load order, then switch to the root filesystem given by root=.
+# If no root is given or it cannot be mounted, start a shell on the UART.
+
+/bin/busybox --install -s /bin
+mkdir -p /proc /sys /dev /newroot
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+
+log() { echo "[init] $*" > /dev/kmsg; }
+
+KVER=$(uname -r)
+log "kernel $KVER, loading modules"
+n=0; fail=0
+for m in $(cat /lib/modules/$KVER/modules.load); do
+    name=$(basename "$m" .ko)
+    if modprobe "$name" 2>/tmp/err; then
+        n=$((n + 1))
+    else
+        fail=$((fail + 1))
+        log "modprobe $name failed: $(cat /tmp/err)"
+    fi
+done
+log "modules loaded: $n ok, $fail failed"
+
+root=
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        root=/dev/*) root=${arg#root=} ;;
+    esac
+done
+
+if [ -n "$root" ]; then
+    log "waiting for $root"
+    i=0
+    while [ ! -b "$root" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+    if mount -t ext4 -o rw "$root" /newroot 2>/tmp/err && [ -x /newroot/sbin/init ]; then
+        log "switching to $root"
+        mount --move /dev /newroot/dev
+        umount /proc /sys
+        exec switch_root /newroot /sbin/init
+    fi
+    log "cannot use $root: $(cat /tmp/err)"
+fi
+
+log "no root filesystem, starting shell"
+for tty in /dev/ttySAC0 /dev/console; do
+    if [ -c "$tty" ]; then
+        exec setsid sh -c "exec sh <$tty >$tty 2>&1"
+    fi
+done
+exec sh
