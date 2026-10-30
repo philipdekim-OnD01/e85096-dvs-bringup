@@ -251,3 +251,27 @@ serial-getty@ttySAC0 : root 자동 로그인
 - 계정: `e850` / 비밀번호 `e850`(실습용, 네트워크에 연결하기 전에 바꾼다).
 - userdata(p24)에 굽는다: `fastboot flash userdata rootfs.simg`. Android 10의 사용자 데이터는 지워진다(백업 대상에서 제외했던 영역).
 - 첫 빌드는 마지막 확인용 `du`가 `/proc` 항목 때문에 오류를 내 종료 코드 1로 끝났다(이미지는 정상). 스크립트에서 그 줄을 뺐다.
+
+---
+
+## 6. 다음 순서 (보드 전원 재투입 후)
+
+2026-10-31 01:25 KST 현재 보드는 `fastboot devices`에 보이지만 명령에 응답하지 않는다(시험 1의 중단된 다운로드 이후). eMMC는 바뀌지 않았다.
+
+1. 보드 전원을 껐다 켠다 → Android 10 부팅, `adb devices` 확인.
+2. Chrome·ChatGPT 완전 종료, USB-TTL 다시 꽂기, UART 기록 시작(115200 8N1).
+3. `adb reboot bootloader` → `fastboot getvar max-download-size`.
+4. 크기가 boot.img(55 MB)보다 크면 RAM 부팅:
+   ```bash
+   fastboot boot out/boot.img          # root= 없음: UART에 busybox 셸이 뜨면 성공
+   ```
+   셸에서 확인: `dmesg | grep '\[init\]'`, `ls /dev/mmcblk0p*`, `modprobe is-cis-ov5647`.
+5. 성공하면 rootfs와 boot를 굽는다(되돌리기: 백업의 `mmcblk0p15.img.gz`를 `fastboot flash boot`).
+   ```bash
+   fastboot flash userdata out/rootfs.simg
+   fastboot flash boot out/boot-root.img   # build-bootimg.sh root=/dev/mmcblk0p24
+   fastboot reboot
+   ```
+6. 크기가 작으면: boot.img를 `img2simg`로 sparse로 바꿔 `fastboot flash boot`로 시험한다(RAM 부팅 대신 eMMC 기록, 백업으로 복구 가능).
+
+이 단계부터는 보드를 직접 다뤄야 하므로 결과가 나오는 대로 이 문서에 이어서 기록한다.
