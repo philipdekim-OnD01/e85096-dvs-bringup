@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * OmniVision OV5647 module definition for the Exynos Pablo framework.
+ *
+ * Modes follow mainline Linux ov5647_modes[] (RAW10, 2 data lanes) in the same order as
+ * sensor_ov5647_setfiles_A in is-cis-ov5647-setA.h:
+ *   mode0  640x480    60 fps   (2x2 binned + subsampled)
+ *   mode1 1296x972    46 fps   (2x2 binned, full FOV)
+ *   mode2 1920x1080   30 fps   (centre crop)
+ *   mode3 2592x1944   15 fps   (full resolution)
+ * Lane rate (Mbps) = mainline pixel_rate x 10 bit / 2 lanes.
+ *
+ * Board wiring (CN4, I2C, CSI, power) is in s5e3830-e850-ov5647-camera.dtsi.
+ */
+
+#include <dt-bindings/camera/exynos_is_dt.h>
+
+/ {
+	fragment@ov5647_module {
+		target-path = "/";
+
+		__overlay__ {
+			is_sensor_ov5647: is_sensor_ov5647@36 {
+				compatible = "samsung,sensor-module";
+
+				sensor_id = <SENSOR_NAME_OV5647>;
+
+				active_width = <2592>;
+				active_height = <1944>;
+				margin_left = <0>;
+				margin_right = <0>;
+				margin_top = <0>;
+				margin_bottom = <0>;
+				max_framerate = <60>;
+				bitwidth = <10>;
+
+				sensor_maker = "OMNIVISION";
+				sensor_name = "OV5647";
+				setfile_name = "setfile_ov5647.bin";
+
+				status = "okay";
+
+				vc_extra {
+					stat0 = <>;
+					stat1 = <>;
+					stat2 = <>;
+					stat3 = <>;
+				};
+
+				modes {
+					/* common = <width height fps settle mode lane speed interleave lrte pd_mode ex_mode> */
+					/* vcX = <map hwformat width height  hwformat type width height> */
+					mode0 {
+						common = <640 480 60 0 0 CSI_DATA_LANES_2 275 CSI_MODE_VC_ONLY LRTE_DISABLE PD_NONE EX_NONE>;
+						vc0 = <0 HW_FORMAT_RAW10 640 480 HW_FORMAT_RAW10 VC_NOTHING 640 480>;
+						vc1 = <1 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+						vc2 = <2 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+						vc3 = <3 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+					};
+					mode1 {
+						common = <1296 972 46 0 1 CSI_DATA_LANES_2 408 CSI_MODE_VC_ONLY LRTE_DISABLE PD_NONE EX_NONE>;
+						vc0 = <0 HW_FORMAT_RAW10 1296 972 HW_FORMAT_RAW10 VC_NOTHING 1296 972>;
+						vc1 = <1 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+						vc2 = <2 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+						vc3 = <3 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+					};
+					mode2 {
+						common = <1920 1080 30 0 2 CSI_DATA_LANES_2 408 CSI_MODE_VC_ONLY LRTE_DISABLE PD_NONE EX_NONE>;
+						vc0 = <0 HW_FORMAT_RAW10 1920 1080 HW_FORMAT_RAW10 VC_NOTHING 1920 1080>;
+						vc1 = <1 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+						vc2 = <2 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+						vc3 = <3 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+					};
+					mode3 {
+						common = <2592 1944 15 0 3 CSI_DATA_LANES_2 437 CSI_MODE_VC_ONLY LRTE_DISABLE PD_NONE EX_NONE>;
+						vc0 = <0 HW_FORMAT_RAW10 2592 1944 HW_FORMAT_RAW10 VC_NOTHING 2592 1944>;
+						vc1 = <1 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+						vc2 = <2 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+						vc3 = <3 HW_FORMAT_UNKNOWN 0 0 HW_FORMAT_UNKNOWN VC_NOTHING 0 0>;
+					};
+				};
+			};
+		};
+	};
+};

@@ -6,7 +6,7 @@
 #       ubuntu:22.04 sh /t/build-bootimg.sh [root=/dev/mmcblk0pN]
 #
 # Inputs : /o   = kernel build output (Image, dtb, dtbo, *.ko, modules.order)
-#          /t   = this directory (init, mkbootimg_v2.py, autoload.deny)
+#          /t   = this directory (init, mkbootimg_v2.py, autoload.deny, vendor_boot_module_order_s5e3830.cfg)
 # Outputs: /out = boot.img, initramfs.cpio.gz, merged.dtb, cmdline.txt
 set -eu
 ROOTARG=${1:-}
@@ -23,16 +23,21 @@ rm -rf $IRD && mkdir -p $IRD/bin $MODDIR /out
 cp /bin/busybox $IRD/bin/busybox
 cp /t/init $IRD/init && chmod 755 $IRD/init
 
-# 2. modules: all of them, without debug info; autoload list = modules.order minus deny patterns
-: > $MODDIR/modules.load
+# 2. modules: all of them, without debug info.
+#    Autoload order = the BSP's vendor_boot order (vendor_boot_module_order_s5e3830.cfg: chipid,
+#    reboot, clocks, MCT timer, UART, pinctrl, I2C first), then the rest of modules.order,
+#    minus the deny patterns.
 while read -r m; do
     f=/o/$m
     [ -f "$f" ] || { echo "missing $m" >&2; continue; }
     strip --strip-debug -o $MODDIR/$(basename "$m") "$f"
-    if ! echo "$(basename "$m")" | grep -qEf /t/autoload.deny; then
-        basename "$m" >> $MODDIR/modules.load
-    fi
 done < /o/modules.order
+# out-of-tree modules (e.g. modules/ov5647-pablo -> /o/ext-ov5647): copied, never autoloaded
+for f in /o/ext-*/*.ko; do
+    [ -f "$f" ] && strip --strip-debug -o $MODDIR/$(basename "$f") "$f" || true
+done
+{ grep -v '^#' /t/vendor_boot_module_order_s5e3830.cfg; sed 's|.*/||' /o/modules.order; } |
+    awk 'NF && !seen[$0]++' | grep -vEf /t/autoload.deny > $MODDIR/modules.load
 cp /o/modules.builtin $MODDIR/ 2>/dev/null || true
 cp /o/modules.order $MODDIR/
 depmod -b $IRD "$KVER"

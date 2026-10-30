@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * E850-96 / S5E3830: OV5647 (Raspberry Pi camera v1 style module) on CN4
+ *
+ *   OV5647 -> CN4 -> hsi2c_2 (I2C4 net, Linux i2c-8 on Android 10) / sensor instance 1 -> CSI1
+ *
+ * Measured on the board (Android 10, docs/E85096-OV5647-CHIPID-RAW-LOG.md):
+ *   CN4 pin 15 CAM_VDD_33 = PMIC LDO32, 3.3 V, already enabled
+ *   CN4 pin 11 CAM_GPIO   = GPG1[5]; on the RPi-style module this is the power enable
+ *   CN4 pin 12 MCLK2      = GPC0[2]; the module has its own oscillator, MCLK is not driven
+ *   chip ID 0x5647 read at 7-bit address 0x36 with only CAM_GPIO high
+ */
+
+#include "module_ov5647.dtsi"
+
+&is_sensor_ov5647 {
+	pinctrl-names = "pin0", "pin1", "pin2", "release";
+	pinctrl-0 = <>;
+	pinctrl-1 = <>;
+	pinctrl-2 = <>;
+	pinctrl-3 = <>;
+
+	position = <1>;
+	id = <1>;
+	mclk_ch = <2>;
+	sensor_i2c_ch = <2>;
+
+	status = "okay";
+
+	power_seq {
+		scenario_normal_on {
+			sensor_scenario = <SENSOR_SCENARIO_NORMAL>;
+			gpio_scenario = <GPIO_SCENARIO_ON>;
+
+			10 {
+				pname = "cam_gpio low";
+				pin = <PIN_OUTPUT 0 10000>;
+				gpio = <&gpg1 5 0x1>;
+			};
+
+			20 {
+				pname = "cam_gpio high (module power enable)";
+				pin = <PIN_OUTPUT 1 20000>;
+				gpio = <&gpg1 5 0x1>;
+			};
+
+			30 {
+				pname = "on_i2c";
+				pin = <PIN_I2C 1 0>;
+			};
+		};
+
+		scenario_normal_off {
+			sensor_scenario = <SENSOR_SCENARIO_NORMAL>;
+			gpio_scenario = <GPIO_SCENARIO_OFF>;
+
+			10 {
+				pname = "off_i2c";
+				pin = <PIN_I2C 0 0>;
+			};
+
+			20 {
+				pname = "cam_gpio low";
+				pin = <PIN_OUTPUT 0 1000>;
+				gpio = <&gpg1 5 0x1>;
+			};
+		};
+	};
+};
+
+&hsi2c_2 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	gpios = <&gpc1 4 0 &gpc1 5 0>;
+	status = "okay";
+	clock-frequency = <400000>;
+
+	samsung,reset-before-trans;
+
+	ov5647@36 {
+		compatible = "samsung,exynos-is-cis-ov5647";
+		reg = <0x36>;
+		id = <1>;
+		setfile = "setA";
+	};
+};
+
+&is_sensor1 {
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	scenario = <SENSOR_SCENARIO_NORMAL>;
+	id = <1>;
+	csi_ch = <1>;
+
+	dma_ch = <1 1 1 1>;
+	vc_ch = <0 1 2 3>;
+
+	flite_ch = <FLITE_ID_NOTHING>;
+	is_bns = <0>;
+	csi_mux = <0x1>;
+
+	status = "okay";
+};

@@ -21,7 +21,6 @@
 ^mcDrvModule
 ^exynos-debug-test
 ^s3c2410_wdt
-^hardlockup-watchdog
 ^dpu
 ^fb
 ^dss

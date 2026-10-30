@@ -137,3 +137,90 @@ Entering fastboot: xct boot fail code - %d
 2. Chrome·ChatGPT 완전 종료 확인, USB-TTL을 뽑았다 다시 꽂기.
 3. UART 기록 시작 → `fastboot getvar max-download-size` 확인.
 4. `fastboot boot` 재시도. 크기가 문제면 `Image.gz`(압축 커널) 또는 모듈 수를 줄인 initramfs로 boot.img 크기를 줄인다.
+
+### 3.1 모듈 적재 순서 수정 (시험 1 이후)
+
+커널 빌드 설정(`build.config.erd3830*`)에 Android가 첫 단계에서 쓰는 순서 파일이 있다.
+
+```text
+VENDOR_BOOT_MODULE_ORDER=vendor_boot_module_order_s5e3830.cfg
+```
+
+```text
+exynos-chipid_v2.ko exynos-reboot.ko clk_exynos.ko hardlockup-watchdog.ko exynos_mct.ko
+exynos_tty.ko pinctrl-samsung-core.ko i2c-exynos5.ko i2c-s3c2410.ko   ← 이 9개를 먼저, 그다음 modules.order
+```
+
+`build-bootimg.sh`가 이 파일(`tools/linux510/vendor_boot_module_order_s5e3830.cfg`)을 앞에 두고 나머지 `modules.order`를 이어 붙이도록 고쳤다. 결과: 자동 적재 92개.
+
+---
+
+## 4. OV5647 CIS 드라이버 (보드 없이 진행한 부분)
+
+묶음: [`modules/ov5647-pablo/`](../modules/ov5647-pablo/README.md)
+
+### 4.1 커널 트리에 적용
+
+```bash
+docker run --rm -v e850-kernel:/work/kernel -v "$PWD/modules/ov5647-pablo:/m:ro" e850-build-env:1 \
+    sh /m/apply.sh /work/kernel
+```
+
+```text
+#define SENSOR_NAME_OV5647		219          (두 exynos_is_dt.h에 추가)
+16:#include "camera/s5e3830-e850-ov5647-camera.dtsi"   (보드 DT: S5KRC1S → OV5647)
+```
+
+### 4.2 모듈 빌드 — 첫 시도 실패와 해결
+
+트리 안에서 단일 대상으로 빌드하면 modpost가 실패한다.
+
+```bash
+make O=/work/out ... drivers/media/platform/exynos/camera/sensor/module_framework/cis/is-cis-ov5647.ko
+```
+
+```text
+ERROR: modpost: "is_dev" [.../is-cis-ov5647.ko] undefined!
+ERROR: modpost: "sensor_cis_set_registers" [.../is-cis-ov5647.ko] undefined!
+ERROR: modpost: "find_peri_by_cis_id" [.../is-cis-ov5647.ko] undefined!
+make[2]: *** Deleting file 'modules-only.symvers'
+```
+
+- 이 심볼들은 `fimc-is.ko`가 내보내며 `Module.symvers`(15,280줄)에는 들어 있다. 단일 대상 modpost가 모듈 심볼을 읽지 않는 것이 원인이다.
+- **주의:** 이 실패로 빌드 볼륨의 `modules-only.symvers`가 지워졌다. 다음 전체 빌드 때 다시 생성된다.
+- `KBUILD_EXTRA_SYMBOLS`로 fimc-is 심볼을 따로 넘기면 `exported twice`로 실패한다. 외부 모듈 빌드에서는 modpost가 `Module.symvers` 전체를 이미 읽기 때문이다.
+
+해결: 외부 모듈(`M=`)로 빌드한다([`Kbuild`](../modules/ov5647-pablo/Kbuild), [`build-module.sh`](../modules/ov5647-pablo/build-module.sh)).
+
+```bash
+docker run --rm -v ~/e850-a13-build:/work -v e850-kernel:/work/kernel -v e850-out:/work/out \
+    -v "$PWD/modules/ov5647-pablo:/m:ro" e850-build-env:1 bash /m/build-module.sh
+```
+
+```text
+  CC [M]  /work/out/ext-ov5647/is-cis-ov5647.o
+  LTO [M] /work/out/ext-ov5647/is-cis-ov5647.lto.o
+  MODPOST /work/out/ext-ov5647/Module.symvers
+  LD [M]  /work/out/ext-ov5647/is-cis-ov5647.ko
+-rw-r--r-- 1 root root 665456 Oct 30 16:10 /work/out/ext-ov5647/is-cis-ov5647.ko
+```
+
+### 4.3 DTB 다시 빌드와 확인
+
+```bash
+docker run --rm -v ~/e850-a13-build:/work -v e850-kernel:/work/kernel -v e850-out:/work/out e850-build-env:1 bash -c \
+  'export PATH=/work/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH; cd /work/kernel;
+   make O=/work/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j10 dtbs'
+```
+
+boot.img를 다시 만든 뒤 합친 DTB를 풀어 확인:
+
+```text
+modules: 140 copied, 92 autoload            ← is-cis-ov5647.ko 포함(자동 적재는 안 함)
+10:	is_sensor_ov5647@36 {
+2452:		ov5647@36 {
+2456:			compatible = "samsung,exynos-is-cis-ov5647";
+(s5krc1s 노드 없음)
+```
+
+`.config` 변경은 `CONFIG_CAMERA_CIS_OV5647_OBJ=m` 한 줄뿐이다(변경 전 사본: `/work/out/.config.before-ov5647`).

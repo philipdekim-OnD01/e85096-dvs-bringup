@@ -1,0 +1,17 @@
+# Out-of-tree build of is-cis-ov5647.ko against an existing vendor 5.10 build.
+#
+# In-tree single-target builds (make .../is-cis-ov5647.ko) fail at modpost in this kernel:
+# the symbols exported by fimc-is.ko (is_dev, sensor_cis_set_registers, ...) are not seen.
+# As an external module, modpost reads the full Module.symvers (vmlinux + all modules).
+# See build-module.sh.
+
+CAM := $(srctree)/drivers/media/platform/exynos/camera
+
+obj-m := is-cis-ov5647.o
+
+ccflags-y := -I$(CAM) -I$(CAM)/include -I$(CAM)/interface -I$(CAM)/hardware \
+	-I$(CAM)/hardware/api -I$(CAM)/vendor -I$(CAM)/sensor/csi \
+	-I$(CAM)/sensor/module_framework -I$(CAM)/sensor/module_framework/cis \
+	-I$(CAM)/vendor/mcd/preprocessor -I$(CAM)/ischain/is-v8_20_0 \
+	-I$(CAM)/vendor/default -I$(CAM)/vendor/default/v8_20_0 -I$(CAM)/camera-pp \
+	-I$(srctree)/drivers/media/platform/exynos/camera-pp
