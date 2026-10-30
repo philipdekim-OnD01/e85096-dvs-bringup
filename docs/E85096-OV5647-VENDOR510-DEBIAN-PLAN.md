@@ -15,13 +15,14 @@
 | 단계 | 상태 | 근거 / 주의 |
 | --- | --- | --- |
 | 1. I²C 감지 (`/dev/i2c-8`, 7-bit `0x36`) | **DONE: 원시 ADB 출력 확인** | `i2cdetect -y 8 0x36 0x36` → `36` |
-| 2. OV5647 Chip ID `0x5647` | **DONE: 후속 작업자 보고** | `0x5647`을 읽었다는 후속 보고. 원시 read 명령/로그는 아직 이 저장소에 없음 |
+| 2. OV5647 Chip ID `0x5647` | **DONE: 원시 출력 확인** | `i2crd /dev/i2c-8 0x36 0x300a 2` → `56 47`. 명령·출력·도구 소스: [원시 기록](E85096-OV5647-CHIPID-RAW-LOG.md#2-chip-id-0x5647-판독) |
 | 3. MIPI CSI-2 frame reception | **NOT DONE: 드라이버 경로 개발 필요** | 센서 스트리밍, MIPI PHY, CSIS/카메라 수신 드라이버와 DT 확인 |
 | 4. RAW10 파일 저장 + 이미지 복원 | **NOT DONE: 수신 경로 및 처리 검증 필요** | WDMA/V4L2 또는 동등한 캡처 경로, 포맷·Bayer pattern 처리 확인 |
 
 Chip ID 확인은 센서 식별과 I²C 레지스터 접근을 입증하지만 MIPI 영상 수신을 뜻하지 않는다. 특히 3~4단계는 센서 드라이버 하나만 추가하면 자동 완성된다는 보장이 없다. Exynos850 수신 측 드라이버·클록·전원·DMA·펌웨어/HAL 의존성을 확인해야 한다.
 
-기존 ADB 실습 기록: [OV5647 I²C 검증 매뉴얼](E85096-OV5647-ANDROID10-I2C-BRINGUP.md).
+기존 ADB 실습 기록: [OV5647 I²C 검증 매뉴얼](E85096-OV5647-ANDROID10-I2C-BRINGUP.md).  
+Chip ID 판독, CN4 신호 대응(회로도), 백업 장애 원본 로그: [원시 기록](E85096-OV5647-CHIPID-RAW-LOG.md).
 
 ## 3. 커널·빌드 환경
 
@@ -58,6 +59,7 @@ docker run --rm e850-build-env:1 sh -c 'uname -m; command -v clang; clang --vers
 - `fastboot reboot` 후 Android로 복귀했다고 보고했다.
 - `boot0` 백업이 0바이트였고, 후속 작업자는 `mmcblk0boot0` 읽기로 MMC 드라이버 use-after-free가 발생했다고 분석했다.
 - **해당 커널 오류의 실제 원인과 재현성은 이 문서에 커널 oops 원본이 없으므로 독립적으로 검증되지 않았다.** 장치 이상이 없다고 단정하거나, 해당 영역을 다시 읽지 않는다.
+- 추가(2026-10-31): pstore에 남은 Oops 원본(`blk_rq_map_sg`, `0x6b6b…` slab poison)을 [원시 기록 4.1](E85096-OV5647-CHIPID-RAW-LOG.md#41-장애-1--mmcblk0boot0-읽기에서-커널-oops-재부팅)에 첨부했다. 재현 시험은 하지 않았다.
 
 ### 4.2 재시도 — boot0/boot1 제외
 

@@ -8,6 +8,7 @@ Status: Work in Progress / Experimental
 ## Start Here: Linux Migration and Student Forks (2026-10-26)
 
 - [OV5647 개발 후속 상태: Chip ID 확인, 벤더 5.10 + Debian 전략, Docker 및 Android 백업 진행](docs/E85096-OV5647-VENDOR510-DEBIAN-PLAN.md): MIPI/RAW10 미완료, boot0 읽기 중 재부팅 보고 및 백업 검증 조건.
+- [OV5647 Chip ID 판독·CN4 신호 대응·백업 장애 원시 기록](docs/E85096-OV5647-CHIPID-RAW-LOG.md): `i2crd`로 `0x300A/B` → `56 47`, 회로도 기반 CN4→`/dev/i2c-8`·LDO32·GPG1[5], boot0 Oops 원본, macOS USB 독점 문제.
 - [OV5647 5MP / Android 10 I²C 통신 검증 매뉴얼](docs/E85096-OV5647-ANDROID10-I2C-BRINGUP.md): E850-96 CN4, ADB, HSI2C2→i2c-8, 주소 0x36 ACK 성공 당시의 실측 기록(Chip ID는 2026-10-31 후속 보고로 완료, 영상은 미검증).
 - **[E850-96 Android → Linux conversion / flashing guide](docs/E85096-ANDROID-TO-LINUX.md)**: supported architecture, preparation, official U-Boot sequence, recovery warnings, and post-boot checks.
 - **[Student Fork and Pull Request guide](docs/STUDENT-FORK-PR.md)**: fork this repository, work on a branch, and submit changes for review.
