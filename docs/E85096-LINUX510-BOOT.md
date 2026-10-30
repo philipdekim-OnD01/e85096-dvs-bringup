@@ -308,3 +308,53 @@ fastboot reboot                     # FAILED (usb_read failed with status e00002
 **규칙:** 이 LK에는 `getvar max-download-size` 말고는 `getvar`를 보내지 않는다.
 
 다음 시험에서는 `fastboot -v boot`로 실제로 오가는 명령을 남기고, UART로 LK 출력을 함께 기록한다.
+
+### 7.3 시험 2 — RAM 부팅 재시도: LK의 `fastboot boot`는 동작하지 않는다
+
+USB-TTL을 맥 본체 포트에 직접 꽂자 `FT232R USB UART`가 잡혔다. Chrome을 종료한 상태에서 UART를 기록하며 다시 시험했다.
+
+```bash
+adb reboot bootloader
+fastboot -v boot out/boot.img
+# Sending 'boot.img' (54056 KB)    OKAY [  1.352s]
+# Booting                           ← 응답 없음
+```
+
+UART(LK 로그):
+
+```text
+[    4.448082 ] Entering fastboot: reboot bootloader command
+[   17.148808 ] fb: download:034ca000      ← 55 MB 수신 성공
+[   18.500557 ] fb: boot                   ← 이후 출력 없음, LK 무응답
+```
+
+eMMC에서 정상 부팅할 때 LK는 커널로 넘어가기 전에 아래 줄을 찍는다. `fb: boot` 뒤에는 이 줄이 하나도 나오지 않았다.
+
+```text
+kernel size: 0x0166600c
+ramdisk size: 0x000c212c
+DTB size: 0x0001bef4
+DTBO: Merge Complete (size:179932)!
+updated bootargs: ...
+```
+
+**결론:** 이 Android 10 LK는 `boot` 명령을 받기만 하고 실행하지 않는다. 다운로드는 정상이므로 USB나 크기 문제가 아니다. RAM 부팅 대신 boot 파티션에 쓰는 방법으로 바꾼다.
+
+### 7.4 boot 파티션 쓰기 — fastboot 대신 root adb의 `dd`
+
+LK fastboot는 모르는 명령에 멈추는 경우가 많다. 그래서 Android 10(root adb) 안에서 직접 쓴다. boot 파티션은 `mmcblk0p15`이고 크기는 100 MB다.
+
+```bash
+adb push out/boot.img /data/local/tmp/boot-linux.img
+adb shell 'dd if=/data/local/tmp/boot-linux.img of=/dev/block/mmcblk0p15 bs=1M conv=fsync && sync'
+adb reboot
+```
+
+되돌리기(Android 10 복구)는 아래 둘 중 하나로 한다. 첫 번째는 Linux initramfs 셸에서 하는 방법이다. 두 번째는 LK fastboot가 응답할 때 쓰는 방법이다.
+
+```bash
+# 1) Linux 셸에서
+gunzip -c mmcblk0p15.img.gz | dd of=/dev/mmcblk0p15     # 이미지를 보드로 옮길 수 있을 때
+# 2) fastboot에서
+gunzip -k mmcblk0p15.img.gz && fastboot flash boot mmcblk0p15.img
+```
