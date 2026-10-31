@@ -53,7 +53,7 @@ uart_shell() {
     for tty in /dev/ttySAC0 /dev/console; do
         if [ -c "$tty" ]; then
             # in a child: setsid then needs no fork, so PID 1 really waits
-            ( exec setsid sh -c "exec sh <$tty >$tty 2>&1" )
+            ( exec setsid -c sh <$tty >$tty 2>&1 )
             return
         fi
     done
@@ -76,17 +76,23 @@ fi
 log "stage 2 modules"
 load_list $MODDIR/modules.load
 
-root=
+# root=/dev/mmcblkXpN or root=PARTLABEL=<GPT name> (does not depend on mmcblk numbering)
+root=; label=
 for arg in $(cat /proc/cmdline); do
     case "$arg" in
         root=/dev/*) root=${arg#root=} ;;
+        root=PARTLABEL=*) label=${arg#root=PARTLABEL=} ;;
     esac
 done
 
-if [ -n "$root" ]; then
-    log "waiting for $root"
+if [ -n "$root$label" ]; then
+    log "waiting for ${root:-PARTLABEL=$label}"
     i=0
-    while [ ! -b "$root" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+    while [ $i -lt 100 ]; do
+        [ -n "$label" ] && root=$(part-dev "$label" 2>/dev/null)
+        [ -n "$root" ] && [ -b "$root" ] && break
+        sleep 0.1; i=$((i + 1))
+    done
     if mount -t ext4 -o rw "$root" /newroot 2>/tmp/err && [ -x /newroot/sbin/init ]; then
         log "switching to $root"
         mount --move /dev /newroot/dev

@@ -440,3 +440,58 @@ clang -O2 -o fbmini fbmini.c -I/opt/homebrew/include/libusb-1.0 -L/opt/homebrew/
 LK는 부팅할 때마다 Volume Up 키를 10번 읽는다(`Volume up key: 1` × 10, 1 = 안 눌림). **Volume Up을 누른 채 전원을 넣으면** fastboot로 들어갈 것으로 예상한다. 아직 확인하지 않았다.
 
 이 방법이 안 되면 Exynos USB 다운로드 모드를 쓴다(SW1 DIP 1번 ON, Linaro dltool의 `smdk-usbdl`). 이 경우 RAM에서 Linaro LK가 뜨고, 그 LK의 fastboot로 boot를 다시 쓴다.
+
+### 7.9 DEVTMPFS를 켠 커널 다시 빌드
+
+`build.sh` 없이 `make`를 직접 부를 때는 `build.config.erd3830_t`가 넘겨주던 변수를 직접 넣어야 한다.
+
+- `TARGET_SOC`가 없으면 `drivers/staging/nanohub/ipc_chub.h: fatal error: '.h' file not found`로 실패한다.
+- `KCFLAGS`가 빠지면 모든 파일이 다른 플래그로 다시 컴파일된다(첫 시도에서 43분 걸림).
+
+```bash
+# e850-build-env:1 컨테이너 안 (/work/out = 빌드 출력)
+cd /work/out
+/work/kernel/scripts/config --file .config -e DEVTMPFS -e DEVTMPFS_MOUNT   # 전: .config.before-devtmpfs
+make -C /work/kernel O=/work/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+make -C /work/kernel O=/work/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- \
+     TARGET_SOC=s5e3830 KCFLAGS=-D__ANDROID_COMMON_KERNEL__ -j$(nproc) Image modules dtbs
+```
+
+- `.config` 차이는 `CONFIG_DEVTMPFS=y`, `CONFIG_DEVTMPFS_MOUNT=y` 두 줄뿐이다.
+- 빌드는 성공했다(17분).
+- 이번 전체 빌드에서 `is-cis-ov5647.ko`도 트리 안에서 함께 빌드됐다(`modules.order`에 포함). 예전 트리 밖 모듈(`ext-ov5647`)은 새 `fimc-is.ko`와 맞지 않으므로 치웠다.
+
+### 7.10 루트 장치를 이름으로 찾기
+
+5.10에서 SD 컨트롤러가 먼저 잡히면 eMMC가 `mmcblk1`이 될 수 있다. 그래서 번호 대신 이름을 쓴다.
+
+- 커널 인자 `root=PARTLABEL=userdata`: init이 `part-dev`로 GPT 이름을 장치로 바꾼다.
+- rootfs fstab `LABEL=rootfs`: `mke2fs -L rootfs`로 붙인 레이블.
+
+```bash
+docker run --rm -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v "$PWD/out-root:/out" \
+    -v ~/Desktop/E850_Android10_backup_20261031:/b:ro ubuntu:22.04 sh /t/build-bootimg.sh root=PARTLABEL=userdata
+```
+
+| 산출물 | 크기 | SHA-256 앞부분 |
+|---|---|---|
+| boot.img (셸만) | 64,772,096 | `19bb249c` |
+| boot.img (`root=PARTLABEL=userdata`) | 64,772,096 | `2434898b` |
+| rootfs.simg | 398,295,560 | e2fsck 오류 없음, `/lib/modules/5.10.157-00010-g3b6b9ca51034-dirty` |
+
+initramfs 안의 `restore/boot-android10.img.gz`를 풀면 원본 boot와 같은 `d0fc5688...`이 나온다.
+
+> 실수 기록: 실행 중인 `sh` 스크립트를 편집하면 안 된다. sh는 스크립트를 읽어 가며 실행한다. 빌드 중에는 스크립트 사본(`cp -R tools/linux510 /tmp/tsnap`)을 마운트한다.
+
+### 7.11 다음 순서 (보드 전원 재투입 때)
+
+1. UART 기록을 켠 채로 **Volume Up을 누르고 전원 ON** → UART에서 `Entering fastboot` 확인.
+2. `fbmini`로 굽는다.
+   ```bash
+   ./fbmini flash userdata rootfs.simg
+   ./fbmini flash boot out-root/boot.img
+   ./fbmini reboot
+   ```
+3. UART에서 `[init] press Enter within 5 s` → Enter → 구조 셸에서 `ls /dev/mmcblk*`, `lsmod` 확인 → `exit`로 계속 부팅.
+4. Debian 로그인(`root` 자동 로그인 또는 `e850`/`e850`).
+5. 문제가 생기면 구조 셸에서 `restore-android`.

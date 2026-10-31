@@ -4,7 +4,7 @@
 # Runs inside a native arm64 Ubuntu container (Apple Silicon Docker runs arm64 natively):
 #   docker run --rm -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v "$PWD/out:/out" \
 #       -v ~/Desktop/E850_Android10_backup_20261031:/b:ro \
-#       ubuntu:22.04 sh /t/build-bootimg.sh [root=/dev/mmcblk0pN]
+#       ubuntu:22.04 sh /t/build-bootimg.sh [root=PARTLABEL=userdata]
 #
 # Inputs : /o   = kernel build output (Image, dtb, dtbo, *.ko, modules.order)
 #          /t   = this directory (init, helper scripts, mkbootimg_v2.py, autoload.deny,

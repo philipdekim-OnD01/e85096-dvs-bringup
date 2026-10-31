@@ -21,7 +21,7 @@ debootstrap --arch=arm64 --variant=minbase \
 
 echo e850-96 > $R/etc/hostname
 printf '127.0.0.1\tlocalhost\n127.0.1.1\te850-96\n' > $R/etc/hosts
-printf '/dev/mmcblk0p24\t/\text4\tdefaults,noatime\t0\t1\n' > $R/etc/fstab
+printf 'LABEL=rootfs\t/\text4\tdefaults,noatime\t0\t1\n' > $R/etc/fstab
 
 # Serial console: autologin as root on the UART
 mkdir -p $R/etc/systemd/system/serial-getty@ttySAC0.service.d
