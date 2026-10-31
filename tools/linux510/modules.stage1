@@ -1,0 +1,16 @@
+# Stage 1 (loaded before the rescue-shell prompt): BSP vendor_boot order first,
+# then what the eMMC, PMIC and reboot need. modprobe pulls in dependencies.
+exynos-chipid_v2
+exynos-reboot
+clk_exynos
+exynos_mct
+exynos_tty
+pinctrl-samsung-core
+i2c-exynos5
+i2c-s3c2410
+exynos-pd
+exynos_acpm
+acpm-mfd-bus
+s2mpu12_mfd
+s2mpu12-regulator
+dw_mmc-exynos

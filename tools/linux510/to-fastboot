@@ -1,0 +1,9 @@
+#!/bin/sh
+# Ask LK to stop in fastboot on the next boot: BCB command "bootonce-bootloader" in misc.
+# (LK prints "Recovery: command: 32 bootonce-bootloader" when it sees it.)
+set -e
+dev=$(part-dev misc)
+{ printf 'bootonce-bootloader'; head -c 13 /dev/zero; } | dd of="$dev" bs=32 count=1 conv=notrunc,fsync
+sync
+echo "misc command set on $dev; rebooting"
+reboot -f

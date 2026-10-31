@@ -1,0 +1,6 @@
+#!/bin/sh
+# part-dev NAME -> /dev/mmcblk0pN of the GPT partition called NAME (e.g. boot, misc)
+for u in /sys/class/block/*/uevent; do
+    grep -qx "PARTNAME=$1" "$u" && { echo /dev/$(sed -n 's/^DEVNAME=//p' "$u"); exit 0; }
+done
+echo "no partition $1" >&2; exit 1

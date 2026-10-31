@@ -358,3 +358,85 @@ gunzip -c mmcblk0p15.img.gz | dd of=/dev/mmcblk0p15     # 이미지를 보드로
 # 2) fastboot에서
 gunzip -k mmcblk0p15.img.gz && fastboot flash boot mmcblk0p15.img
 ```
+
+### 7.5 시험 3 — eMMC boot 파티션에서 5.10 커널 첫 부팅: 커널은 OK, init에서 패닉
+
+boot 파티션에 쓰기 전에 현재 내용이 백업과 같은지 해시로 확인한다. 원본은 보드 안에도 한 부 더 둔다.
+
+```bash
+adb shell sha256sum /dev/block/mmcblk0p15            # d0fc5688...
+gunzip -c mmcblk0p15.img.gz | shasum -a 256          # d0fc5688...  (같음)
+adb push out/boot.img /data/local/tmp/boot-linux.img
+adb shell 'cp /dev/block/mmcblk0p15 /data/local/tmp/boot-android10.img
+           dd if=/data/local/tmp/boot-linux.img of=/dev/block/mmcblk0p15 bs=1M conv=fsync && sync'
+adb shell 'head -c 55353344 /dev/block/mmcblk0p15 | sha256sum'   # 2361b615... = 맥의 boot.img
+adb reboot
+```
+
+UART에서 확인한 결과, LK가 새 이미지를 읽고 5.10 커널로 넘어갔다. bootargs도 DTB `/chosen`에서 가져왔다.
+
+```text
+[    6.089455 ] kernel size: 0x02cc0944
+[    6.292637 ] bootargs: console=ttySAC0,115200n8 earlycon=exynos4210,mmio32,0x13820000 maxcpus=1 ...
+[    0.000000] Booting Linux on physical CPU 0x0000000000 [0x410fd051]
+[    0.000000] Linux version 5.10.157-00010-g3b6b9ca51034-dirty ... clang version 14.0.7
+[    0.000000] Machine model: Samsung ERD3830 board based on EXYNOS3830
+[    0.000000] earlycon: exynos4210 at MMIO32 0x0000000013820000 (options '')
+[    2.144356] Warning: unable to open an initial console.
+[    2.161877] Run /init as init process
+[    2.211197] request_module fs-devtmpfs succeeded, but still no fs?
+[    2.548861] Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000100
+[    2.648924] Reboot failed -- System halted
+```
+
+**원인 세 가지**
+
+| 증상 | 원인 | 고침 |
+|---|---|---|
+| `still no fs?` | GKI 설정에 `# CONFIG_DEVTMPFS is not set`. Android는 init이 `/dev`를 직접 만든다 | 커널에 `CONFIG_DEVTMPFS=y`, `CONFIG_DEVTMPFS_MOUNT=y`. 옛 커널에서도 동작하도록 init에 tmpfs, `mknod`, `mdev` 대안을 넣음 |
+| `unable to open an initial console` | initramfs에 `/dev/console`이 없음 | cpio에 `mknod /dev/console c 5 1` |
+| init 종료 → 패닉 | `/tmp`가 없어서 `modprobe ... 2>/tmp/err` 리다이렉트가 전부 실패. 모듈이 하나도 안 올라가 `/dev/ttySAC0`도 없음 → `exec sh`가 EOF로 종료 | `/tmp`를 tmpfs로 마운트. init은 끝나지 않는 루프로 바꿈 |
+| 재부팅 대신 정지 | 리부트 드라이버(`exynos-reboot.ko`)가 모듈인데 적재 전이었음 | 1단계 모듈로 가장 먼저 올림 |
+
+**교훈:** 이 상태가 되면 보드는 전원 재투입 말고 되돌릴 방법이 없고, 다시 켜도 같은 이미지로 부팅해 또 멈춘다. 그래서 다음 이미지에는 아래 안전장치를 넣었다(7.6).
+
+### 7.6 원격으로 다룰 수 있게 하는 안전장치
+
+1. **2단계 모듈 적재**
+   - 1단계(`tools/linux510/modules.stage1`): 리부트, 클록, 타이머, UART, pinctrl, I2C, PMIC, eMMC.
+   - 그다음 UART로 `press Enter within 5 s for a rescue shell`을 띄우고 5초 기다린다.
+   - Enter를 누르면 나머지 모듈을 올리기 **전에** 셸에 들어간다. 2단계 모듈 중 하나가 커널을 죽이더라도 다음 부팅에서 막을 수 있다.
+2. **`restore-android`**
+   - initramfs 안에 백업 `mmcblk0p15.img.gz`(Android 10 boot, 9.9 MB)가 들어 있다.
+   - 이 명령 하나로 boot 파티션을 원본으로 되돌리고 재부팅한다.
+3. **`to-fastboot`**
+   - misc 파티션의 BCB command에 `bootonce-bootloader`를 쓰고 재부팅한다.
+   - LK가 이것을 읽고 fastboot에서 멈춘다. `adb reboot bootloader`와 같은 원리이고, LK 로그의 `Recovery: command: 32 bootonce-bootloader`가 그 증거다.
+4. **`part-dev NAME`**
+   - GPT 파티션 이름(`boot`, `misc`, `userdata`)으로 장치 경로를 찾는다.
+
+boot.img를 만들 때는 백업 폴더를 `/b`로 넘긴다.
+
+```bash
+docker run --rm -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v "$PWD/out:/out" \
+    -v ~/Desktop/E850_Android10_backup_20261031:/b:ro ubuntu:22.04 sh /t/build-bootimg.sh
+```
+
+### 7.7 `fbmini` — 필요한 명령만 보내는 fastboot 클라이언트
+
+`fastboot flash`는 쓰기 전에 `getvar`(has-slot, is-logical 등)를 여러 번 먼저 보낸다. 7.2절에서 보았듯이 이 LK는 모르는 질문에 멈춘다. 그래서 `download`, `flash`, `reboot`만 보내는 클라이언트를 libusb로 만들었다. 맥에는 Homebrew libusb가 이미 있다.
+
+```bash
+cd tools/linux510
+clang -O2 -o fbmini fbmini.c -I/opt/homebrew/include/libusb-1.0 -L/opt/homebrew/lib -lusb-1.0
+./fbmini getvar max-download-size
+./fbmini flash boot ../../out/boot.img
+./fbmini flash userdata ../../out/rootfs.simg      # sparse 그대로 (768 MB 한도 안)
+./fbmini reboot
+```
+
+### 7.8 멈춘 보드를 fastboot로 들어가게 하기
+
+LK는 부팅할 때마다 Volume Up 키를 10번 읽는다(`Volume up key: 1` × 10, 1 = 안 눌림). **Volume Up을 누른 채 전원을 넣으면** fastboot로 들어갈 것으로 예상한다. 아직 확인하지 않았다.
+
+이 방법이 안 되면 Exynos USB 다운로드 모드를 쓴다(SW1 DIP 1번 ON, Linaro dltool의 `smdk-usbdl`). 이 경우 RAM에서 Linaro LK가 뜨고, 그 LK의 fastboot로 boot를 다시 쓴다.

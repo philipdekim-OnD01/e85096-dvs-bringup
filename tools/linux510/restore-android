@@ -1,0 +1,9 @@
+#!/bin/sh
+# Write the stock Android 10 boot image (backup mmcblk0p15) back and reboot into Android.
+set -e
+dev=$(part-dev boot)
+echo "restoring Android 10 boot image to $dev"
+gunzip -c /restore/boot-android10.img.gz | dd of="$dev" bs=1M conv=fsync
+sync
+echo "done; rebooting"
+reboot -f

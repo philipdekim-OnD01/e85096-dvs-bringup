@@ -4,29 +4,77 @@
 # Most SoC drivers (timer, pinctrl, clocks, eMMC, UART) are modules, so this
 # initramfs plays the role of Android's vendor_boot: load every module in
 # modules.load order, then switch to the root filesystem given by root=.
-# If no root is given or it cannot be mounted, start a shell on the UART.
+#
+# Stage 1 loads only what the UART, the eMMC and reboot need (modules.stage1).
+# Then it waits 5 s on the UART: press Enter for a rescue shell before the
+# remaining modules are loaded. The rescue shell has `restore-android`
+# (writes the stock Android 10 boot image back to the boot partition) and
+# `to-fastboot` (next reboot stops in LK fastboot).
+# If no root is given or it cannot be mounted, a shell is started on the UART.
+# This script never exits: PID 1 exiting panics the kernel.
 
 /bin/busybox --install -s /bin
-mkdir -p /proc /sys /dev /newroot
+mkdir -p /proc /sys /dev /tmp /newroot
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev
+mount -t tmpfs tmpfs /tmp
+if ! mount -t devtmpfs devtmpfs /dev 2>/dev/null; then
+    # Kernel without CONFIG_DEVTMPFS: static nodes now, mdev after the modules
+    mount -t tmpfs -o mode=0755 tmpfs /dev
+    mknod -m 600 /dev/console c 5 1
+    mknod -m 666 /dev/null c 1 3
+    mknod -m 644 /dev/kmsg c 1 11
+    echo /bin/mdev > /proc/sys/kernel/hotplug
+    MDEV=1
+fi
+[ -c /dev/console ] && exec </dev/console >/dev/console 2>&1
 
 log() { echo "[init] $*" > /dev/kmsg; }
 
 KVER=$(uname -r)
-log "kernel $KVER, loading modules"
-n=0; fail=0
-for m in $(cat /lib/modules/$KVER/modules.load); do
-    name=$(basename "$m" .ko)
-    if modprobe "$name" 2>/tmp/err; then
-        n=$((n + 1))
-    else
-        fail=$((fail + 1))
-        log "modprobe $name failed: $(cat /tmp/err)"
-    fi
-done
-log "modules loaded: $n ok, $fail failed"
+MODDIR=/lib/modules/$KVER
+
+load_list() {
+    n=0; fail=0
+    for m in $(cat "$1"); do
+        name=$(basename "$m" .ko)
+        if modprobe "$name" 2>/tmp/err; then
+            n=$((n + 1))
+        else
+            fail=$((fail + 1))
+            log "modprobe $name failed: $(cat /tmp/err)"
+        fi
+    done
+    [ -n "$MDEV" ] && mdev -s
+    log "$1: $n ok, $fail failed"
+}
+
+uart_shell() {
+    for tty in /dev/ttySAC0 /dev/console; do
+        if [ -c "$tty" ]; then
+            # in a child: setsid then needs no fork, so PID 1 really waits
+            ( exec setsid sh -c "exec sh <$tty >$tty 2>&1" )
+            return
+        fi
+    done
+    sleep 60
+}
+
+log "kernel $KVER, stage 1 modules"
+load_list $MODDIR/modules.stage1
+
+rescue=
+if [ -c /dev/ttySAC0 ]; then
+    echo "[init] press Enter within 5 s for a rescue shell" > /dev/ttySAC0
+    read -t 5 rescue < /dev/ttySAC0 && rescue=1
+fi
+if [ -n "$rescue" ]; then
+    log "rescue shell (exit to continue booting)"
+    uart_shell
+fi
+
+log "stage 2 modules"
+load_list $MODDIR/modules.load
 
 root=
 for arg in $(cat /proc/cmdline); do
@@ -42,16 +90,14 @@ if [ -n "$root" ]; then
     if mount -t ext4 -o rw "$root" /newroot 2>/tmp/err && [ -x /newroot/sbin/init ]; then
         log "switching to $root"
         mount --move /dev /newroot/dev
-        umount /proc /sys
+        umount /proc /sys /tmp
         exec switch_root /newroot /sbin/init
     fi
     log "cannot use $root: $(cat /tmp/err)"
 fi
 
 log "no root filesystem, starting shell"
-for tty in /dev/ttySAC0 /dev/console; do
-    if [ -c "$tty" ]; then
-        exec setsid sh -c "exec sh <$tty >$tty 2>&1"
-    fi
+while true; do
+    uart_shell
+    log "shell exited, restarting"
 done
-exec sh
