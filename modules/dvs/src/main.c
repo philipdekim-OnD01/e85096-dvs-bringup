@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/delay.h>
+#include <linux/firmware.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <linux/property.h>
 #include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/sysfs.h>
 #include <linux/workqueue.h>
 
 #define DVS_RETRY_INITIAL_MS 2000U
@@ -25,6 +29,10 @@
    .buf = ((u8[]){(reg_addr)[0], (reg_addr)[1], __VA_ARGS__})}
 
 #define DVS_ADDR_PAD_CONTROL 0x303B
+#define DVS_ADDR_MODE_SELECT 0x0100
+// OUTIF lane mode: [1] use_2_lane, [0] use_1_lane, neither = 4 lanes
+#define DVS_ADDR_OUTIF_LANES 0x3915
+#define DVS_OUTIF_LANE_MASK 0x03
 
 struct dvs_data {
   struct i2c_client *client;
@@ -36,7 +44,15 @@ struct dvs_data {
   bool stopping;
   // This represents software standby state
   bool ready;
+  // Register selected by the last write to the "reg" attribute
+  u16 sel_reg;
+  // MIPI data lanes wired to the SoC ("nrv,data-lanes": 1, 2 or 4)
+  u32 data_lanes;
 };
+
+static u8 dvs_outif_lane_bits(u32 lanes) {
+  return lanes == 1 ? 0x01 : lanes == 2 ? 0x02 : 0x00;
+}
 
 static void dvs_check_work(struct work_struct *work) {
   struct dvs_data *dvs =
@@ -127,6 +143,12 @@ static int dvs_probe(struct i2c_client *client) {
     return dev_err_probe(&client->dev, PTR_ERR(dvs->reset_gpio),
                          "Failed to acquire reset GPIO\n");
   }
+  dvs->data_lanes = 4;
+  device_property_read_u32(&client->dev, "nrv,data-lanes", &dvs->data_lanes);
+  if (dvs->data_lanes != 1 && dvs->data_lanes != 2 && dvs->data_lanes != 4)
+    return dev_err_probe(&client->dev, -EINVAL,
+                         "nrv,data-lanes must be 1, 2 or 4, not %u\n",
+                         dvs->data_lanes);
   INIT_DELAYED_WORK(&dvs->check_work, dvs_check_work);
   /* Associate the driver state with this I2C client. */
   i2c_set_clientdata(client, dvs);
@@ -166,6 +188,185 @@ static void dvs_remove(struct i2c_client *client) {
   dev_info(&client->dev, "DVS driver removed\n");
 }
 
+static int dvs_write_reg(struct dvs_data *dvs, u16 reg, u8 val) {
+  u8 buf[3] = {reg >> 8, reg & 0xff, val};
+  struct i2c_msg msg = {
+      .addr = dvs->client->addr, .flags = 0, .len = sizeof(buf), .buf = buf};
+  int ret = i2c_transfer(dvs->client->adapter, &msg, 1);
+
+  return ret == 1 ? 0 : (ret < 0 ? ret : -EIO);
+}
+
+static int dvs_read_reg(struct dvs_data *dvs, u16 reg, u8 *val) {
+  u8 address[] = MAKE_I2C_ADDR(reg);
+  struct i2c_msg msgs[] = {I2C_READ(dvs->client->addr, address, val, 1)};
+  int ret = i2c_transfer(dvs->client->adapter, msgs, ARRAY_SIZE(msgs));
+
+  return ret == ARRAY_SIZE(msgs) ? 0 : (ret < 0 ? ret : -EIO);
+}
+
+/*
+ * Apply an NRV DELTA SDK sensor setting file (e.g. Delta_01_1000FPS.txt)
+ * from the firmware search path. Each line is "AA:RRRR=VV" with an 8-bit
+ * I2C address, 16-bit register and 8-bit value; "//" starts a comment.
+ */
+static int dvs_apply_settings(struct dvs_data *dvs, const char *name) {
+  struct device *dev = &dvs->client->dev;
+  const struct firmware *fw;
+  char *text, *cursor, *line;
+  unsigned int lineno = 0, count = 0;
+  int ret;
+
+  ret = request_firmware(&fw, name, dev);
+  if (ret)
+    return ret;
+  text = kmemdup_nul(fw->data, fw->size, GFP_KERNEL);
+  release_firmware(fw);
+  if (!text)
+    return -ENOMEM;
+
+  cursor = text;
+  while ((line = strsep(&cursor, "\n"))) {
+    char *comment = strstr(line, "//");
+    unsigned int addr8, reg, val;
+
+    lineno++;
+    if (comment)
+      *comment = '\0';
+    line = strim(line);
+    if (!*line)
+      continue;
+    if (sscanf(line, "%x:%x=%x", &addr8, &reg, &val) != 3 || addr8 > 0xff ||
+        reg > 0xffff || val > 0xff) {
+      dev_err(dev, "%s:%u: cannot parse \"%s\"\n", name, lineno, line);
+      ret = -EINVAL;
+      break;
+    }
+    if ((addr8 >> 1) != dvs->client->addr) {
+      dev_err(dev, "%s:%u: I2C address 0x%02x is not this sensor\n", name,
+              lineno, addr8);
+      ret = -EINVAL;
+      break;
+    }
+    if (reg == DVS_ADDR_OUTIF_LANES) {
+      unsigned int fixed = (val & ~DVS_OUTIF_LANE_MASK) |
+                           dvs_outif_lane_bits(dvs->data_lanes);
+
+      // NRV recipes target the 4-lane carrier; follow the board wiring.
+      if (fixed != val)
+        dev_info(dev, "%s:%u: 0x%04x=0x%02x -> 0x%02x for %u lane(s)\n", name,
+                 lineno, reg, val, fixed, dvs->data_lanes);
+      val = fixed;
+    }
+    ret = dvs_write_reg(dvs, reg, val);
+    if (ret) {
+      dev_err(dev, "%s:%u: write 0x%04x=0x%02x failed: %d\n", name, lineno,
+              reg, val, ret);
+      break;
+    }
+    count++;
+  }
+  kfree(text);
+  if (!ret)
+    dev_info(dev, "applied %u register writes from %s\n", count, name);
+  return ret;
+}
+
+static ssize_t ready_show(struct device *dev, struct device_attribute *attr,
+                          char *buf) {
+  struct dvs_data *dvs = dev_get_drvdata(dev);
+
+  return sysfs_emit(buf, "%d\n", READ_ONCE(dvs->ready));
+}
+static DEVICE_ATTR_RO(ready);
+
+/* echo NAME > load_settings: NAME is relative to /lib/firmware. */
+static ssize_t load_settings_store(struct device *dev,
+                                   struct device_attribute *attr,
+                                   const char *buf, size_t count) {
+  struct dvs_data *dvs = dev_get_drvdata(dev);
+  char *name = kstrndup(buf, count, GFP_KERNEL);
+  int ret;
+
+  if (!name)
+    return -ENOMEM;
+  mutex_lock(&dvs->lock);
+  ret = dvs->ready ? dvs_apply_settings(dvs, strim(name)) : -EAGAIN;
+  mutex_unlock(&dvs->lock);
+  kfree(name);
+  return ret ? ret : count;
+}
+static DEVICE_ATTR_WO(load_settings);
+
+/* echo 1 > stream: MODE_SELECT 0x0100 = 1 starts MIPI output. */
+static ssize_t stream_show(struct device *dev, struct device_attribute *attr,
+                           char *buf) {
+  struct dvs_data *dvs = dev_get_drvdata(dev);
+  u8 val = 0;
+  int ret;
+
+  mutex_lock(&dvs->lock);
+  ret = dvs_read_reg(dvs, DVS_ADDR_MODE_SELECT, &val);
+  mutex_unlock(&dvs->lock);
+  return ret ? ret : sysfs_emit(buf, "%u\n", val);
+}
+
+static ssize_t stream_store(struct device *dev, struct device_attribute *attr,
+                            const char *buf, size_t count) {
+  struct dvs_data *dvs = dev_get_drvdata(dev);
+  bool on;
+  int ret = kstrtobool(buf, &on);
+
+  if (ret)
+    return ret;
+  mutex_lock(&dvs->lock);
+  ret = dvs->ready ? dvs_write_reg(dvs, DVS_ADDR_MODE_SELECT, on) : -EAGAIN;
+  mutex_unlock(&dvs->lock);
+  return ret ? ret : count;
+}
+static DEVICE_ATTR_RW(stream);
+
+/*
+ * echo 0x3901 > reg; cat reg         -> read one register
+ * echo "0x3901 0x2a" > reg           -> write one register
+ */
+static ssize_t reg_show(struct device *dev, struct device_attribute *attr,
+                        char *buf) {
+  struct dvs_data *dvs = dev_get_drvdata(dev);
+  u8 val = 0;
+  u16 reg;
+  int ret;
+
+  mutex_lock(&dvs->lock);
+  reg = dvs->sel_reg;
+  ret = dvs_read_reg(dvs, reg, &val);
+  mutex_unlock(&dvs->lock);
+  return ret ? ret : sysfs_emit(buf, "0x%04x=0x%02x\n", reg, val);
+}
+
+static ssize_t reg_store(struct device *dev, struct device_attribute *attr,
+                         const char *buf, size_t count) {
+  struct dvs_data *dvs = dev_get_drvdata(dev);
+  unsigned int reg, val;
+  int n = sscanf(buf, "%x %x", &reg, &val);
+  int ret = 0;
+
+  if (n < 1 || reg > 0xffff || (n == 2 && val > 0xff))
+    return -EINVAL;
+  mutex_lock(&dvs->lock);
+  dvs->sel_reg = reg;
+  if (n == 2)
+    ret = dvs_write_reg(dvs, reg, val);
+  mutex_unlock(&dvs->lock);
+  return ret ? ret : count;
+}
+static DEVICE_ATTR_RW(reg);
+
+static struct attribute *dvs_attrs[] = {
+    &dev_attr_ready.attr, &dev_attr_load_settings.attr, &dev_attr_stream.attr,
+    &dev_attr_reg.attr, NULL};
+ATTRIBUTE_GROUPS(dvs);
+
 /* Must match the compatible string in the Device Tree. */
 static const struct of_device_id dvs_of_match[] = {{.compatible = "nrv,rc1s"},
                                                    {}};
@@ -176,6 +377,7 @@ static struct i2c_driver dvs_driver = {
         {
             .name = "dvs",
             .of_match_table = dvs_of_match,
+            .dev_groups = dvs_groups,
         },
     .probe = dvs_probe,
     .remove = dvs_remove,

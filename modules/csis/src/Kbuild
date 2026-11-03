@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-2.0
+obj-m := e850-csis-dma.o
+e850-csis-dma-y := main.o

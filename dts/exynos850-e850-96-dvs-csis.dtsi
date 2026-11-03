@@ -1,0 +1,83 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * E850-96 DVS raw capture path: MIPI CSIS v1.2 -> CSIS WDMA -> DRAM.
+ * Consumed by modules/csis (compatible "nrv,e850-csis-dma", project-local).
+ *
+ * Addresses, interrupts and the PHY isolation/reset bits come from the GPL
+ * Linaro android-exynos-4.14 BSP (exynos3830-camera.dtsi); clocks use the
+ * mainline CMU_IS bindings. CSIS0/CSIS1 have 4-lane D-PHYs, CSIS2 2 lanes.
+ * CSIS0 writes through WDMA0; CSIS1 and CSIS2 share WDMA1.
+ *
+ * CN4 is a 15-pin FPC connector: the NRV 22-pin carrier is attached with a
+ * 22-to-15-pin adapter, which carries data lanes 0/1 and the clock lane
+ * only. CSIS2 (2-lane D-PHY) is assumed, consistent with CN4 pin 12 = CLK2;
+ * if no frames arrive, disable csis2 and enable the CSIS0 node below.
+ * Enable exactly one node.
+ */
+#include <dt-bindings/clock/exynos850.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+&soc {
+	dvs_csis0: csis@14400000 {
+		/* Alternative: CN4 lanes on the first two lanes of CSIS0 */
+		compatible = "nrv,e850-csis-dma";
+		reg = <0x14400000 0x1000>,	/* MIPI-CSIS0 link */
+		      <0x14490000 0x10000>,	/* D-PHY m0s4s4s2 CSI0 */
+		      <0x14431000 0x100>,	/* WDMA0 VC0 */
+		      <0x14431400 0x100>,	/* WDMA0 common */
+		      <0x14430000 0x100>,	/* CSISX2 DMA top */
+		      <0x14520500 0x4>;		/* SYSREG ISPPRE PHY reset */
+		reg-names = "csis", "phy", "wdma", "wdma-cmn", "dma-top",
+			    "phy-reset";
+		interrupts = <GIC_SPI 141 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 144 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "csis", "dma";
+		/*
+		 * No "iommus": SYSMMU_IS0 stays in bypass, but its clock must
+		 * stay on for the WDMA bus path, so it is listed here.
+		 */
+		clocks = <&cmu_is CLK_GOUT_IS_CSIS0_ACLK>,
+			 <&cmu_is CLK_GOUT_IS_CSIS_DMA_CLK>,
+			 <&cmu_is CLK_GOUT_IS_SYSMMU_IS0_CLK>;
+		samsung,pmu-syscon = <&pmu_system_controller 0x730>;
+		samsung,csis-id = <0>;
+
+		/* NRV Delta_01 recipe in 2-lane mode, VC0, DT 0x2a, 2048 B */
+		nrv,data-lanes = <2>;
+		nrv,lane-rate-mbps = <1000>;	/* measure; drives HS settle */
+		nrv,data-type = <0x2a>;
+		nrv,virtual-channel = <0>;
+		nrv,line-bytes = <2048>;
+		nrv,lines-per-frame = <128>;	/* buffer = 256 KiB per frame */
+		status = "disabled";	/* fallback if CN4 is not on CSIS2 */
+	};
+
+	dvs_csis2: csis@14420000 {
+		compatible = "nrv,e850-csis-dma";
+		reg = <0x14420000 0x1000>,	/* MIPI-CSIS2 link */
+		      <0x144b0000 0x10000>,	/* D-PHY m0s4s4s2 CSI2 (2 lanes) */
+		      <0x14432000 0x100>,	/* WDMA1 VC0 */
+		      <0x14432400 0x100>,	/* WDMA1 common */
+		      <0x14430000 0x100>,	/* CSISX2 DMA top */
+		      <0x14520500 0x4>;		/* SYSREG ISPPRE PHY reset */
+		reg-names = "csis", "phy", "wdma", "wdma-cmn", "dma-top",
+			    "phy-reset";
+		interrupts = <GIC_SPI 143 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 145 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "csis", "dma";
+		clocks = <&cmu_is CLK_GOUT_IS_CSIS2_ACLK>,
+			 <&cmu_is CLK_GOUT_IS_CSIS_DMA_CLK>,
+			 <&cmu_is CLK_GOUT_IS_SYSMMU_IS0_CLK>;
+		samsung,pmu-syscon = <&pmu_system_controller 0x730>;
+		samsung,csis-id = <2>;
+
+		/* 22-to-15-pin FPC: lanes 0/1 only; dvs@10 must match */
+		nrv,data-lanes = <2>;
+		nrv,lane-rate-mbps = <1000>;	/* measure; drives HS settle */
+		nrv,data-type = <0x2a>;
+		nrv,virtual-channel = <0>;
+		nrv,line-bytes = <2048>;
+		nrv,lines-per-frame = <128>;
+		status = "okay";
+	};
+};
