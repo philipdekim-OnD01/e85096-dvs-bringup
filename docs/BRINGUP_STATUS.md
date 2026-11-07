@@ -18,6 +18,7 @@
 | HDMI 콘솔 색 | 흰 글씨. dpu.ko 패치로 근본 수정했다(`e850-fbpal`과 rebind는 쓰지 않음). 전원을 껐다 켠 뒤에도 사용자가 화면에서 확인했다 | 11.14~11.16 |
 | HDMI 출력 꺼짐 | 해결. `decon_release()`가 fb0를 닫을 때마다 DECON을 끄던 것을 open 수 세기로 고쳤다(dpu.ko 재빌드) | 11.15 |
 | 네트워크 | Wi-Fi 192.168.0.236(ssh), USB NCM 192.168.7.1. **Wi-Fi 펌웨어 패닉 2번**(2026-11-07, 부팅 후 2.6시간과 6분, `WLBT FW PANIC: 0x04`, 원인 모름·재현 못 함). **11.31부터 자동 복구를 켰다**(`e850-wifi.sh`가 `disable_recovery_handling=0`). 강제 패닉 4번(런타임 설정)과 1번(부팅 설정) 모두 복구, `wlan0` 재연결 5.6~6.5초, 8080 응답 5.6~7.3초. 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`. **11.32: journal을 초당 130줄 → 분당 38줄로 줄였다**(카메라 bypass 경고, 워치독 keepalive). journal은 약 2주 남는다(추정). 11.33: vendor 버그 2개 수정(`mx_panic` 0600, system error log WARN) | 11.5, 11.30, 11.31, 11.32, 11.33 |
+| 블루투스 | **준비됨, 평소 꺼 둠(11.42).** `systemctl start e850-bt`로 WLBT BT 코어가 BlueZ `hci0`이 된다(삼성 `scsc_bt` H4 장치 ↔ `hci_vhci` 브리지). BT 5.1, 15초 검색에 기기 22개. 켜 있는 동안 Wi-Fi·DVS live 영향 없음. 키보드·마우스 페어링은 아직 | 11.42 |
 | 서비스 | nginx(80), ssh, e850-hdmi, e850-wifi, systemd-timesyncd, 워치독 데몬 | |
 | 사용자 계획 | MySQL + Apache로 출입 기록, YOLO nano 영상 처리 | |
 

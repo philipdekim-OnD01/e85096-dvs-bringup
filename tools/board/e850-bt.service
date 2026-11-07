@@ -1,0 +1,16 @@
+# Bluetooth: the WLBT BT core bridged to BlueZ as hci0 (e850-bt.py, 11.42). Not enabled at boot.
+# Install: cp e850-bt.service /etc/systemd/system/ && systemctl daemon-reload; start: systemctl start e850-bt
+[Unit]
+Description=E850-96 Bluetooth (WLBT BT core -> BlueZ hci0)
+After=e850-wifi.service
+Before=bluetooth.service
+
+[Service]
+ExecStartPre=/sbin/modprobe scsc_bt
+ExecStartPre=/sbin/modprobe hci_vhci
+ExecStart=/usr/bin/python3 /usr/local/bin/e850-bt.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

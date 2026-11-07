@@ -2600,3 +2600,35 @@ Mac: `~/e850-logs/wifi/`(`panic0634-full.txt`, `rec1/`: `web.log`, `state.log`, 
 - 재지 않은 것: 같은 프로세스 안의 스레드로 돌릴 때의 GIL 영향, 웹 응답 영향.
 
 **보드에 바꾼 것.** 없다. `/var/tmp/ortspike`는 시험 뒤 지웠다. 시험 파일의 Mac 사본은 Claude scratchpad에만 있다(저장소 밖).
+
+### 11.42 블루투스: WLBT BT 코어를 BlueZ `hci0`로 (2026-11-08)
+
+나중에 BT 키보드·마우스를 쓰기 위한 준비다. 시험 한 번으로 주변 기기 검색까지 확인했다. 지금은 꺼 두었다.
+
+- **확인한 것:**
+  - 커널에 BlueZ 핵심과 HID 프로필이 이미 들어 있다(`CONFIG_BT=y`, `BT_HIDP=y`).
+  - 삼성 BT 드라이버 `scsc_bt.ko`는 보드에 있었다. 올리면 Android BT HAL이 쓰던 H4 장치 `/dev/scsc_h4_0`이 생긴다.
+  - BT 설정 `bt.hcf`는 `/vendor/etc/wifi/mx140/conf/bluetooth/`에 있다. 장치를 열면 드라이버가 직접 읽는다.
+  - 삼성 BlueZ 연결부 `scsc_bluez.c`(`CONFIG_SCSC_BT_BLUEZ`)는 이 커널에서 쓸 수 없다.
+    - 5.10에 없는 `linux/wakelock.h`를 쓴다.
+    - `scsc_bt.ko` 안에 `module_init`이 두 개가 된다.
+    - 커널 버퍼를 `copy_to_user` 경로로 넘긴다.
+- **만든 것:**
+  - `modules/hci-vhci/`: 커널 소스의 `drivers/bluetooth/hci_vhci.c`를 외부 모듈로 빌드한다. 설정에서 `CONFIG_BT_HCIVHCI`가 꺼져 있기 때문이다.
+  - `tools/board/e850-bt.py`: `/dev/scsc_h4_0`과 `/dev/vhci` 사이에서 H4 패킷을 주고받는 브리지다. scsc 쪽 바이트 흐름을 패킷 단위로 나눈다(`test_e850_bt.py` 4개).
+  - `tools/board/e850-bt.service`: `modprobe scsc_bt hci_vhci` 뒤 브리지를 실행한다. **enable하지 않았다.**
+- **첫 시험 실패와 수정:**
+  - 처음에는 브리지가 `ENODEV`로 끝났다. vhci는 열린 뒤 1초가 지나야 `hci0`를 만든다. 그 전에 컨트롤러가 보낸 이벤트를 vhci가 받지 않았다.
+  - 그래서 vhci에 바로 컨트롤러 생성(`ff 00`)을 요청하고, 응답을 받은 뒤 `/dev/scsc_h4_0`을 열게 고쳤다.
+- **보드에 바꾼 것:**
+  - `/lib/modules/…/hci_vhci.ko`(+ depmod).
+  - `/usr/local/bin/e850-bt.py`, `/etc/systemd/system/e850-bt.service`(disabled). sha256은 저장소와 같다(`e075a967…`, `ac7b58a1…`).
+  - apt로 `bluez` 5.66-1+deb12u2와 의존 패키지 libglib2.0-0, libasound2, libdw1을 설치했다. `bluetooth.service`(bluetoothd)는 패키지 기본값대로 부팅 때 켜진다. 어댑터가 없으면 아무것도 하지 않는다.
+- **시험 결과(USB 연결 상태):**
+  - `systemctl start e850-bt` → `hci0`, `btmgmt info`: `addr 9C:23:E0:0A:8D:6C version 10 manufacturer 117`(BT 5.1, Samsung). BR/EDR, LE, SSP, secure-conn을 지원하고 powered 상태였다.
+  - BT 주소 파일(`/csa/bluetooth/.bd_addr`)은 없었다. 그래도 위 주소가 나왔다.
+  - `bluetoothctl --timeout 15 scan on`으로 기기 22개를 찾았다.
+  - 시험 동안 Wi-Fi 복구 횟수는 0이었고 ping은 정상이었다. DVS live는 104 fps, ingest 2.9~4.2 ms로 변하지 않았다. UART에 panic·Oops·BUG는 없었다.
+  - `systemctl stop e850-bt`로 BT 서비스가 닫혔다. Wi-Fi는 그대로였다(`mxman_close: Current number of users=1`).
+  - `bluetoothctl devices`를 philip 계정으로 하면 0개가 나온다(D-Bus 권한). root로 하거나 `bluetooth` 그룹에 넣어야 한다.
+- **남은 것:** 키보드·마우스 페어링(`bluetoothctl` → `pair`, `trust`, `connect`)과 입력 확인(`evtest`). 부팅 때 켤지 정하기.
