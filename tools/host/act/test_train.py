@@ -73,6 +73,15 @@ class TestTrain(unittest.TestCase):
         self.assertEqual((cm.shape, int(cm.sum()), int(cm[7].sum()), int(cm[2].sum())), ((9, 9), 3, 1, 2))
         self.assertEqual(sorted(falls), sorted(files))
 
+    def test_evaluate_empty_mask(self):     # no step with a loss (its peak at the clip's end): not a row, falls counted
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(d + '/ours')
+            np.savez(d + '/ours/0.npz', t0s=np.arange(20) * 60000, mask=np.zeros(20, bool), cls=4,
+                     counts=np.random.default_rng(0).poisson(2, (20, 2, 120, 160)).astype(np.uint8))
+            torch.save({'model': Step().state_dict()}, d + '/m.pt')
+            cm, falls = evaluate(d + '/m.pt', d, ['ours/0.npz'])
+        self.assertEqual((int(cm.sum()), list(falls)), (0, ['ours/0.npz']))
+
     def test_overfit_tiny(self):
         first, last = run_tiny(steps=30)
         self.assertLess(last, 0.5 * first)

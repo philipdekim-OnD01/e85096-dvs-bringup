@@ -30,7 +30,8 @@ def evaluate(ckpt, data, files):
                 y, h = m(x[t:t + 1], h)
                 probs.append(torch.softmax(y[0], 0).numpy())
         probs, judge = np.array(probs), Judge()
-        cm[int(z['cls']), int(np.argmax(probs[z['mask']].mean(0)))] += 1
+        if z['mask'].any():     # a clip with no step to judge (its peak at the end) is in no row
+            cm[int(z['cls']), int(np.argmax(probs[z['mask']].mean(0)))] += 1
         falls[f] = sum((r or {}).get('event') == 'fall' for r in map(judge.step, probs))
     return cm, falls
 
