@@ -10,19 +10,28 @@ threads, all on CPU7 at the top clock (pin(), 11.30):
   GET  /sensor     sensor settings: saved and in the CIS module now, with ranges (11.29)
   POST /sensor     {"margin": int, "flush_us": int}: save to SENSOR and restart (dvslive.service brings the
                    stream back in ~5 s with them; dvslive.sh writes them to the CIS module before stream on)
+  GET  /rec        the recorder: {"state": idle|countdown|recording, "left_s", "last"}
+  POST /rec        {"label": one of dvsact.CLASSES, "s": 1-30}: after a 3 s countdown, the packets of s seconds to
+                   REC_DIR/<UTC>-<label>.gz (dvs_record) and a .json beside it, for the action classifier (11.39)
 No login: it only changes how the view is drawn and the sensor's scan timing, on the board's own network.
 """
+import atexit
 import ctypes
+import datetime
 import http.server
 import json
 import os
+import shutil
 import signal
 import struct
 import sys
 import threading
+import time
 
 SAVED = '/var/lib/dvsview/display.json'
 SENSOR = '/var/lib/dvsview/sensor.json'
+REC_DIR = '/var/tmp/dvsrec'                 # philip's (dvsact-install.sh); packets ~6 MB/s before gzip (11.38)
+REC_FREE = 300 << 20                        # bytes left on /var/tmp to start a recording
 HERE = os.path.dirname(os.path.abspath(__file__))
 W, H = 960, 720
 CIS = '/sys/module/is_cis_s5krc1s/parameters/'
@@ -71,10 +80,90 @@ def sensor():
     return out
 
 
+def rec_check(label, s, free_bytes, busy):
+    """HTTP code for POST /rec: 400 bad label or length, 409 one is running, 507 disk nearly full"""
+    from dvsact import CLASSES          # numpy: only once someone records
+
+    if label not in CLASSES or type(s) is not int or not 1 <= s <= 30:
+        return 400
+    if busy:
+        return 409
+    return 507 if free_bytes < REC_FREE else 200
+
+
+class Recorder:
+    """One recording at a time: countdown, dvs_record(path) for s seconds, dvs_record(None), then a .json with the
+    label and the sensor settings. close(False) (exit, SIGTERM) ends one early and marks it incomplete."""
+
+    def __init__(self, lib, dirpath=REC_DIR, countdown=3.0):
+        self.lib, self.dir, self.countdown = lib, dirpath, countdown
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+        self.state, self.until, self.last, self.cur = 'idle', 0.0, None, None
+
+    def status(self):
+        with self.lock:
+            return {'state': self.state, 'left_s': round(max(0.0, self.until - time.monotonic()), 1),
+                    'last': self.last}
+
+    def start(self, label, s):
+        with self.lock:
+            try:
+                free = shutil.disk_usage(self.dir).free
+            except OSError:
+                free = 0
+            code = rec_check(label, s, free, self.state != 'idle')
+            if code == 200:
+                self.state, self.until = 'countdown', time.monotonic() + self.countdown
+                self.stop.clear()
+                threading.Thread(target=self._run, args=(label, s), daemon=True).start()
+            return code
+
+    def _run(self, label, s):
+        if self.stop.wait(self.countdown):
+            with self.lock:
+                self.state = 'idle'
+            return
+        with self.lock:
+            if self.stop.is_set():
+                self.state = 'idle'
+                return
+            now = datetime.datetime.now(datetime.timezone.utc)
+            path = os.path.join(self.dir, now.strftime('%Y%m%dT%H%M%SZ') + '-' + label)
+            r = self.lib.dvs_record((path + '.gz').encode())
+            if r < 0:
+                self.state, self.last = 'idle', 'error: ' + os.strerror(-r)
+                return
+            self.state, self.until = 'recording', time.monotonic() + s
+            self.cur = {'path': path, 'label': label, 'start': now.isoformat().replace('+00:00', 'Z'), 's': s}
+        if not self.stop.wait(s):
+            self.close(True)
+
+    def close(self, complete):
+        with self.lock:
+            self.stop.set()
+            cur, self.cur = self.cur, None
+            if cur is None:
+                return
+            n = self.lib.dvs_record(None)
+            now = {k: v['now'] for k, v in sensor().items()}
+            meta = {'label': cur['label'], 'start': cur['start'], 's': cur['s'], 'events': max(n, 0),
+                    'margin': now['margin'], 'flush_us': now['flush_us'], 'sensor': 's5krc1s', 'complete': complete}
+            self.state, self.last = 'idle', os.path.basename(cur['path']) + '.gz'
+            try:
+                with open(cur['path'] + '.json', 'w') as f:
+                    json.dump(meta, f)
+            except OSError as e:                # the .gz is there; a full disk must not wedge the recorder
+                self.last = 'error: %s.json: %s' % (os.path.basename(cur['path']), e)
+
+
 def start(lib, port):
     lib.dvs_set.argtypes = [ctypes.c_char_p, ctypes.c_int]
     lib.dvs_params.restype = lib.dvs_stats.restype = ctypes.c_char_p
     lib.dvs_png.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    lib.dvs_record.argtypes = [ctypes.c_char_p]
+    rec = Recorder(lib)
+    atexit.register(rec.close, False)          # SIGTERM is a KeyboardInterrupt in ov5647-cap.py, then sys.exit
     pngbuf = bytearray(W * H * 3 + H + 65536)   # level-1 deflate of the raw rows can come out a little larger
     lock = threading.Lock()                     # dvs_params() and dvs_png() are not reentrant
     try:
@@ -117,6 +206,8 @@ def start(lib, port):
                 self.send(json.dumps(st).encode())
             elif path == '/sensor':
                 self.send(json.dumps(sensor()).encode())
+            elif path == '/rec':
+                self.send(json.dumps(rec.status()).encode())
             elif path == '/frame.png':
                 with lock:
                     n = lib.dvs_png(ctypes.addressof(ctypes.c_char.from_buffer(pngbuf)), len(pngbuf))
@@ -129,10 +220,13 @@ def start(lib, port):
 
         def do_POST(self):
             path = self.path.split('?')[0]
-            if path not in ('/params', '/sensor'):
+            if path not in ('/params', '/sensor', '/rec'):
                 return self.send(b'not found', 'text/plain', 404)
             try:
                 req = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+                if path == '/rec':
+                    code = rec.start(req.get('label'), req.get('s', 6))
+                    return self.send(json.dumps(dict(rec.status(), code=code)).encode(), code=code)
                 if path == '/sensor':
                     cur = {k: p['v'] for k, p in sensor().items()}
                     for k, v in req.items():

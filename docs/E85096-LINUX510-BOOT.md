@@ -2698,3 +2698,51 @@ Mac: `~/e850-logs/wifi/`(`panic0634-full.txt`, `rec1/`: `web.log`, `state.log`, 
   - 학습된 모델에서의 판정 품질.
   - 사람이 크게 움직일 때의 이벤트 양. 이번 장면은 버퍼당 180~192 kB였다.
   - `dvs-act`가 CPU4~6에서 render 스레드(이번에는 CPU5)와 겹칠 때의 영향을 따로 떼어 재지 않았다.
+
+### 11.39 사람 행동 분류 구현 3: 녹화 `/rec`과 페이지 버튼 (2026-11-07)
+
+계획 과제 5다. 우리 센서로 동작을 녹화하는 장치다. 녹화는 학습용 원자료가 된다. 실제 동작 녹화는 사용자와 함께 한다(과제 6).
+
+**만든 것.**
+- `dvsctl.py`:
+  - `GET /rec`은 상태를 준다(`idle`/`countdown`/`recording`, 남은 초, 마지막 파일).
+  - `POST /rec {"label": .., "s": 1~30}`는 3초를 센 뒤 s초 동안 `/var/tmp/dvsrec/<UTC>-<label>.gz`에 녹화하고 옆에 `.json`을 쓴다.
+    - `.json`: label, start, s, events, margin, flush_us, sensor, complete.
+    - 응답: 400(라벨이나 길이가 틀림), 409(녹화 중), 507(남은 공간 300 MB 미만).
+  - 녹화 중 서비스가 끝나면(SIGTERM, exit) atexit에서 녹화를 닫고 `complete: false`로 적는다.
+- `dvsctl.html`: "행동 녹화" 칸을 더했다. 동작 9가지를 한글 이름으로 고르고, 길이 4/6/10/20초, 녹화 버튼, 1초마다 상태를 보여 준다.
+- `test_dvsctl.py`: 가짜 lib으로 `rec_check`, 끝까지 녹화, 녹화 중 닫기, 카운트다운 중 닫기를 시험한다(Mac과 보드에서 통과).
+
+**녹화에서 고친 것 두 가지(`dvsview.c`, 과제 2 코드).**
+1. **재생이 첫 이벤트를 잃었다.**
+   - 원인: 재생은 디코더를 처음 상태(열 없음, 시각 없음)에서 시작한다. 그래서 녹화 첫 줄의 COLUMN 패킷 전 이벤트를 버렸다. 시각 기준도 틀어졌다.
+   - 고친 것: 녹화를 열 때 디코더 상태(`REF(raw/1000)`, `SUB(raw%1000)`, `REF(ref)`, `COLUMN(col)`)를 한 줄로 먼저 쓴다.
+   - selftest (d): 중간에 시작한 녹화를 재생하면 이벤트 6개와 시각 차가 live와 같다.
+2. **녹화 중 버퍼를 잃었다.**
+   - 첫 보드 녹화(`none` 6초, 이벤트 10,445,245개, 27 MB) 동안 ingest가 버퍼당 6 → 16~40 ms로 늘었다. 버퍼는 35 → 24.5/s로 떨어졌다.
+   - 원인: gzip(level 1)을 ingest 스레드에서 했다.
+   - 고친 것: ingest는 패킷을 64 MB 메모리 큐에 복사만 한다. writer 스레드 `dvs-rec`가 gzip으로 쓴다. 녹화를 시작한 dvsctl 스레드의 CPU7 묶음을 물려받는다.
+   - 큐가 넘치거나 쓰기가 실패하면 그 녹화만 `-EIO`가 되고, ingest는 막히지 않는다.
+   - selftest (e): 녹화하며 디코딩한 시간이 녹화 없이 디코딩한 시간의 2배를 넘으면 실패한다. Docker에서 고치기 전 23.8 대 4.3 ms로 실패했고, 고친 뒤 통과했다.
+
+**보드에 바꾼 것.** ACM root 콘솔로 `dvsact-install.sh`를 실행하고 dvslive를 다시 시작했다.
+
+| 파일 | sha256 앞 16자리 |
+|---|---|
+| `/usr/local/lib/libdvsview.so` | 0cb43678faa8e06b |
+| `/usr/local/share/dvsview/dvsctl.py` | 80784985505cdb7e |
+| `/usr/local/share/dvsview/dvsctl.html` | 9f1f55d4642fab34 |
+
+- `dvsctl.html`의 원본도 `.prev-act`로 남았다.
+
+**확인(고친 뒤).**
+- `none` 6초 녹화: `20261107T074001Z-none.gz`, 22.6 MB, 이벤트 6,432,835개.
+- 녹화하는 동안 `[dvsview]`는 104 fps, 버퍼 35/s, ingest 3.2~3.5 ms(max 3.8)였다. 녹화 전은 2.9 ms였다.
+- Mac Docker 시험 빌드 `t --replay`: `replay: 6432835 events`. `.json`의 `events`와 같다.
+- `readers.py`로 읽으면 5.83초, 960×720, OFF 46%다.
+- 녹화는 Mac `~/e850-logs/dvsrec/`에 받았다. 보드에 rsync가 없어 scp를 썼다.
+- 이 클립은 사람 없는 장면이라 `none` 학습 자료로 쓸 수 있다.
+
+**주의.**
+- 바쁜 장면은 6초에 22~27 MB다. 동작당 10번 × 9가지를 녹화하면 약 2 GB인데, 보드 `/`에는 1.8 GB가 비어 있다. 녹화 묶음마다 Mac으로 옮기고 보드에서 지운다. 300 MB 아래에서는 507로 거절한다.
+- 큐가 넘치는 경우(64 MB, 9 MB/s에서 약 7초 밀림)는 시험하지 않았다.

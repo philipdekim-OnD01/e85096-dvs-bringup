@@ -58,6 +58,12 @@
     <div class="hint">센서 FIFO를 이 시간(µs)마다 내보냄: 짧을수록 버퍼가 잦고 지연이 적음, 기본 50</div>
     <button id="s-apply">센서 설정 적용</button>
     <div id="s-msg" class="hint"></div>
+    <h2>행동 녹화 (학습용, 3초 뒤 시작)</h2>
+    <div class="row"><label for="r-label">동작</label><select id="r-label"></select></div>
+    <div class="row"><label for="r-s">길이</label><select id="r-s"><option value="4">4초</option>
+      <option value="6" selected>6초</option><option value="10">10초</option><option value="20">20초</option></select></div>
+    <button id="r-go">녹화</button>
+    <div id="r-msg" class="hint" aria-live="polite"></div>
   </section>
 </main>
 <script>
@@ -239,6 +245,31 @@ document.getElementById('s-apply').onclick = async () => {
   msg.textContent = '30초 안에 돌아오지 않음: 보드를 확인하세요';
 };
 
+// the recorder (POST /rec, 11.39): labels in dvsact.CLASSES order
+const ACTS = [['none', '사람 없음'], ['still', '가만히'], ['walk', '걷기'], ['sit_down', '앉기'], ['stand_up', '일어서기'],
+              ['pick_up', '줍기'], ['lie_down', '눕기'], ['fall', '넘어짐'], ['other', '기타 움직임']];
+const REC_ERR = { 400: '동작이나 길이가 잘못됨', 409: '이미 녹화 중', 507: '보드 저장 공간 부족(300 MB 미만)' };
+for (const [v, name] of ACTS) document.getElementById('r-label').add(new Option(name + ' (' + v + ')', v));
+function showRec(st) {
+  const m = document.getElementById('r-msg');
+  document.getElementById('r-go').disabled = st.state !== 'idle';
+  if (st.state === 'countdown') m.textContent = Math.ceil(st.left_s) + '초 뒤 시작';
+  else if (st.state === 'recording') m.textContent = '녹화 중, ' + Math.ceil(st.left_s) + '초 남음';
+  else m.textContent = st.last ? '마지막: ' + st.last : '';
+}
+async function refreshRec() {
+  try { showRec(await (await fetch('/rec')).json()); } catch (e) { /* the stats line says when the board is gone */ }
+}
+document.getElementById('r-go').onclick = async () => {
+  const body = JSON.stringify({ label: document.getElementById('r-label').value, s: +document.getElementById('r-s').value });
+  try {
+    const r = await fetch('/rec', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    const st = await r.json();
+    if (!r.ok) { document.getElementById('r-msg').textContent = '시작 안 됨: ' + (REC_ERR[r.status] || r.status); return; }
+    showRec(st);
+  } catch (e) { document.getElementById('r-msg').textContent = '보드에 연결할 수 없음: ' + e.message; }
+};
+
 (async () => {
   try {
     params = await (await fetch('/params')).json();
@@ -246,6 +277,8 @@ document.getElementById('s-apply').onclick = async () => {
   } catch (e) { show('설정을 읽을 수 없음: ' + e.message); }
   loadSensor(); refreshStats(); refreshView();
   setInterval(refreshStats, 2000);
+  refreshRec();
+  setInterval(refreshRec, 1000);
 })();
 </script>
 </body>

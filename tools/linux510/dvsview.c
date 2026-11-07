@@ -44,6 +44,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <time.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -64,6 +65,7 @@
 #define HBIN 10				/* us per bin of the scan period histogram, */
 #define HBINS 512			/* up to 5.12 ms (CIS margin <= ~140, 11.29) */
 #define LINE 8192			/* bytes per MIPI line, both modes (8192 x 127, 8192 x 32) */
+#define REC_Q (64u << 20)		/* bytes of packets queued for the recording writer: ~7 s at 9 MB/s */
 #define BROW 104			/* bytes per column of a filter bitmap: 722 rows with the border, + an 8-byte read */
 
 #define CELL 8				/* px, side of a measurement cell */
@@ -112,11 +114,16 @@ static struct {
 	uint32_t *back;
 	char stats[2][512];		/* the last stats as JSON, double-buffered for dvs_stats() */
 	_Atomic int stats_cur;
-	/* dvs_record(): each line's packet words and a zero word, gzip; the lock keeps open/close off a decode */
-	gzFile rec;
-	pthread_mutex_t rec_lock;
+	/* dvs_record(): each line's packet words and a zero word; the decoder queues them, a writer thread gzips */
+	pthread_mutex_t rec_lock;	/* the decoder's queueing against start and stop */
+	int rec_on;			/* the decoder queues lines */
+	int rec_busy;			/* a recording is open: until dvs_record(NULL) has joined its writer */
 	uint64_t rec_events;		/* decoded while recording */
-	int rec_err;			/* a gzwrite failed and closed the file: dvs_record(NULL) reports it */
+	uint8_t *recq;			/* REC_Q bytes, kept for the next recording */
+	_Atomic uint64_t rq_head, rq_tail;	/* bytes queued, bytes written */
+	_Atomic int rec_stop, rec_err;	/* drain and end; the queue overflowed or a write failed */
+	pthread_t rec_thr;
+	gzFile rec;
 	_Atomic uint64_t act_lost;	/* events dvs_events() skipped: the decoder was about to overwrite them */
 } S = { .col = -1, .anchor = -1, .zoom = -1, .scan = SCAN, .rec_lock = PTHREAD_MUTEX_INITIALIZER };
 
@@ -340,6 +347,23 @@ static void flush(const uint8_t *p, size_t n)
 		asm volatile("dc civac, %0" : : "r"(a) : "memory");
 }
 
+/* Queue n bytes for the recording writer (under rec_lock); when the writer is REC_Q behind (or failed) the
+ * recording loses its data, not the decoder its time: dvs_record(NULL) then says -EIO. */
+static void rec_put(const void *p, size_t n)
+{
+	uint64_t h = atomic_load_explicit(&S.rq_head, memory_order_relaxed);
+	size_t i = h % REC_Q, k = n < REC_Q - i ? n : REC_Q - i;
+
+	if (atomic_load_explicit(&S.rec_err, memory_order_relaxed) ||
+	    h + n - atomic_load_explicit(&S.rq_tail, memory_order_acquire) > REC_Q) {
+		atomic_store(&S.rec_err, 1);
+		return;
+	}
+	memcpy(S.recq + i, p, k);
+	memcpy(S.recq, (const uint8_t *)p + k, n - k);
+	atomic_store_explicit(&S.rq_head, h + n, memory_order_release);
+}
+
 /*
  * Decode a buffer of MIPI lines in place and zero the packets (bytesused is 0, so a zero is how the next frame
  * tells where its data ends); returns the bytes of packets. Every line of the 11.28 captures is one run of
@@ -358,16 +382,17 @@ static size_t decode_lines(uint8_t *buf, size_t len)
 		uint32_t *p = (uint32_t *)(buf + l);
 		size_t n = decode(p, (len - l < LINE ? len - l : LINE) / 4);
 
-		if (S.rec && n && (gzwrite(S.rec, p, n * 4) != (int)n * 4 || gzwrite(S.rec, "\0\0\0", 4) != 4)) {
-			gzclose(S.rec);		/* a full disk ends the recording, not the live view */
-			S.rec = NULL;
-			S.rec_err = 1;
+		if (S.rec_on && n) {
+			static const uint32_t zero;
+
+			rec_put(p, n * 4);
+			rec_put(&zero, 4);
 		}
 		memset(p, 0, n * 4);
 		flush((uint8_t *)p, n * 4);
 		bytes += n * 4;
 	}
-	if (S.rec)
+	if (S.rec_on)
 		S.rec_events += atomic_load_explicit(&S.wr, memory_order_relaxed) - w0;
 	pthread_mutex_unlock(&S.rec_lock);
 	asm volatile("dsb sy" : : : "memory");
@@ -977,32 +1002,98 @@ void dvs_cells(const struct ev *e, int n, uint32_t *cells)
 	}
 }
 
+/* A recording starts mid-stream: first a line that puts a fresh decoder where this one is (the last accepted
+ * timestamp, the reference after it, the column), so the replay keeps the first events and their times. */
+static void rec_state(void)
+{
+	uint32_t w[5], n = 0;
+
+	if (S.have_ts) {
+		w[n++] = 0x08000000 | (uint32_t)(S.raw / 1000 & 0x3fffff);
+		w[n++] = 0x08800000 | (uint32_t)(S.raw % 1000);
+		w[n++] = 0x08000000 | S.ref;
+	}
+	if (S.col >= 0)
+		w[n++] = 0x04000000 | S.col;
+	for (uint32_t i = 0; i < n; i++)
+		w[i] = __builtin_bswap32(w[i]);
+	w[n++] = 0;
+	if (n > 1)
+		rec_put(w, n * 4);
+}
+
+/* gzip the queue to the file until dvs_record(NULL) stops it and it is drained; on the CPUs of the thread that
+ * started the recording (dvsctl's, CPU7), off the decoder's. */
+static void *rec_writer(void *arg)
+{
+	prctl(PR_SET_NAME, "dvs-rec");
+	for (;;) {
+		uint64_t h = atomic_load_explicit(&S.rq_head, memory_order_acquire), t = atomic_load(&S.rq_tail);
+		size_t i = t % REC_Q, n = h - t < REC_Q - i ? h - t : REC_Q - i;
+
+		if (h == t) {
+			if (atomic_load(&S.rec_stop) && atomic_load_explicit(&S.rq_head, memory_order_acquire) == t)
+				break;
+			nanosleep(&(struct timespec){ 0, 2000000 }, NULL);
+			continue;
+		}
+		if (n > 1u << 20)
+			n = 1u << 20;		/* 1 MB at a time: the decoder gets the room back sooner */
+		if (!atomic_load(&S.rec_err) && gzwrite(S.rec, S.recq + i, n) != (int)n)
+			atomic_store(&S.rec_err, 1);	/* drain on: the decoder must not find the queue full */
+		atomic_store_explicit(&S.rq_tail, t + n, memory_order_release);
+	}
+	if (gzclose(S.rec) != Z_OK)
+		atomic_store(&S.rec_err, 1);
+	return arg;
+}
+
 /*
- * Record the packets to path (gzip) until dvs_record(NULL), which returns the events decoded meanwhile
- * (-EINVAL: not recording, -EIO: a write failed). -EBUSY: already recording. Replay: t --replay (11.37).
+ * Record the packets to path (gzip) until dvs_record(NULL), which returns the events decoded meanwhile once the
+ * writer has drained the queue (-EINVAL: not recording, -EIO: the queue overflowed or a write failed).
+ * -EBUSY: already recording. Replay: t --replay (11.37).
  */
 int dvs_record(const char *path)
 {
 	int r = 0;
+	uint64_t n;
 
 	pthread_mutex_lock(&S.rec_lock);
 	if (path) {
 		errno = 0;
-		if (S.rec || S.rec_err)
+		if (S.rec_busy)
 			r = -EBUSY;
-		else if ((S.rec = gzopen(path, "wb1")))
-			S.rec_events = 0;
-		else
+		else if (!S.recq && !(S.recq = malloc(REC_Q)))
+			r = -ENOMEM;
+		else if (!(S.rec = gzopen(path, "wb1")))
 			r = errno ? -errno : -ENOMEM;
-	} else if (S.rec_err) {
-		S.rec_err = 0;
-		r = -EIO;
-	} else if (!S.rec) {
-		r = -EINVAL;
-	} else {
-		r = gzclose(S.rec) == Z_OK ? (int)S.rec_events : -EIO;
-		S.rec = NULL;
+		else {
+			atomic_store(&S.rq_head, 0);
+			atomic_store(&S.rq_tail, 0);
+			atomic_store(&S.rec_stop, 0);
+			atomic_store(&S.rec_err, 0);
+			S.rec_events = 0;
+			rec_state();
+			if ((r = -pthread_create(&S.rec_thr, NULL, rec_writer, NULL)))
+				gzclose(S.rec);
+			else
+				S.rec_on = S.rec_busy = 1;
+		}
+		pthread_mutex_unlock(&S.rec_lock);
+		return r;
 	}
+	if (!S.rec_on) {			/* not recording, or another call is closing it */
+		pthread_mutex_unlock(&S.rec_lock);
+		return -EINVAL;
+	}
+	S.rec_on = 0;
+	n = S.rec_events;
+	pthread_mutex_unlock(&S.rec_lock);
+	atomic_store(&S.rec_stop, 1);		/* the decoder queues no more: drain, close */
+	pthread_join(S.rec_thr, NULL);
+	r = atomic_load(&S.rec_err) ? -EIO : (int)n;
+	pthread_mutex_lock(&S.rec_lock);
+	S.rec_busy = 0;
 	pthread_mutex_unlock(&S.rec_lock);
 	return r;
 }
@@ -1123,7 +1214,7 @@ static int replay(const char *in, const char *out)
 {
 	static uint32_t line[LINE / 4];
 	gzFile g = gzopen(in, "rb");
-	FILE *fp = fopen(out, "wb");
+	FILE *fp = g ? fopen(out, "wb") : NULL;
 	uint64_t total = 0, w0;
 	size_t n = 0;
 	uint32_t w;
@@ -1330,6 +1421,68 @@ int main(int argc, char **argv)
 		fclose(fp);
 		if (n != 4 || rec[0].t != 300 || memcmp(rec, back, sizeof(*rec) * 4))
 			return fprintf(stderr, "replay: %d events, t %u (want 4, 300)\n", n, n ? back[0].t : 0), 1;
+	}
+	{					/* started mid-stream: a column and a clock from before the recording */
+		static uint32_t lines[LINE / 4];
+		static const uint32_t body[] = { 0x80080001 | 0x8000, 0x84000000 | 3 << 18 | 1 << 17 | 0x0402,
+						 0x088001ff, 0x80080001 | 0x8000 };	/* 4 events, +494 us, 2 */
+		const char *gz = "/tmp/dvsview-rec2.gz", *bin = "/tmp/dvsview-rec2.bin";
+		struct ev rec[8], back[8];
+		FILE *fp;
+		int n, w0;
+
+		reset();
+		feed(ts, 4);			/* t 300 */
+		feed((const uint32_t[]){ 0x04000005 }, 1);
+		w0 = nev();
+		for (int i = 0; i < 4; i++)
+			lines[i] = __builtin_bswap32(body[i]);
+		dvs_record(gz);
+		decode_lines((uint8_t *)lines, sizeof(lines));
+		n = dvs_record(NULL);
+		memcpy(rec, S.ring + w0, n * sizeof(*rec));
+		reset();
+		if (n != 6 || replay(gz, bin) || !(fp = fopen(bin, "rb")))
+			return fprintf(stderr, "mid-stream recording: %d events\n", n), 1;
+		n = fread(back, sizeof(*back), 8, fp);
+		fclose(fp);
+		for (int i = 0; i < 6; i++)
+			if (n != 6 || back[i].t != rec[i].t - rec[0].t || back[i].x != rec[i].x || back[i].y != rec[i].y)
+				return fprintf(stderr, "mid-stream replay: %d events, event %d t %u x %u (live %u, %u)\n", n,
+					       i, back[i].t, back[i].x, rec[i].t - rec[0].t, rec[i].x), 1;
+	}
+	{					/* recording must not slow the decoder: gzip in the ingest thread took 6 -> 40 ms a
+						 * buffer at 1.7 M events/s and lost buffers (11.39) */
+		static uint32_t big[127 * LINE / 4];
+		int64_t us[2] = { 0, 0 };
+		uint32_t r = 1;
+
+		for (int on = 0; on < 2; on++) {
+			reset();
+			if (on && dvs_record("/tmp/dvsview-rec3.gz"))
+				return fprintf(stderr, "dvs_record busy\n"), 1;
+			for (int b = 0; b < 16; b++) {
+				int64_t t0;
+
+				for (int l = 0; l < 127; l++) {	/* a column, then groups to the end of the line */
+					uint32_t *p = big + l * LINE / 4;
+
+					p[0] = __builtin_bswap32(0x04000000 | (r >> 8) % XS);
+					for (int i = 1; i < LINE / 4; i++) {
+						r = r * 1103515245 + 12345;
+						p[i] = __builtin_bswap32(0x80000000 | (r >> 9) % 90 << 18 | (r & 0xffff));
+					}
+				}
+				t0 = now_us();
+				decode_lines((uint8_t *)big, sizeof(big));
+				us[on] += now_us() - t0;
+			}
+			if (on && dvs_record(NULL) <= 0)
+				return fprintf(stderr, "dvs_record of 16 buffers failed\n"), 1;
+		}
+		if (us[1] > 2 * us[0])
+			return fprintf(stderr, "decode while recording %.1f ms a buffer, %.1f without\n", us[1] / 16e3,
+				       us[0] / 16e3), 1;
 	}
 	{					/* a reader RING/2 + 100 behind skips the 100 that are about to be overwritten */
 		struct ev dst[16];
