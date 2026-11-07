@@ -31,6 +31,7 @@ DAILY_MAP = {109: 'fall', 107: 'walk', 148: 'sit_down', 93: 'sit_down', 165: 'st
 OTHER_PER_CLASS = 5     # DailyDVS clips of each class not in DAILY_MAP, as 'other'
 SMOOTH = 5              # steps, 0.3 s
 STILL_FROM = 17         # none / still: a loss from the first step past 1 s (17 x 60 ms)
+ONSET = 0.3             # walk / other: the motion starts where the activity first reaches 30% of its peak
 
 
 def daily_class(path):
@@ -59,9 +60,16 @@ def activity(c):
 
 
 def label_mask(cls, act):
-    """steps the clip's label applies to: none / still from 1 s, an action from its peak + 0.3 s"""
+    """steps the clip's label applies to: none / still from 1 s; walk / other (motion all through, its peak often at
+    the clip's end) from the motion's onset + 0.3 s; an action that happens once from its peak + 0.3 s"""
+    if cls in ('none', 'still'):
+        start = STILL_FROM
+    elif cls in ('walk', 'other'):
+        start = int(np.argmax(act >= ONSET * act.max())) + SMOOTH
+    else:
+        start = int(np.argmax(act)) + SMOOTH
     m = np.zeros(len(act), bool)
-    m[STILL_FROM if cls in ('none', 'still') else int(np.argmax(act)) + SMOOTH:] = True
+    m[start:] = True
     return m
 
 

@@ -48,6 +48,18 @@ class TestDataset(unittest.TestCase):
         self.assertFalse(m[:45].any())
         self.assertTrue(m[45:].all())
 
+    def test_label_mask_onset(self):    # motion from step 30 to the end, its peak at step 82
+        c = np.full((100, 2, 120, 160), 2, np.uint16)
+        c[30:, :, 50:60, 70:80] += 20
+        c[80:85, :, 50:60, 70:80] += 10
+        for cls in ('walk', 'other'):   # motion all through: from its onset (step 30) + 0.3 s
+            m = label_mask(cls, activity(c))
+            self.assertFalse(m[:35].any())
+            self.assertTrue(m[35:].all())
+        m = label_mask('fall', activity(c))     # an action that happens once: from its peak + 0.3 s
+        self.assertFalse(m[:87].any())
+        self.assertTrue(m[87:].all())
+
     def test_label_mask_still(self):
         m = label_mask('still', activity(np.full((100, 2, 120, 160), 2, np.uint16)))
         self.assertFalse(m[:17].any())
