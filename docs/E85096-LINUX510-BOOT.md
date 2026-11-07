@@ -2600,3 +2600,25 @@ Mac: `~/e850-logs/wifi/`(`panic0634-full.txt`, `rec1/`: `web.log`, `state.log`, 
 - 재지 않은 것: 같은 프로세스 안의 스레드로 돌릴 때의 GIL 영향, 웹 응답 영향.
 
 **보드에 바꾼 것.** 없다. `/var/tmp/ortspike`는 시험 뒤 지웠다. 시험 파일의 Mac 사본은 Claude scratchpad에만 있다(저장소 밖).
+
+### 11.37 사람 행동 분류 구현 1: 학습 데이터 읽기 (2026-11-07)
+
+구현 계획(`docs/superpowers/plans/2026-11-07-dvs-person-action.md`)을 사용자 승인("좋아") 뒤 `dvs-person-action` 브랜치에서 실행하기 시작했다. 과제 1은 이벤트 파일 읽기다.
+
+**만든 것.** `tools/host/act/readers.py`의 `read_events(path)`는 클립 하나를 `Events(t, x, y, p, w, h)`로 돌려준다. t는 0부터 시작하는 int64 µs이고, p는 0 = ON, 1 = OFF다.
+- `.aedat`(PAF, DAVIS346 AER-DAT2.0): `#` 머리글 줄 뒤에 big-endian (주소, 시각) 쌍이 온다. 주소 비트 배치는 PAF의 `snn.py`를 따랐다. 바로 세우려고 x = 345 − x, y = 259 − y로 뒤집는다. `snn.py`가 그림을 위아래로 뒤집어 보여 주기 때문이다.
+- `.aedat4`(DailyDVS-200, 320×240): `aedat` 패키지로 이벤트 패킷을 이어 붙인다.
+- `.bin`(보드 녹화를 `dvsview --replay`로 풀어낸 것, 과제 2): `struct ev` 8바이트, 960×720. 시각은 첫 값과의 uint32 차이로 펼치므로 71.6분마다 넘어가는 표시 시계를 가로질러도 된다.
+
+**확인한 것.** `python -m unittest test_readers`: 3개 통과, 1개 건너뜀.
+- PAF 예제 `toy.aedat`: 이벤트 896,992개, 5.04초, 346×260, x 0..345, y 0..259, OFF 59%.
+- `.bin`: 합성 데이터로 y의 SUP·OFF 비트 분리와 시계 넘김을 확인했다.
+- `.aedat4`: 받은 파일이 없어 시험하지 못했다.
+
+**확인하지 못한 것.** PAF 극성은 `snn.py`의 주석(비트가 0이면 ON)을 따랐다. jAER 원본이나 장면으로 검증하지 않았다. 틀리면 PAF만 ON/OFF 채널이 뒤바뀐다.
+
+**데이터.** 아직 받지 않았다. 클래스별 클립 수는 받은 뒤 적는다.
+- PAF(Fall Detection, Action Recognition)는 Tongji SharePoint에 있다. 자동으로 목록을 받는 것은 막혔다. 사용자가 브라우저로 받아야 한다.
+- DailyDVS-200은 Google Drive에 `action_<번호>` 폴더로 나뉘어 있다. 필요한 폴더만 사용자가 받는다. 나눔 목록(`train/val/test.txt`)과 동작 설명은 받아 두었다.
+
+**보드에 바꾼 것.** 없다.
