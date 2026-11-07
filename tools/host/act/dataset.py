@@ -22,7 +22,8 @@ from dvsact import CLASSES, frames_of  # noqa: E402
 from readers import read_events  # noqa: E402
 
 PAF_MAP = {'falling': 'fall', 'walking': 'walk', 'sitting-down': 'sit_down', 'slumping-down': 'sit_down',
-           'getting-up': 'stand_up', 'bending': 'pick_up', 'picking-up': 'pick_up', 'tying-shoes': 'pick_up',
+           'sit-down': 'sit_down', 'getting-up': 'stand_up', 'get-up': 'stand_up',   # the download's folder names
+           'bending': 'pick_up', 'picking-up': 'pick_up', 'tying-shoes': 'pick_up',
            'arm-crossing': 'other', 'kicking': 'other', 'jumping': 'other', 'throwing': 'other',
            'turning-around': 'other', 'waving': 'other'}
 DAILY_MAP = {109: 'fall', 107: 'walk', 148: 'sit_down', 93: 'sit_down', 165: 'stand_up', 100: 'pick_up',

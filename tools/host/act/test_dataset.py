@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../linux510'))
-from dataset import DAILY_MAP, PAF_MAP, activity, build, daily_class, label_mask  # noqa: E402
+from dataset import DAILY_MAP, PAF_MAP, activity, build, daily_class, label_mask, paf_class  # noqa: E402
 from dvsact import CLASSES, EV  # noqa: E402
 
 
@@ -35,6 +35,11 @@ class TestDataset(unittest.TestCase):
         self.assertTrue(set(PAF_MAP.values()) | set(DAILY_MAP.values()) <= set(CLASSES))
         self.assertEqual((daily_class('action_110/C109P3M0S1_20231111.aedat4'), daily_class('x/C13P1M0S2_1.aedat4')),
                          (109, 13))
+        # the folder names of the PAF download (Tongji SharePoint, 2026-11-07)
+        self.assertEqual([paf_class(p) for p in ('fall/sit-down/f_kaibo_1.1.aedat', 'action/get-up/a.aedat',
+                                                 'fall/falling down/b.aedat', 'action/arm crossing/c.aedat',
+                                                 'fall/tying shoes/d.aedat', 'toy.aedat')],
+                         ['sit_down', 'stand_up', 'fall', 'other', 'pick_up', None])
 
     def test_label_mask_peak(self):     # the movement peaks at step 40
         c = np.full((100, 2, 120, 160), 2, np.uint16)
