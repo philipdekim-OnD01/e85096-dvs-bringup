@@ -33,20 +33,20 @@ SENSOR_RANGE = {'margin': (0, 140, 17), 'flush_us': (1, 1023, 50)}
 WEB_CPU = 7
 
 
-def pin(cpu):
-    """This thread and the request threads it starts (they inherit all three): CPU cpu only, at the cluster's top
+def pin(cpus, name='dvs-web'):
+    """This thread and the threads it starts (they inherit all three): the CPUs cpus only, at the cluster's top
     clock while one runs (an idle cluster sits at 546 MHz and a 25 ms request is over before schedutil raises it:
-    pinned without this a frame took 80 ms, with it 27; 11.30), named dvs-web."""
+    pinned without this a frame took 80 ms, with it 27; 11.30), named name (dvsact uses it too, 11.38)."""
     libc = ctypes.CDLL(None, use_errno=True)
-    libc.prctl(15, b'dvs-web', 0, 0, 0)                                     # PR_SET_NAME
+    libc.prctl(15, name.encode(), 0, 0, 0)                                  # PR_SET_NAME
     # struct sched_attr: size 56, SCHED_FLAG_KEEP_POLICY | KEEP_PARAMS | UTIL_CLAMP_MIN, util_min 1024
     attr = struct.pack('IIQiIQQQII', 56, 0, 0x08 | 0x10 | 0x20, 0, 0, 0, 0, 0, 1024, 1024)
     if libc.syscall(ctypes.c_long(274), ctypes.c_long(0), attr, ctypes.c_long(0)):    # __NR_sched_setattr (arm64)
         print('dvsctl: uclamp: %s' % os.strerror(ctypes.get_errno()), file=sys.stderr)
     try:
-        os.sched_setaffinity(0, {cpu})
+        os.sched_setaffinity(0, cpus)
     except OSError as e:                    # CPU offline (hotplug): stay on the shared cores
-        print('dvsctl: CPU%d: %s' % (cpu, e), file=sys.stderr)
+        print('dvsctl: CPU%s: %s' % (sorted(cpus), e), file=sys.stderr)
 
 
 def save(path, obj):
@@ -158,7 +158,7 @@ def start(lib, port):
             pass
 
     def serve():
-        pin(WEB_CPU)
+        pin({WEB_CPU})
         srv.serve_forever()
 
     srv = http.server.ThreadingHTTPServer(('', port), Handler)

@@ -965,6 +965,18 @@ int dvs_events(struct ev *dst, int max, uint64_t *cursor)
 	return n;
 }
 
+/* Add events e[0..n) into cells[2][120][160] (OFF after ON, 6 x 6 px each): the classifier's count frame,
+ * dvsact.Binner.push_ev. numpy took 25-50 ms for the 150-300 k events of a busy 60 ms (11.38). */
+void dvs_cells(const struct ev *e, int n, uint32_t *cells)
+{
+	for (int i = 0; i < n; i++) {
+		uint32_t x = e[i].x, y = e[i].y & EV_Y;
+
+		if (x < XS && y < YS)
+			cells[(e[i].y >> 15) * (YS / 6 * XS / 6) + y / 6 * (XS / 6) + x / 6]++;
+	}
+}
+
 /*
  * Record the packets to path (gzip) until dvs_record(NULL), which returns the events decoded meanwhile
  * (-EINVAL: not recording, -EIO: a write failed). -EBUSY: already recording. Replay: t --replay (11.37).

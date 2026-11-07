@@ -28,6 +28,8 @@ Each file is one VC0 frame: one little-endian u16 per pixel, 10 valid bits (raw1
         also measure boxes moving through the view (one at a time): one JSON line per box, label on HDMI.
     ... --ctl 8080
         display settings page (dvsctl.py, dvsctl.html in /usr/local/share/dvsview): http://<board>:8080/
+    ... --act /var/lib/dvsact/act.jsonl --act-model /var/lib/dvsact/model.onnx
+        also classify the person in view (dvsact.py, 11.38): one JSON line per change of state (appear, move, fall)
 """
 import argparse
 import atexit
@@ -92,6 +94,8 @@ ap.add_argument('--boxes', help='--live --raw8: append measured boxes to this fi
 ap.add_argument('--mm-per-px', type=float, default=1.0, help='--boxes: belt-plane scale, calibrate with a known box')
 ap.add_argument('--box-window', type=int, default=5000, help='--boxes: us of events per measurement (<= 100000)')
 ap.add_argument('--ctl', type=int, default=0, help='--live --raw8: serve the display settings page on this port')
+ap.add_argument('--act', help='--live --raw8: append person action changes to this file (JSON lines)')
+ap.add_argument('--act-model', help='--act: the ONNX model (tools/host/act/export.py)')
 a = ap.parse_args()
 PIX_FMT, PIX_BITS = (PIX_FMT_SBGGR8, 8) if a.raw8 else (PIX_FMT_SBGGR10, 10)
 
@@ -298,6 +302,10 @@ class DvsLive:
                 log('display settings: http://<board>:%d/' % a.ctl)
             except OSError as e:                # port taken: keep the live view without the page
                 log('display settings off: port %d: %s' % (a.ctl, e))
+        if a.act and a.act_model:               # without onnxruntime or the model it says why and stays off
+            sys.path.append('/usr/local/share/dvsview')
+            import dvsact
+            dvsact.start(self.lib, a.act, a.act_model)
 
     def show(self, buf):
         p = ctypes.c_char.from_buffer(buf)      # the dma-buf mmap itself: C decodes and zeroes it in place

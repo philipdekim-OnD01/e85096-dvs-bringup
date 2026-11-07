@@ -1,9 +1,16 @@
 """dvsact's frames and judge, numpy only: python3 -m unittest test_dvsact (Mac venv, or board /var/tmp)."""
+import contextlib
+import ctypes
+import io
+import os
+import tempfile
 import unittest
 
 import numpy as np
 
-from dvsact import CLASSES, Binner, Judge, counts, line, to_input
+from dvsact import CLASSES, EV, Binner, Judge, counts, line, split, start, to_input
+
+LIB = os.environ.get('DVSVIEW_LIB', '/usr/local/lib/libdvsview.so')
 
 
 def push_ms(b, start, n):
@@ -13,6 +20,25 @@ def push_ms(b, start, n):
     out = []
     for i in range(0, n, 7):
         out += b.push(t[i:i + 7], one[i:i + 7], one[i:i + 7], np.zeros(len(t[i:i + 7]), np.uint16))
+    return out
+
+
+def random_ev(seed, n=20000):
+    """struct ev records over 400 ms across the uint32 wrap, rows with the OFF and SUP bits"""
+    rng = np.random.default_rng(seed)
+    ev = np.zeros(n, EV)
+    ev['t'] = (2**32 - 150000 + np.sort(rng.integers(0, 400000, n))) % 2**32
+    ev['x'] = rng.integers(0, 960, n)
+    ev['y'] = rng.integers(0, 720, n) | rng.integers(0, 2, n) << 15 | rng.integers(0, 2, n) << 14
+    return ev
+
+
+def push_chunks(b, ev, ev_path=False, seed=0):
+    rng, out, i = np.random.default_rng(seed), [], 0
+    while i < len(ev):
+        j = i + int(rng.integers(1, 3000))
+        out += b.push_ev(ev[i:j]) if ev_path else b.push(*split(ev[i:j]))
+        i = j
     return out
 
 
@@ -54,6 +80,34 @@ class TestDvsact(unittest.TestCase):
         self.assertEqual([k for k, *_ in out].count('reset'), 1)
         self.assertTrue(all(f[2].sum() > 0 for f in out if f[0] == 'frame'))
 
+    def test_binner_counts(self):    # each frame = counts() of its 60 ms, whatever the chunks, across the wrap
+        rng = np.random.default_rng(1)
+        n = 20000
+        rel = np.sort(rng.integers(0, 400000, n))
+        t = ((2**32 - 150000 + rel) % 2**32).astype(np.uint32)
+        x, y, p = rng.integers(0, 960, n), rng.integers(0, 720, n), rng.integers(0, 2, n)
+        b, out, i = Binner(), [], 0
+        while i < n:
+            j = i + int(rng.integers(1, 3000))
+            out += b.push(t[i:j], x[i:j], y[i:j], p[i:j])
+            i = j
+        self.assertEqual([f[1] for f in out], [k * 60000 for k in range(6)])
+        for _, t0, c in out:
+            m = (rel - rel[0] >= t0) & (rel - rel[0] < t0 + 60000)
+            self.assertTrue((c == counts(x[m], y[m], p[m])).all())
+
+    def test_push_ev(self):         # the board's path (struct ev records, cells counted in C or numpy) = push()
+        ev, frames = random_ev(3), lambda out: [(k, t0, c.tolist()) for k, t0, c in out]
+        self.assertEqual(frames(push_chunks(Binner(), ev, ev_path=True)), frames(push_chunks(Binner(), ev)))
+
+    @unittest.skipUnless(os.path.exists(LIB), 'no libdvsview.so (DVSVIEW_LIB)')
+    def test_push_ev_c(self):       # dvs_cells() in libdvsview counts as numpy does
+        lib = ctypes.CDLL(LIB)
+        ev, frames = random_ev(4), lambda out: [(k, t0, c.tolist()) for k, t0, c in out]
+        out = push_chunks(Binner(cells=lib.dvs_cells), ev, ev_path=True)
+        self.assertTrue(out)
+        self.assertEqual(frames(out), frames(push_chunks(Binner(), ev)))
+
     def test_judge(self):
         j, P = Judge(), lambda k, p=0.9: onehot(CLASSES.index(k), p)
         self.assertIsNone([j.step(P('none')) for _ in range(3)][-1])
@@ -69,6 +123,12 @@ class TestDvsact(unittest.TestCase):
         s = line({'event': 'fall', 'state': 'fall', 'prev': 'walk', 'p': 0.8734}, 1794030632123456000)
         self.assertEqual(s, '{"t_us": 1794030632123456, "time": "2026-11-07T05:50:32.123456Z", '
                             '"event": "fall", "state": "fall", "prev": "walk", "p": 0.87}')
+
+    def test_start_missing_model(self):     # no model yet: the live view goes on without the classifier
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stderr(err):
+            self.assertIsNone(start(object(), d + '/a.jsonl', '/nonexistent.onnx'))
+        self.assertIn('[dvsact] off', err.getvalue())
 
 
 if __name__ == '__main__':

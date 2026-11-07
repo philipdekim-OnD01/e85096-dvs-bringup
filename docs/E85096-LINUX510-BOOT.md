@@ -2622,3 +2622,79 @@ Mac: `~/e850-logs/wifi/`(`panic0634-full.txt`, `rec1/`: `web.log`, `state.log`, 
 - DailyDVS-200은 Google Drive에 `action_<번호>` 폴더로 나뉘어 있다. 필요한 폴더만 사용자가 받는다. 나눔 목록(`train/val/test.txt`)과 동작 설명은 받아 두었다.
 
 **보드에 바꾼 것.** 없다.
+
+### 11.38 사람 행동 분류 구현 2: 보드 분류 스레드, 무작위 모델로 성능 시험 (2026-11-07)
+
+계획 과제 2~4다. 모델 가중치는 아직 무작위다. 학습은 데이터가 온 뒤 과제 7~8에서 한다. 여기서는 보드에서 분류를 돌려도 live 화면과 웹이 느려지지 않는지 본다.
+
+**만든 것.**
+- `dvsview.c`(과제 2):
+  - `dvs_events(dst, max, cursor)`: 분류기가 링에서 새 이벤트를 받아 간다. RING/2보다 뒤처지면 건너뛰고, 건너뛴 수를 `/stats`의 `act_lost`에 센다.
+  - `dvs_record(path)` / `dvs_record(NULL)`: 줄마다 패킷 단어와 0 단어 하나를 gzip으로 녹화한다. 쓰기가 실패하면 녹화만 닫고 ingest는 계속한다.
+  - 시험 빌드 `t --replay in.gz out.bin`: 녹화를 다시 디코딩한다.
+  - selftest에 세 가지를 더했다.
+- `dvsact.py`(과제 3·4):
+  - 60 ms 이벤트 수 프레임(2×120×160)을 만드는 `Binner`, 상태 판정 `Judge`, JSONL 한 줄을 만드는 `line()`.
+  - `start()`: 캡처 프로세스 안의 데몬 스레드 `dvs-act`다. CPU4~6에 묶고, uclamp min은 1024로 둔다.
+  - onnxruntime이나 모델이 없으면 `[dvsact] off: 이유`를 쓰고 live만 돈다.
+- `tools/host/act/model.py`, `export.py`: MobileNetV3-small(ImageNet) + GRU를 ONNX로 내보낸다. 무작위 가중치에서 torch와 onnxruntime의 차이는 max_abs 1.8e-7이었다.
+- `ov5647-cap.py --act FILE --act-model PATH`. `dvslive.sh`는 `/var/lib/dvsact/enable`이 있을 때만 이 인자를 붙인다. 그 디렉터리는 philip 소유라 root 없이 켜고 끈다.
+- `dvsctl.pin(cpus, name)`: CPU 집합과 스레드 이름을 받게 했다.
+- `tools/board/dvsact-install.sh`: root가 ACM 콘솔에서 실행한다.
+
+**보드에 바꾼 것.** ACM root 콘솔에서 `sh /var/tmp/dvsact-stage*/dvsact-install.sh`를 실행했다. 다시 돌려도 출력이 같았다(세 번 확인).
+
+| 파일 | sha256 앞 16자리 |
+|---|---|
+| `/usr/local/lib/libdvsview.so` | 44cc24a277803335 |
+| `/usr/local/share/dvsview/dvsctl.py` | 3a5cea10b1ade61c |
+| `/usr/local/share/dvsview/dvsact.py`(새 파일) | a5e24f2de5944f6e |
+| `/usr/local/bin/ov5647-cap.py` | 0b82333007c0bbed |
+| `/usr/local/bin/dvslive.sh` | 6d1fc9ad16d6c14f |
+| `/usr/local/lib/python3.11/dist-packages`: onnxruntime 1.31.1, flatbuffers, packaging, protobuf | 파일 목록 digest 090c029ea922a7c8 |
+
+- 설치 전 원본은 `.prev-act`로 남겼다(`libdvsview.so`, `dvsctl.py`, `ov5647-cap.py`, `dvslive.sh`). 되돌리려면 이 넷을 제자리에 복사하고 `dvsact.py`를 지운 뒤 dvslive를 다시 시작한다.
+- 새로 만든 디렉터리: `/var/lib/dvsact`, `/var/tmp/dvsrec`(philip 소유).
+- 보드에는 원래 onnxruntime, packaging, protobuf, flatbuffers가 없었다. 그래서 시스템 패키지를 가리지 않는다.
+- 지금 분류는 꺼져 있다(`enable` 없음). 무작위 모델과 그 기록 2줄은 지웠다.
+
+**첫 5분 시험(무작위 모델)에서 찾은 문제.**
+- 계획 기준의 숫자는 대부분 맞았다:
+  - 단계 최대 37.8 ms, lost 0.
+  - webbench 중앙값 28.1~29.8 ms(켜기 전 30.7).
+  - 104 fps. 시작 직후 2초만 77 fps였다.
+- 기준에 없던 문제가 있었다. 장면이 바쁠 때 `[dvsact] steps` 줄이 4~6초 동안 나오지 않았다. 그 뒤 2초에 97~107단계가 몰려 나왔다. 분류가 실시간보다 몇 초 밀린 것이다.
+- 원인을 보드 한 코어(CPU5)에서 쟀다. Python 프레임 만들기(`split` + `Binner.push`)가 칸당 6만/15만/30만 이벤트에 19/40/63 ms였다.
+  - 모델 한 단계가 29 ms이므로, 칸당 이벤트가 약 10만을 넘으면 60 ms 예산을 넘는다.
+  - 잡음만으로 칸당 약 8만 이벤트다(1.3M/s).
+  - 11.36의 5.6~13.6 ms는 미리 나눈 배열에 `bincount`를 한 번 한 값이었다. Binner 전체 비용이 아니었다.
+- 연산별로 나눠 쟀더니 numpy로는 30만 이벤트에 약 25 ms가 남았다. `bincount`가 12.6 ms, gather가 9 ms였다.
+
+**고친 것.**
+- 칸 세기를 C `dvs_cells()`(libdvsview)로 옮겼다.
+  - 보드는 `Binner.push_ev(struct ev)`를 쓴다.
+  - 학습용 `frames_of`는 numpy `push()`를 그대로 쓴다.
+  - 둘이 같은 프레임을 내는지는 `test_push_ev_c`로 묶었다(Docker Debian numpy 1.24와 보드에서 통과).
+- `searchsorted` 키가 Python int여서 배열 전체를 int64로 복사하던 것을 `np.uint32`로 바꿨다.
+- 덩어리의 시각 폭이 3초 이하이면 공백 검사를 건너뛴다.
+- 결과는 칸당 6만/15만/30만 이벤트에 3.9/6.8/13.0 ms였다. 모델을 더해도 30만 이벤트 칸이 42 ms다.
+
+**고친 뒤 시험: 같은 장면에서 켬 5분, 끔 5분.**
+
+| 항목 | 분류 켬 | 분류 끔 |
+|---|---|---|
+| `[dvsview]` fps | 104 (시작 직후 2초만 78.9) | 104 (시작 직후 2초만 93.2) |
+| ingest 평균 / 2초 최대의 중앙값 | 2.94 / 3.3 ms | 3.57 / 4.1 ms |
+| ingest 최대 > 7 ms인 2초 구간(158개 중) | 4 (시작 구간 포함, 최대 57.5) | 10 (시작 구간 포함, 최대 61.5) |
+| 버퍼 평균 크기 | 180 kB | 192 kB |
+| webbench 중앙값(100회 × 3) | 28.1 / 28.1 / 28.1 ms | 27.6 / 27.7 / 29.0 ms |
+| `[dvsact]` | 2초당 30~38단계(밀림 없음), 단계 중앙값 29.2 ms, 최대 37.7 ms, lost 0 | — |
+
+- 해석:
+  - 분류는 live 화면과 웹을 느리게 하지 않는다.
+  - 계획 기준 "ingest 최대 ≤ 7 ms"는 끈 상태에서도 자주 넘는다. 장면(이벤트 양)과 서비스 시작에 따른 것이다.
+  - 남은 차이는 서비스 시작 직후 2초 동안 fps가 더 떨어지는 것(78.9 대 93.2)뿐이다. onnxruntime을 불러오고 세션을 만드는 구간으로 보이지만 확인하지 않았다.
+- 재지 않은 것:
+  - 학습된 모델에서의 판정 품질.
+  - 사람이 크게 움직일 때의 이벤트 양. 이번 장면은 버퍼당 180~192 kB였다.
+  - `dvs-act`가 CPU4~6에서 render 스레드(이번에는 CPU5)와 겹칠 때의 영향을 따로 떼어 재지 않았다.

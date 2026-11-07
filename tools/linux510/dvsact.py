@@ -4,9 +4,17 @@ Events come from libdvsview (dvs_events(), the decoded ring before the HDMI rend
 time becomes a 2 x 120 x 160 count frame (ON, OFF; 6 x 6 px cells), log1p, one model step; the judge turns
 the class probabilities into a state and writes a JSONL line when the state changes. The same Binner makes
 the training frames on the Mac (frames_of), so training and the board see one definition of a frame.
+
+On the board start() runs it in the capture process (ov5647-cap.py --act FILE --act-model PATH), one daemon
+thread "dvs-act" on CPU4-6 at the top clock (dvsctl.pin); onnxruntime uses that thread only.
 """
+import ctypes
 import datetime
 import json
+import os
+import sys
+import threading
+import time
 
 import numpy as np
 
@@ -40,47 +48,75 @@ def to_input(c):
 class Binner:
     """Events in time order -> one ('frame', t0_us, counts) per STEP_US bin that has events, on a grid set by
     the first event; ('reset', t_us, None) when the stream had a gap over GAP_US (the bin then is dropped).
-    t is the uint32 display clock: steps are unwrapped from the previous event (the clock never goes back)."""
+    t is the uint32 display clock: steps are unwrapped from the previous event (the clock never goes back).
+    push(t, x, y, pol) counts with numpy (training, any w x h); push_ev(struct ev records) is the board's path,
+    960 x 720, counted by cells (libdvsview dvs_cells) when given: numpy took 25-50 ms for the 150-300 k events
+    of a busy 60 ms on the A55, C ~1 (11.38)."""
 
-    def __init__(self, w=960, h=720):
-        self.w, self.h = w, h
-        self.last = None        # uint32 t of the last event
-        self.t = 0              # its unwrapped time
-        self.origin = 0         # grid start
-        self.k = None           # current bin index, None before the first event
-        self.cur = []           # (x, y, pol) chunks of the current bin
+    def __init__(self, w=960, h=720, cells=None):
+        self.gx = (np.arange(w) * GW // w).astype(np.int32)        # cell of a column, of a row (x GW)
+        self.gy = (np.arange(h) * GH // h * GW).astype(np.int32)
+        self.cells = cells
+        if cells:
+            cells.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+            cells.restype = None
+        self.acc = np.zeros(2 * GH * GW, np.uint32)                # counts of the current bin
+        self.any = False
+        self.last = None        # uint32 t of the last event (an int)
+        self.tu = 0             # its unwrapped time
+        self.start = None       # uint32 start of the current bin, None before the first event and after a gap
+        self.t0 = 0             # its unwrapped time
 
     def _emit(self, out):
-        if self.k is not None and self.cur:
-            x, y, p = (np.concatenate(a) for a in zip(*self.cur))
-            out.append(('frame', int(self.origin + self.k * STEP_US), counts(x, y, p, self.w, self.h)))
-        self.cur = []
+        if self.any:
+            out.append(('frame', self.t0, np.minimum(self.acc, 65535).astype(np.uint16).reshape(2, GH, GW)))
+        self.acc[:] = 0
+        self.any = False
 
     def push(self, t, x, y, pol):
+        cell = self.gx[x] + self.gy[y] + np.asarray(pol, np.int32) * (GH * GW)
+        return self._push(t, lambda i, j: np.add(self.acc, np.bincount(cell[i:j], minlength=len(self.acc)),
+                                                 out=self.acc, casting='unsafe'))
+
+    def push_ev(self, ev):
+        if self.cells:
+            ev = np.ascontiguousarray(ev)
+            return self._push(ev['t'], lambda i, j: self.cells(ev.ctypes.data + i * EV.itemsize, j - i,
+                                                               self.acc.ctypes.data))
+        return self.push(*split(ev))
+
+    def _push(self, t, add):
+        """bin edges by searchsorted on the sorted clock; add(i, j) counts events i..j-1 into acc"""
         out = []
         if not len(t):
             return out
         t = np.asarray(t, np.uint32)
-        prev = np.array([t[0] if self.last is None else self.last], np.uint32)
-        d = (t - np.concatenate((prev, t[:-1]))).astype(np.int64)     # uint32 subtraction: wraps forward
-        t64 = self.t + np.cumsum(d)
-        cuts = [0] + [int(i) for i in np.flatnonzero(d > GAP_US)] + [len(t)]
-        for a, b in zip(cuts[:-1], cuts[1:]):
-            if a == b:
-                continue
-            if self.k is not None and d[a] > GAP_US:
-                self.cur, self.k = [], None
-                out.append(('reset', int(t64[a]), None))
-            if self.k is None:
-                self.origin, self.k = int(t64[a]), 0
-            ks = (t64[a:b] - self.origin) // STEP_US
-            runs = np.concatenate(([0], np.flatnonzero(np.diff(ks)) + 1, [b - a]))
-            for i, j in zip(runs[:-1], runs[1:]):
-                if ks[i] != self.k:
+        gaps = [] if (int(t[-1]) - int(t[0])) & 0xffffffff <= GAP_US else \
+            (np.flatnonzero(np.diff(t) > GAP_US) + 1).tolist()         # uint32 differences wrap forward
+        first_gap = self.last is not None and (int(t[0]) - self.last) & 0xffffffff > GAP_US
+        segs = [0] + gaps + [len(t)]
+        for s, (a, b) in enumerate(zip(segs[:-1], segs[1:])):
+            ta = int(t[a])
+            tua = 0 if self.last is None else self.tu + ((ta - self.last) & 0xffffffff)
+            if (s or first_gap) and self.start is not None:
+                self.acc[:] = 0
+                self.any, self.start = False, None
+                out.append(('reset', tua, None))
+            if self.start is None:
+                self.start, self.t0 = ta, tua
+            rel = t[a:b] - np.uint32(self.start)                     # us after the current bin's start
+            off, i = 0, 0
+            while i < b - a:
+                k = max(0, (int(rel[i]) - off) // STEP_US)
+                if k:                                                  # past the current bin: the empty ones skipped
                     self._emit(out)
-                    self.k = int(ks[i])
-                self.cur.append((x[a + i:a + j], y[a + i:a + j], pol[a + i:a + j]))
-        self.last, self.t = t[-1], int(t64[-1])
+                    off += k * STEP_US
+                    self.start, self.t0 = (self.start + k * STEP_US) & 0xffffffff, self.t0 + k * STEP_US
+                j = max(i + 1, int(np.searchsorted(rel, np.uint32(off + STEP_US))))   # a Python int key: a cast copy
+                add(a + i, a + j)
+                self.any = True
+                i = j
+            self.last, self.tu = int(t[b - 1]), tua + ((int(t[b - 1]) - ta) & 0xffffffff)
         return out
 
 
@@ -118,3 +154,76 @@ def line(rec, now_ns):
     time = datetime.datetime.fromtimestamp(us // 1000000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
     return json.dumps({'t_us': us, 'time': '%s.%06dZ' % (time, us % 1000000), 'event': rec['event'],
                        'state': rec['state'], 'prev': rec['prev'], 'p': round(rec['p'], 2)})
+
+
+def _off(why):
+    print('[dvsact] off: %s' % why, file=sys.stderr, flush=True)
+
+
+def _softmax(y):
+    e = np.exp(y - y.max())
+    return e / e.sum()
+
+
+def _run(lib, out_path, model_path, cpus):
+    import dvsctl                       # same directory on the board; it imports this module for CLASSES
+    import onnxruntime as ort
+
+    dvsctl.pin(set(cpus), 'dvs-act')    # before the session: its compute then stays on this thread
+    try:
+        o = ort.SessionOptions()
+        o.intra_op_num_threads = o.inter_op_num_threads = 1
+        sess = ort.InferenceSession(model_path, o, providers=['CPUExecutionProvider'])
+        out = open(out_path, 'a')
+    except Exception as e:
+        return _off(e)
+    lib.dvs_events.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_uint64)]
+    lib.dvs_stats.restype = ctypes.c_char_p
+    buf = np.empty(65536, EV)
+    cur = ctypes.c_uint64(2**64 - 1)    # UINT64_MAX: start at the newest event
+    binner, judge, h = Binner(cells=lib.dvs_cells), Judge(), np.zeros((1, 128), np.float32)
+    ms, t_log = [], time.monotonic()
+    wake = t_log
+    try:
+        while True:
+            n = len(buf)
+            while n == len(buf):        # all that came since the last wake, 65536 at a time
+                n = lib.dvs_events(buf.ctypes.data, len(buf), ctypes.byref(cur))
+                for kind, _, c in binner.push_ev(buf[:n]):
+                    if kind == 'reset':
+                        h[:] = 0
+                        continue
+                    a = time.perf_counter()
+                    y, h = sess.run(None, {'x': to_input(c), 'h': h})
+                    rec = judge.step(_softmax(y[0]))
+                    ms.append((time.perf_counter() - a) * 1e3)
+                    if rec:
+                        out.write(line(rec, time.time_ns()) + '\n')
+                        out.flush()
+                        print('[dvsact] %s %s p %.2f' % (rec['event'], rec['state'], rec['p']), file=sys.stderr,
+                              flush=True)
+            now = time.monotonic()
+            if now - t_log >= 2:
+                lost = json.loads(lib.dvs_stats() or b'{}').get('act_lost', 0)
+                print('[dvsact] steps %d, step median %.1f ms max %.1f ms, lost %d' % (
+                    len(ms), float(np.median(ms)) if ms else 0, max(ms, default=0), lost), file=sys.stderr,
+                    flush=True)
+                ms, t_log = [], now
+            wake = max(wake + STEP_US / 1e6, now)
+            time.sleep(max(0, wake - time.monotonic()))
+    except Exception as e:
+        _off(e)
+
+
+def start(lib, out_path, model_path, cpus=frozenset({4, 5, 6})):
+    """Classify in a daemon thread, one JSON line per state change appended to out_path; None (and why on
+    stderr) without onnxruntime or the model: the live view goes on without the classifier."""
+    try:
+        import onnxruntime  # noqa: F401
+    except ImportError as e:
+        return _off(e)
+    if not os.path.isfile(model_path):
+        return _off('no model %s' % model_path)
+    th = threading.Thread(target=_run, args=(lib, out_path, model_path, cpus), name='dvs-act', daemon=True)
+    th.start()
+    return th
