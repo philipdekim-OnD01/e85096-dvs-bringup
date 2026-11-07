@@ -8,7 +8,7 @@ import torch
 
 from evaluate import evaluate
 from model import Step
-from train import augment, collate, seq_loss
+from train import augment, batches, collate, seq_loss
 
 
 def run_tiny(steps):
@@ -42,6 +42,13 @@ class TestTrain(unittest.TestCase):
         self.assertEqual((a.shape, a.dtype), (c.shape, np.uint16))
         self.assertTrue(np.array_equal(augment(c, np.random.default_rng(1), True), a))   # same seed, same result
         self.assertFalse(np.array_equal(augment(c, np.random.default_rng(2), True), a))
+
+    def test_batches(self):         # MPS memory grows with the frames in a step (~9 MB each): a frame budget
+        lengths = [100, 100, 100, 300, 50, 20, 20, 20, 20, 20, 20, 20, 20, 20]
+        b = list(batches(lengths, range(len(lengths)), frames=250, clips=8))
+        self.assertEqual(sorted(i for x in b for i in x), list(range(len(lengths))))   # every clip once
+        self.assertIn([3], b)                       # a clip over the budget goes alone
+        self.assertTrue(all(len(x) <= 8 and (len(x) == 1 or sum(lengths[i] for i in x) <= 250) for x in b))
 
     def test_collate_pads(self):    # clips of 3 and 5 steps: padding is neither input nor loss
         rng = np.random.default_rng(0)

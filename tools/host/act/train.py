@@ -4,6 +4,7 @@ Spec 7.3: public = PAF + DailyDVS-200 (DailyDVS train split; PAF has no split fi
 ours = the board recordings from the public checkpoint, the --holdout latest clips of each class kept out
 (<CKPT>.holdout.json, for evaluate.py). One clip is one sequence, the GRU state from 0; 8 clips a batch, padded;
 the loss is cross-entropy on the masked steps (dataset.label_mask), classes weighted by 1 / their masked steps.
+A step's memory on MPS grows with its frames (~9 MB each, docs 11.41): a batch is up to 8 clips and FRAMES frames.
 CKPT: torch.save({'model': state_dict, ...}) (export.py reads it).
 """
 import argparse
@@ -23,6 +24,7 @@ from dvsact import CLASSES, GH, GW  # noqa: E402
 
 NOISE = 2.05            # half our sensor's ~4.1 events per cell per 60 ms (spec 4), per unit of r ~ U(0, 2)
 BATCH = 8
+FRAMES = 256            # ~2.4 GB on MPS; 8 clips of up to 245 steps (~8 GB) swapped a 16 GB Mac to a halt
 
 
 def augment(c, rng, public):
@@ -41,6 +43,19 @@ def augment(c, rng, public):
     out = np.zeros(c.shape, np.uint16)
     out[:, :, np.flatnonzero(vy)[:, None], np.flatnonzero(vx)] = np.minimum(c[:, :, yi[vy][:, None], xi[vx]], 65535)
     return out
+
+
+def batches(lengths, order, frames=FRAMES, clips=BATCH):
+    """clip indices in order, cut into batches of <= clips clips and <= frames frames (a longer clip goes alone)"""
+    b, n = [], 0
+    for i in order:
+        if b and (len(b) == clips or n + lengths[i] > frames):
+            yield b
+            b, n = [], 0
+        b.append(i)
+        n += lengths[i]
+    if b:
+        yield b
 
 
 def collate(clips, rng, public, augmenting=True):
@@ -113,9 +128,9 @@ def main():
     opt = torch.optim.AdamW(m.parameters(), lr=1e-3 if a.stage == 'public' else 3e-4)
     t0 = time.time()
     for e in range(a.epochs):
-        order, total, n = rng.permutation(len(clips)), 0.0, 0
-        for i in range(0, len(order), BATCH):
-            x, present, mask, y = collate([clips[k] for k in order[i:i + BATCH]], rng, a.stage == 'public')
+        total, n = 0.0, 0
+        for b in batches([len(c['counts']) for c in clips], rng.permutation(len(clips))):
+            x, present, mask, y = collate([clips[k] for k in b], rng, a.stage == 'public')
             if not mask.any():
                 continue
             loss = seq_loss(m, x.to(dev), present.to(dev), mask.to(dev), y.to(dev), w)
@@ -123,6 +138,8 @@ def main():
             loss.backward()
             opt.step()
             total, n = total + loss.item(), n + 1
+            if dev.type == 'mps':
+                torch.mps.empty_cache()     # otherwise its cache keeps a block per batch shape and grows
         print('epoch %d loss %.4f (%.0f s)' % (e + 1, total / max(n, 1), time.time() - t0), flush=True)
     torch.save({'model': m.cpu().state_dict(), 'stage': a.stage, 'epochs': a.epochs, 'classes': CLASSES}, a.out)
 
