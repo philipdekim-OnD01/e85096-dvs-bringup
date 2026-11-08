@@ -4,7 +4,8 @@ Spec 7.3: public = PAF + DailyDVS-200 (DailyDVS train split; PAF has no split fi
 ours = the board recordings from the public checkpoint, the --holdout latest clips of each class kept out
 (<CKPT>.holdout.json, for evaluate.py); mix = public and board clips together from a checkpoint, the public ones under
 a window of a board 'none' clip (our sensor's real background, 66k events per 60 ms against PAF's 11k, docs 11.43)
-instead of synthetic noise, the board ones held out as in ours. One clip is one sequence, the GRU state from 0; 8 clips a batch, padded;
+instead of synthetic noise, the board ones held out as in ours.
+One clip is one sequence, the GRU state from 0; 8 clips a batch, padded;
 the loss is cross-entropy on the masked steps (dataset.label_mask), classes weighted by 1 / their masked steps.
 A step's memory on MPS grows with its frames (~9 MB each, docs 11.41): a batch is up to 8 clips and FRAMES frames.
 CKPT: torch.save({'model': state_dict, ...}) (export.py reads it).
@@ -134,7 +135,8 @@ def main():
     steps = np.bincount([c['cls'] for c in clips for _ in range(int(c['mask'].sum()))], minlength=NCLS)
     w = np.where(steps > 0, 1 / np.maximum(steps, 1), 0)
     w = torch.tensor(w / w.sum(), dtype=torch.float32, device=dev)
-    bg = [c['counts'] for c in clips if c['src'] == 'ours' and CLASSES[c['cls']] == 'none'] if a.stage == 'mix' else None
+    none = CLASSES.index('none')
+    bg = [c['counts'] for c in clips if c['src'] == 'ours' and c['cls'] == none] if a.stage == 'mix' else None
     print('%d clips, masked steps per class: %s' % (len(clips), dict(zip(CLASSES, steps.tolist()))))
     opt = torch.optim.AdamW(m.parameters(), lr=1e-3 if a.stage == 'public' else 3e-4)
     t0 = time.time()
