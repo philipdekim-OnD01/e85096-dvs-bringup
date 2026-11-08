@@ -24,5 +24,12 @@ if [ -d ort ]; then	# onnxruntime and its pure-Python dependencies, unpacked whe
 	chown -R root:root $py
 	echo "$(cd ort && find . -type f | sort | xargs sha256sum | sha256sum | cut -c1-64)  $py ($(ls ort | wc -l) entries, digest of the file list)"
 fi
+if [ -e nginx-dvs.conf ]; then	# http://<board>/ -> the DVS page (11.45); undo: rm sites-enabled/dvs, ln -s the default back
+	install -o root -g root -m 644 nginx-dvs.conf /etc/nginx/sites-available/dvs
+	sha256sum /etc/nginx/sites-available/dvs
+	ln -sf ../sites-available/dvs /etc/nginx/sites-enabled/dvs
+	rm -f /etc/nginx/sites-enabled/default
+	nginx -t && systemctl reload nginx
+fi
 install -d -o philip -g philip /var/lib/dvsact /var/tmp/dvsrec
 echo "dvsact-install: done"

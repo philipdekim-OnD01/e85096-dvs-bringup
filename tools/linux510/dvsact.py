@@ -156,7 +156,26 @@ def line(rec, now_ns):
                        'state': rec['state'], 'prev': rec['prev'], 'p': round(rec['p'], 2)})
 
 
+RECENT = 10
+# the classifier now, for the page (dvsctl GET /act): on, the judge's state, this step's top class and p, the
+# newest RECENT records (newest first)
+STATUS = {'on': False, 'state': 'none', 'top': None, 'p': 0.0, 'recent': []}
+
+
+def observe(judge, probs, now_ns):
+    """one step's probabilities -> the judge and STATUS; the JSONL line of a state change, else None"""
+    rec = judge.step(probs)
+    k = int(np.argmax(probs))
+    STATUS.update(state=judge.state, top=CLASSES[k], p=round(float(probs[k]), 2))
+    if rec is None:
+        return None
+    s = line(rec, now_ns)
+    STATUS['recent'] = [json.loads(s)] + STATUS['recent'][:RECENT - 1]
+    return s
+
+
 def _off(why):
+    STATUS['on'] = False
     print('[dvsact] off: %s' % why, file=sys.stderr, flush=True)
 
 
@@ -177,6 +196,7 @@ def _run(lib, out_path, model_path, cpus):
         out = open(out_path, 'a')
     except Exception as e:
         return _off(e)
+    STATUS['on'] = True
     lib.dvs_events.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_uint64)]
     lib.dvs_stats.restype = ctypes.c_char_p
     buf = np.empty(65536, EV)
@@ -195,13 +215,13 @@ def _run(lib, out_path, model_path, cpus):
                         continue
                     a = time.perf_counter()
                     y, h = sess.run(None, {'x': to_input(c), 'h': h})
-                    rec = judge.step(_softmax(y[0]))
+                    s = observe(judge, _softmax(y[0]), time.time_ns())
                     ms.append((time.perf_counter() - a) * 1e3)
-                    if rec:
-                        out.write(line(rec, time.time_ns()) + '\n')
+                    if s:
+                        out.write(s + '\n')
                         out.flush()
-                        print('[dvsact] %s %s p %.2f' % (rec['event'], rec['state'], rec['p']), file=sys.stderr,
-                              flush=True)
+                        r = STATUS['recent'][0]
+                        print('[dvsact] %s %s p %.2f' % (r['event'], r['state'], r['p']), file=sys.stderr, flush=True)
             now = time.monotonic()
             if now - t_log >= 2:
                 lost = json.loads(lib.dvs_stats() or b'{}').get('act_lost', 0)

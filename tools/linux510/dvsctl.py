@@ -10,6 +10,7 @@ threads, all on CPU7 at the top clock (pin(), 11.30):
   GET  /sensor     sensor settings: saved and in the CIS module now, with ranges (11.29)
   POST /sensor     {"margin": int, "flush_us": int}: save to SENSOR and restart (dvslive.service brings the
                    stream back in ~5 s with them; dvslive.sh writes them to the CIS module before stream on)
+  GET  /act        the person action classifier now (dvsact.STATUS, 11.45): on, state, top class and p, newest changes
   GET  /rec        the recorder: {"state": idle|countdown|recording, "left_s", "last"}
   POST /rec        {"label": one of dvsact.CLASSES, "s": 1-30}: after a 3 s countdown, the packets of s seconds to
                    REC_DIR/<UTC>-<label>.gz (dvs_record) and a .json beside it, for the action classifier (11.39)
@@ -206,6 +207,9 @@ def start(lib, port):
                 self.send(json.dumps(st).encode())
             elif path == '/sensor':
                 self.send(json.dumps(sensor()).encode())
+            elif path == '/act':
+                import dvsact               # the classifier's module in this process; 'on' false without it
+                self.send(json.dumps(dvsact.STATUS).encode())
             elif path == '/rec':
                 self.send(json.dumps(rec.status()).encode())
             elif path == '/frame.png':

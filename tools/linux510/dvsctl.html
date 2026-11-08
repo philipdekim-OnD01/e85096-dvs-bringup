@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DVS 화면 조정</title>
 <style>
-  :root { --bg: #111; --panel: #1b1b1b; --fg: #e8e8e8; --dim: #9a9a9a; --accent: #4fc36a; --line: #2c2c2c; }
+  :root { --bg: #111; --panel: #1b1b1b; --fg: #e8e8e8; --dim: #9a9a9a; --accent: #4fc36a; --line: #2c2c2c; --alarm: #ff5a4f; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif; }
   main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); }
@@ -26,6 +26,11 @@
   .presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
   .hint { color: var(--dim); font-size: 13px; margin: 2px 0 0 8.1em; }
   #msg { color: var(--dim); font-size: 13px; min-height: 1.4em; }
+  #act { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 4px 0 10px; }
+  #a-state { font-size: 28px; font-weight: 700; }
+  #a-top { color: var(--dim); font-size: 13px; }
+  #a-recent { color: var(--dim); font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 4px 0 0; padding-left: 1.6em; }
+  .fall { color: var(--alarm) !important; }
   .toggle { display: flex; gap: 8px; align-items: center; color: var(--dim); margin-top: 8px; font-size: 13px; }
 </style>
 </head>
@@ -33,6 +38,7 @@
 <main>
   <section class="panel">
     <h1>DVS 화면 조정</h1>
+    <div id="act" aria-live="polite"><span id="a-state">분류기 기다리는 중…</span><span id="a-top"></span></div>
     <canvas id="view" width="960" height="720" aria-label="지금 HDMI에 나가는 화면"></canvas>
     <div class="toggle"><label for="webfps">미리보기</label>
       <select id="webfps"><option value="0">끔</option><option value="2">2 fps</option><option value="5">5 fps</option>
@@ -40,6 +46,8 @@
         <option value="30">30 fps</option></select>
       <span id="webrate"></span></div>
     <div id="stats">통계 기다리는 중…</div>
+    <h2>최근 판정 변화</h2>
+    <ol id="a-recent"></ol>
   </section>
   <section class="panel">
     <div class="presets">
@@ -270,6 +278,25 @@ document.getElementById('r-go').onclick = async () => {
   } catch (e) { document.getElementById('r-msg').textContent = '보드에 연결할 수 없음: ' + e.message; }
 };
 
+// the classifier (GET /act, 11.45): the judge's state, this step's top class, its newest changes in local time
+const NAME = Object.fromEntries(ACTS);
+const EVENT = { appear: '나타남', move: '움직임', fall: '넘어짐!' };
+async function refreshAct() {
+  let st;
+  try { st = await (await fetch('/act')).json(); } catch (e) { return; }
+  const s = document.getElementById('a-state');
+  s.textContent = st.on ? (NAME[st.state] || st.state) : '분류기 꺼짐';
+  s.className = st.on && st.state === 'fall' ? 'fall' : '';
+  document.getElementById('a-top').textContent = st.on && st.top ? '지금 후보: ' + (NAME[st.top] || st.top) + ' ' + st.p.toFixed(2) : '';
+  document.getElementById('a-recent').replaceChildren(...st.recent.map(r => {
+    const li = document.createElement('li');
+    li.textContent = new Date(r.t_us / 1000).toLocaleTimeString('ko-KR', { hour12: false }) + '  ' +
+      (EVENT[r.event] || r.event) + ' → ' + (NAME[r.state] || r.state) + ' (' + r.p.toFixed(2) + ')';
+    if (r.event === 'fall') li.className = 'fall';
+    return li;
+  }));
+}
+
 (async () => {
   try {
     params = await (await fetch('/params')).json();
@@ -279,6 +306,8 @@ document.getElementById('r-go').onclick = async () => {
   setInterval(refreshStats, 2000);
   refreshRec();
   setInterval(refreshRec, 1000);
+  refreshAct();
+  setInterval(refreshAct, 1000);
 })();
 </script>
 </body>

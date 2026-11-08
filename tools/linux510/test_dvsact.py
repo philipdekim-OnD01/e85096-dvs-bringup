@@ -8,7 +8,7 @@ import unittest
 
 import numpy as np
 
-from dvsact import CLASSES, EV, Binner, Judge, counts, line, split, start, to_input
+from dvsact import CLASSES, EV, STATUS, Binner, Judge, counts, line, observe, split, start, to_input
 
 LIB = os.environ.get('DVSVIEW_LIB', '/usr/local/lib/libdvsview.so')
 
@@ -123,6 +123,21 @@ class TestDvsact(unittest.TestCase):
         s = line({'event': 'fall', 'state': 'fall', 'prev': 'walk', 'p': 0.8734}, 1794030632123456000)
         self.assertEqual(s, '{"t_us": 1794030632123456, "time": "2026-11-07T05:50:32.123456Z", '
                             '"event": "fall", "state": "fall", "prev": "walk", "p": 0.87}')
+
+    def test_observe(self):          # each step: the judge, GET /act's STATUS, and a change's JSONL line
+        j, now = Judge(), 1794030632123456000
+        p = onehot(CLASSES.index('sit_down'), 0.8)
+        out = [observe(j, p, now) for _ in range(3)]
+        self.assertEqual(out[:2], [None, None])
+        self.assertEqual(out[2], line({'event': 'appear', 'state': 'sit_down', 'prev': 'none', 'p': 0.8}, now))
+        self.assertEqual((STATUS['state'], STATUS['top'], STATUS['p']), ('sit_down', 'sit_down', 0.8))
+        self.assertEqual(STATUS['recent'][0]['state'], 'sit_down')
+        for k in range(12):     # 12 more changes: the newest 10 kept, newest first
+            for _ in range(3):
+                observe(j, onehot(CLASSES.index(('walk', 'still')[k % 2]), 0.9), now)
+        self.assertEqual((len(STATUS['recent']), STATUS['recent'][0]['state']), (10, 'still'))
+        self.assertEqual(observe(j, onehot(CLASSES.index('none'), 0.5), now), None)
+        self.assertEqual((STATUS['state'], STATUS['top']), (j.state, 'none'))   # the candidate shows before it holds
 
     def test_start_missing_model(self):     # no model yet: the live view goes on without the classifier
         err = io.StringIO()
