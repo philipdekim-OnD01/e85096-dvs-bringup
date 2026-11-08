@@ -10,6 +10,12 @@
  * scene and buffers come ~14/s (11.25), so drawing per buffer can not reach 30 fps; drawing by
  * timestamp shows a new 33 ms slice every frame, ~one buffer period late.
  *
+ * Threads and CPUs (11.45): the caller of dvs_ingest() decodes on CPU1; a filter thread marks noise (EV_SUP,
+ * filter_ms) behind it on CPU3; the render thread draws on CPU2. Device IRQs stay on CPU0, the action
+ * classifier on CPU4-6, the settings page on CPU7. Per event on the A55: decode 31 ns, filter 39 ns (60
+ * buffers of a recording); together in one thread they took a whole core with the board moved at walking
+ * pace (~25 ms a buffer, 35 buffers/s), and buffers were lost.
+ *
  * Boxes (dvs_boxes()): a box moving past fires along its edges across the motion; edges along the
  * motion barely change. Each frame the events of the last mwin us go into 8 x 8 px cells; cells with two
  * or more events and an active neighbour pass the noise filter, and the minimum-area rectangle around
@@ -32,11 +38,13 @@
  *     gcc -O2 -Wall -shared -fPIC -o /s/libdvsview.so /s/dvsview.c -lpthread -lm -lz &&
  *     gcc -O2 -Wall -DDVSVIEW_TEST -o /tmp/t /s/dvsview.c -lpthread -lm -lz && /tmp/t [capture.raw]'
  */
+#define _GNU_SOURCE			/* sched_setaffinity, CPU_SET */
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <math.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -45,6 +53,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -66,6 +75,9 @@
 #define HBINS 512			/* up to 5.12 ms (CIS margin <= ~140, 11.29) */
 #define LINE 8192			/* bytes per MIPI line, both modes (8192 x 127, 8192 x 32) */
 #define REC_Q (64u << 20)		/* bytes of packets queued for the recording writer: ~7 s at 9 MB/s */
+#define DECODE_CPU 1			/* 11.45: the dvs_ingest() caller, */
+#define RENDER_CPU 2			/* the render thread, */
+#define FILTER_CPU 3			/* the filter thread */
 #define BROW 104			/* bytes per column of a filter bitmap: 722 rows with the border, + an 8-byte read */
 
 #define CELL 8				/* px, side of a measurement cell */
@@ -95,7 +107,10 @@ static struct {
 	int64_t raw;			/* last accepted ref * 1000 + sub, us */
 	int64_t t;			/* display clock: sum of the accepted forward steps */
 	uint8_t *baf[2];		/* filter: pixels fired in slot k (baf[k & 1]) and k - 1, column-major, 1 px border */
-	uint32_t slot, slot_us;		/* k = display clock / slot_us; slot_us = filter_ms / 2 */
+	uint32_t slot, slot_us;		/* k = display clock / slot_us; slot_us = filter_ms / 2 (filter thread's) */
+	_Atomic uint64_t fw;		/* events the filter thread has passed; with the filter on, drawn up to here */
+	pthread_mutex_t flock;		/* the decoder wakes the filter thread (fcond) after each buffer */
+	pthread_cond_t fcond;
 	/* playout: show sensor time s at real time s + delay */
 	_Atomic int64_t delay;
 	_Atomic int64_t anchor;		/* >= 0: restart the render clock at this sensor time */
@@ -125,7 +140,8 @@ static struct {
 	pthread_t rec_thr;
 	gzFile rec;
 	_Atomic uint64_t act_lost;	/* events dvs_events() skipped: the decoder was about to overwrite them */
-} S = { .col = -1, .anchor = -1, .zoom = -1, .scan = SCAN, .rec_lock = PTHREAD_MUTEX_INITIALIZER };
+} S = { .col = -1, .anchor = -1, .zoom = -1, .scan = SCAN, .rec_lock = PTHREAD_MUTEX_INITIALIZER,
+	.flock = PTHREAD_MUTEX_INITIALIZER, .fcond = PTHREAD_COND_INITIALIZER };
 
 /* display settings: dvs_set() from the dvsctl page (ov5647-cap.py --ctl, 11.28), read by the render thread */
 static struct param {
@@ -254,29 +270,96 @@ static void slot(uint32_t t, uint32_t baf)
 }
 
 /*
- * baf > 0: background activity filter, EV_SUP if one of the 8 neighbours fired in this slot of baf/2 us or the
- * last one, baf/2 to baf before. One bit per pixel keeps the maps (200 kB) in cache: a 32-bit time per pixel
- * (2.8 MB) cost ~285 ns an event on the A55 (three DRAM misses in a row), 8x the decoding (11.28).
+ * baf > 0: background activity filter on ring events [from, to), in order: EV_SUP if one of the 8 neighbours
+ * fired in this slot of baf/2 us or the last one, baf/2 to baf before. One bit per pixel keeps the maps (200 kB)
+ * in cache: a 32-bit time per pixel (2.8 MB) cost ~285 ns an event on the A55 (three DRAM misses in a row), 8x
+ * the decoding (11.28). The decoder did this per event until 11.45; the same bits, from the ring.
  */
-static uint64_t put(uint64_t wr, uint32_t t, uint32_t addr, uint32_t bits, uint32_t off, uint32_t baf)
+static void filter(uint64_t from, uint64_t to, uint32_t baf)
+{
+	uint32_t last = 0;
+
+	for (uint64_t i = from; i < to; i++) {
+		struct ev *e = &S.ring[i % RING];
+		uint32_t y = e->y & EV_Y;
+		uint8_t *c, *o;
+
+		if (i == from || e->t != last)
+			slot(last = e->t, baf);
+		c = S.baf[S.slot & 1] + (e->x + 1) * BROW;
+		o = S.baf[~S.slot & 1] + (e->x + 1) * BROW;
+		if (rows3(c - BROW, y) | rows3(c + BROW, y) | (rows3(c, y) & 5) |	/* & 5: not itself */
+		    rows3(o - BROW, y) | rows3(o + BROW, y) | (rows3(o, y) & 5))
+			e->y |= EV_SUP;
+		c[(y + 1) >> 3] |= 1 << ((y + 1) & 7);
+	}
+}
+
+/* This thread on cpu only, at its cluster's top clock while it runs (uclamp, as dvsctl.pin does for the page,
+ * 11.30), renamed unless name is NULL; a CPU taken offline (hotplug) leaves it where it was. */
+static void pin(int cpu, const char *name)
+{
+	struct { uint32_t size, policy; uint64_t flags; int32_t nice; uint32_t prio; uint64_t rt, dl, per;
+		 uint32_t umin, umax; } a = { sizeof(a), 0, 0x08 | 0x10 | 0x20, 0, 0, 0, 0, 0, 1024, 1024 };
+	cpu_set_t set;
+
+	if (name)
+		prctl(PR_SET_NAME, name);
+	if (syscall(SYS_sched_setattr, 0, &a, 0))	/* KEEP_POLICY | KEEP_PARAMS | UTIL_CLAMP_MIN */
+		fprintf(stderr, "dvsview: uclamp: %s\n", strerror(errno));
+	CPU_ZERO(&set);
+	CPU_SET(cpu, &set);
+	if (sched_setaffinity(0, sizeof(set), &set))
+		fprintf(stderr, "dvsview: CPU%d: %s\n", cpu, strerror(errno));
+}
+
+/* The filter thread: woken after each buffer, it filters what came and moves fw; lapped, it skips ahead. */
+static void *filter_thread(void *arg)
+{
+	uint64_t f = 0, wr;
+	uint32_t baf;
+
+	pin(FILTER_CPU, "dvs-filter");
+	for (;;) {
+		pthread_mutex_lock(&S.flock);
+		while ((wr = atomic_load_explicit(&S.wr, memory_order_acquire)) == f)
+			pthread_cond_wait(&S.fcond, &S.flock);
+		pthread_mutex_unlock(&S.flock);
+		if (wr - f > RING / 2)		/* the decoder is overwriting what is older (or went back: a test) */
+			f = wr > RING / 2 ? wr - RING / 2 : 0;
+		if ((baf = PV(P_FILTER) * 1000))	/* once: the page may set 0 meanwhile (slot() divides by it) */
+			filter(f, wr, baf);
+		atomic_store_explicit(&S.fw, f = wr, memory_order_release);
+	}
+	return NULL;
+}
+
+static int start_filter(void)
+{
+	pthread_t th;
+
+	return -pthread_create(&th, NULL, filter_thread, NULL);
+}
+
+static void wake_filter(void)
+{
+	pthread_mutex_lock(&S.flock);
+	pthread_cond_signal(&S.fcond);
+	pthread_mutex_unlock(&S.flock);
+}
+
+static uint64_t put(uint64_t wr, uint32_t t, uint32_t addr, uint32_t bits, uint32_t off)
 {
 	while (bits) {
-		uint32_t y = addr * 8 + __builtin_ctz(bits), sup = 0;
+		uint32_t y = addr * 8 + __builtin_ctz(bits);
 		struct ev *e;
 
 		if (y >= YS)
 			break;			/* bits climb: the rest of the group is off the array too */
-		if (baf) {
-			uint8_t *c = S.baf[S.slot & 1] + (S.col + 1) * BROW, *o = S.baf[~S.slot & 1] + (S.col + 1) * BROW;
-
-			sup = (rows3(c - BROW, y) | rows3(c + BROW, y) | (rows3(c, y) & 5) |	/* & 5: not itself */
-			       rows3(o - BROW, y) | rows3(o + BROW, y) | (rows3(o, y) & 5)) != 0;
-			c[(y + 1) >> 3] |= 1 << ((y + 1) & 7);
-		}
 		e = &S.ring[wr++ % RING];
 		e->t = t;
 		e->x = S.col;
-		e->y = y | off << 15 | sup << 14;
+		e->y = y | off << 15;
 		bits &= bits - 1;
 	}
 	return wr;
@@ -286,11 +369,9 @@ static uint64_t put(uint64_t wr, uint32_t t, uint32_t addr, uint32_t bits, uint3
 static size_t decode(const uint32_t *p, size_t n)
 {
 	uint64_t wr = atomic_load_explicit(&S.wr, memory_order_relaxed);
-	uint32_t t = S.t, baf = PV(P_FILTER) * 1000;
+	uint32_t t = S.t;
 	size_t i;
 
-	if (baf)
-		slot(t, baf);
 	for (i = 0; i < n; i++) {
 		uint32_t w = __builtin_bswap32(p[i]);
 
@@ -302,11 +383,11 @@ static size_t decode(const uint32_t *p, size_t n)
 			if (S.col < 0 || S.col >= XS || S.bad)
 				continue;
 			if (!off) {
-				wr = put(wr, t, a1, w & 0xff, 0, baf);
-				wr = put(wr, t, a1, w >> 8 & 0xff, 1, baf);
+				wr = put(wr, t, a1, w & 0xff, 0);
+				wr = put(wr, t, a1, w >> 8 & 0xff, 1);
 			} else {
-				wr = put(wr, t, a1, w & 0xff, w >> 16 & 1, baf);
-				wr = put(wr, t, a1 + off, w >> 8 & 0xff, w >> 17 & 1, baf);
+				wr = put(wr, t, a1, w & 0xff, w >> 16 & 1);
+				wr = put(wr, t, a1 + off, w >> 8 & 0xff, w >> 17 & 1);
 			}
 			continue;
 		}
@@ -320,8 +401,6 @@ static size_t decode(const uint32_t *p, size_t n)
 			if (w >> 23 & 1) {
 				timestamp((int64_t)S.ref * 1000 + (w & 0x3ff));
 				t = S.t;
-				if (baf)
-					slot(t, baf);
 			} else {
 				S.ref = w & 0x3fffff;
 			}
@@ -402,8 +481,14 @@ static size_t decode_lines(uint8_t *buf, size_t len)
 /* One VC0 buffer, in the cached dma-buf mmap between DMA_BUF_IOCTL_SYNC start and end (ov5647-cap.py). */
 int dvs_ingest(uint8_t *buf, size_t len)
 {
+	static int pinned;
 	int64_t t0 = now_us(), s_first = S.t, d, delay;
-	size_t n = decode_lines(buf, len);
+	size_t n;
+
+	if (!pinned++)
+		pin(DECODE_CPU, NULL);		/* the capture loop's thread: its name is the process's */
+	n = decode_lines(buf, len);
+	wake_filter();
 
 	atomic_store(&S.newest, S.t);
 	atomic_fetch_add(&S.covered, S.cov);
@@ -794,13 +879,14 @@ static void *render(void *arg)
 	unsigned frames = 0, dips = 0;
 	struct timespec next;
 
+	pin(RENDER_CPU, "dvs-render");
 	clock_gettime(CLOCK_MONOTONIC, &next);
 	for (;;) {
 		int64_t period = 1000000 / PV(P_FPS), window = PV(P_WINDOW) ? PV(P_WINDOW) * 1000LL : period;
 		int fade = PV(P_FADE), filter = PV(P_FILTER), color = PV(P_COLOR), flip = PV(P_FLIP);
 		int zoom = PV(P_ZOOM) && S.xres >= XS * 3 / 2 && S.yres >= YS * 3 / 2;
 		int64_t t0, end, anchor, newest;
-		uint64_t wr;
+		uint64_t wr, lim;
 
 		next.tv_nsec += period * 1000;
 		while (next.tv_nsec >= 1000000000) {
@@ -822,13 +908,14 @@ static void *render(void *arg)
 		if (end < prev)
 			end = prev;			/* the delay grew: hold, never step back in sensor time */
 		wr = atomic_load_explicit(&S.wr, memory_order_acquire);
+		lim = filter ? atomic_load_explicit(&S.fw, memory_order_acquire) : wr;	/* EV_SUP is set below fw */
 		if (wr - a > RING)
 			a = wr - RING;			/* the decoder lapped us: those events are gone */
 		if (wr - m > RING)
 			m = wr - RING;
 		if (b < a)
 			b = a;
-		while (b < wr && BEFORE(S.ring[b % RING].t, (uint32_t)end))
+		while (b < lim && BEFORE(S.ring[b % RING].t, (uint32_t)end))
 			b++;
 		while (a < b && BEFORE(S.ring[a % RING].t, (uint32_t)(end - window)))
 			a++;
@@ -1169,7 +1256,7 @@ int dvs_start(const char *fbdev, int fps)
 		return -ENOMEM;
 	for (int i = 0; i < XS * YS; i++)
 		S.back[i] = BLACK;
-	return -pthread_create(&th, NULL, render, NULL);
+	return start_filter() ?: -pthread_create(&th, NULL, render, NULL);
 }
 
 #ifdef DVSVIEW_TEST
@@ -1370,12 +1457,17 @@ int main(int argc, char **argv)
 	if (dvs_set("fade", 128) || PV(P_FADE) != 128 || dvs_set("fade", 999) != -ERANGE || dvs_set("nope", 1) != -ENOENT ||
 	    !strstr(dvs_params(), "\"fade\":{\"v\":128,\"def\":0,\"min\":0,\"max\":250}") || dvs_set("fade", 0))
 		return fprintf(stderr, "settings: %s\n", dvs_params()), 1;
-	/* filter: column 5, ON at rows 16 and 17 (the second has a neighbour), then column 300 row 400 alone */
+	/* filter: column 5, ON at rows 16 and 17 (the second has a neighbour), then column 300 row 400 alone; the
+	 * decoder leaves EV_SUP to filter() (its own thread on the board, 11.45) even with the filter on */
 	dvs_set("filter_ms", 5);
 	reset();
+	S.slot_us = 0;
 	feed((const uint32_t[]){ 0x04000005, 0x80080003, 0x0400012c, 0x80000000 | 50 << 18 | 1 }, 4);
 	dvs_set("filter_ms", 0);
-	if (nev() != 3 || S.ring[0].y & EV_SUP || !(S.ring[1].y & EV_SUP) || S.ring[2].y & EV_SUP)
+	if (nev() != 3 || (S.ring[0].y | S.ring[1].y | S.ring[2].y) & EV_SUP)
+		return fprintf(stderr, "filter: the decoder set EV_SUP\n"), 1;
+	filter(0, nev(), 5000);
+	if (S.ring[0].y & EV_SUP || !(S.ring[1].y & EV_SUP) || S.ring[2].y & EV_SUP)
 		return fprintf(stderr, "filter: %d events, flags %#x %#x %#x\n", nev(), S.ring[0].y, S.ring[1].y,
 			       S.ring[2].y), 1;
 	if (synth(300, 150, 0, 600, 2) || synth(250, 120, 30, 600, 4) || synth(200, 160, 15, 900, 4))
@@ -1535,28 +1627,47 @@ int main(int argc, char **argv)
 		       MIN_CELLS, boxes, most);
 	}
 	for (int ms = 2; argc > 1 && ms <= 8; ms *= 2) {	/* the display filter on the same data */
-		uint64_t kept = 0;
-		int64_t t0, t;
+		uint64_t kept = 0, w0;
+		int64_t t0, t = 0, tf = 0;
 
-		dvs_set("filter_ms", ms);
 		reset();
 		S.slot_us = 0;			/* clear the bitmaps */
-		t = 0;
 		for (int f = 1; f < argc; f++) {
 			FILE *fp = fopen(argv[f], "rb");
 			static uint8_t buf[8192 * 127];
 			size_t len = fread(buf, 1, sizeof(buf), fp);
 
 			fclose(fp);
+			w0 = nev();
 			t0 = now_us();
 			decode_lines(buf, len);
 			t += now_us() - t0;
+			t0 = now_us();
+			filter(w0, nev(), ms * 1000);	/* as the filter thread does after each buffer */
+			tf += now_us() - t0;
 		}
 		for (uint64_t i = 0; i < (uint64_t)nev(); i++)
 			kept += !!(S.ring[i].y & EV_SUP);
-		printf("filter_ms %d: %.1f%% of %d events kept, decode %.2f ms per buffer\n", ms, 100.0 * kept / nev(),
-		       nev(), t / 1e3 / (argc - 1));
+		printf("filter_ms %d: %.1f%% of %d events kept (%llu), decode %.2f + filter %.2f ms per buffer\n", ms,
+		       100.0 * kept / nev(), nev(), (unsigned long long)kept, t / 1e3 / (argc - 1), tf / 1e3 / (argc - 1));
+	}
+	{					/* the filter thread, last (it stays): woken per buffer, it catches up */
+		int64_t t0 = now_us();
+
+		dvs_set("filter_ms", 5);
+		reset();
+		S.slot_us = 0;
+		if (start_filter())
+			return fprintf(stderr, "filter thread: not started\n"), 1;
+		feed((const uint32_t[]){ 0x04000005, 0x80080003, 0x0400012c, 0x80000000 | 50 << 18 | 1 }, 4);
+		wake_filter();
+		while (atomic_load(&S.fw) != (uint64_t)nev() && now_us() - t0 < 1000000)
+			usleep(1000);
 		dvs_set("filter_ms", 0);
+		if (atomic_load(&S.fw) != 3 || S.ring[0].y & EV_SUP || !(S.ring[1].y & EV_SUP) || S.ring[2].y & EV_SUP)
+			return fprintf(stderr, "filter thread: %llu of 3 events passed\n",
+				       (unsigned long long)atomic_load(&S.fw)), 1;
+		puts("filter thread ok");
 	}
 	return 0;
 }
