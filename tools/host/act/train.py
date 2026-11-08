@@ -28,6 +28,7 @@ from dvsact import CLASSES, GH, GW  # noqa: E402
 NOISE = 2.05            # half our sensor's ~4.1 events per cell per 60 ms (spec 4), per unit of r ~ U(0, 2)
 BATCH = 8
 FRAMES = 256            # ~2.4 GB on MPS; 8 clips of up to 245 steps (~8 GB) swapped a 16 GB Mac to a halt
+OURS_REPEAT = 4         # mix: each board clip this many times an epoch (16 sit / stand clips against 270 public ones)
 
 
 def augment(c, rng, public, bg=None):
@@ -111,6 +112,8 @@ def load(data, stage, holdout, out):
     for m in man:
         z = np.load(os.path.join(data, m['file']))
         clips.append({'counts': z['counts'], 'mask': z['mask'], 'cls': int(z['cls']), 'src': m['src']})
+    if stage == 'mix':      # the same arrays again, not loaded again
+        clips += [c for c in clips if c['src'] == 'ours'] * (OURS_REPEAT - 1)
     return clips
 
 

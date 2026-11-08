@@ -10,7 +10,7 @@ import torch
 
 from evaluate import evaluate
 from model import Step
-from train import augment, batches, collate, load, seq_loss
+from train import OURS_REPEAT, augment, batches, collate, load, seq_loss
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../linux510'))
 from dvsact import CLASSES  # noqa: E402
@@ -75,7 +75,8 @@ class TestTrain(unittest.TestCase):
                     f.write(json.dumps({'file': file, 'src': src, 'split': split, 'cls': cls, 'path': path}) + '\n')
             clips = load(d, 'mix', 1, d + '/m.pt')
             held = json.load(open(d + '/m.pt.holdout.json'))
-        self.assertEqual(sorted(c['src'] for c in clips), ['ours', 'paf'])
+        self.assertGreater(OURS_REPEAT, 1)  # 16 board sit/stand clips against 270 public ones: each one several times
+        self.assertEqual(sorted(c['src'] for c in clips), ['ours'] * OURS_REPEAT + ['paf'])
         self.assertEqual(held, ['ours/3.npz'])
 
     def test_batches(self):         # MPS memory grows with the frames in a step (~9 MB each): a frame budget
