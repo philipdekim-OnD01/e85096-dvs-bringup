@@ -24,6 +24,7 @@ STEP_US = 60000         # one frame, one model step: 16.7 Hz
 GAP_US = 3000000        # no event for this long (a sensor restart): start over, GRU state too
 HOLD = 3                # steps a candidate must hold before the state changes
 FALL_P = 0.6            # fall must be at least this sure to be a candidate
+CLASSES_FILE = 'classes'    # beside the model, optional: the classes judged (e.g. "none sit_down stand_up")
 GW, GH = 160, 120
 EV = np.dtype([('t', '<u4'), ('x', '<u2'), ('y', '<u2')])     # libdvsview struct ev
 
@@ -129,10 +130,19 @@ def frames_of(t, x, y, pol, w, h):
 
 
 class Judge:
-    """Class probabilities per step -> a state change ({'event', 'state', 'prev', 'p'}) or None."""
+    """Class probabilities per step -> a state change ({'event', 'state', 'prev', 'p'}) or None. classes: judge
+    only these (11.45: none, sit_down, stand_up for the sit / stand test), the others' probability left out."""
 
-    def __init__(self):
+    def __init__(self, classes=None):
         self.state, self.cand, self.n = 'none', None, 0
+        self.keep = None if classes is None else np.isin(CLASSES, classes)
+
+    def restrict(self, probs):
+        """probs over the judged classes only, summing to 1 (all classes: as they are)"""
+        if self.keep is None:
+            return probs
+        p = np.where(self.keep, probs, 0)
+        return p / p.sum()
 
     def step(self, probs):
         k = int(np.argmax(probs))
@@ -164,6 +174,7 @@ STATUS = {'on': False, 'state': 'none', 'top': None, 'p': 0.0, 'recent': []}
 
 def observe(judge, probs, now_ns):
     """one step's probabilities -> the judge and STATUS; the JSONL line of a state change, else None"""
+    probs = judge.restrict(probs)
     rec = judge.step(probs)
     k = int(np.argmax(probs))
     STATUS.update(state=judge.state, top=CLASSES[k], p=round(float(probs[k]), 2))
@@ -201,7 +212,13 @@ def _run(lib, out_path, model_path, cpus):
     lib.dvs_stats.restype = ctypes.c_char_p
     buf = np.empty(65536, EV)
     cur = ctypes.c_uint64(2**64 - 1)    # UINT64_MAX: start at the newest event
-    binner, judge, h = Binner(cells=lib.dvs_cells), Judge(), np.zeros((1, 128), np.float32)
+    try:                                # CLASSES_FILE beside the model: the classes judged, one line
+        classes = [c for c in open(os.path.join(os.path.dirname(model_path), CLASSES_FILE)).read().split()
+                   if c in CLASSES] or None     # none known: all
+    except OSError:
+        classes = None
+    print('[dvsact] judging %s' % ' '.join(classes or CLASSES), file=sys.stderr, flush=True)
+    binner, judge, h = Binner(cells=lib.dvs_cells), Judge(classes), np.zeros((1, 128), np.float32)
     ms, t_log = [], time.monotonic()
     wake = t_log
     try:

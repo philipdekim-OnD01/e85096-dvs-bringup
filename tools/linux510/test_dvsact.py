@@ -2,6 +2,7 @@
 import contextlib
 import ctypes
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -138,6 +139,14 @@ class TestDvsact(unittest.TestCase):
         self.assertEqual((len(STATUS['recent']), STATUS['recent'][0]['state']), (10, 'still'))
         self.assertEqual(observe(j, onehot(CLASSES.index('none'), 0.5), now), None)
         self.assertEqual((STATUS['state'], STATUS['top']), (j.state, 'none'))   # the candidate shows before it holds
+
+    def test_observe_classes(self):  # only none / sit / stand judged: a pick_up step goes to the likelier of those
+        j, now = Judge(['none', 'sit_down', 'stand_up']), 1794030632123456000
+        p = np.full(len(CLASSES), 0.01)
+        p[CLASSES.index('pick_up')], p[CLASSES.index('stand_up')] = 0.6, 0.3
+        out = [observe(j, p / p.sum(), now) for _ in range(3)]
+        self.assertEqual(json.loads(out[2])['state'], 'stand_up')
+        self.assertEqual((STATUS['state'], STATUS['top'], STATUS['p']), ('stand_up', 'stand_up', 0.94))   # 0.3 / 0.32
 
     def test_start_missing_model(self):     # no model yet: the live view goes on without the classifier
         err = io.StringIO()

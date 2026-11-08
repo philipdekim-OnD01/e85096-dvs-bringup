@@ -279,7 +279,7 @@ document.getElementById('r-go').onclick = async () => {
 };
 
 // the classifier (GET /act, 11.45): the judge's state, this step's top class, its newest changes in local time
-const NAME = Object.fromEntries(ACTS);
+const NAME = Object.assign(Object.fromEntries(ACTS), { sit_down: '앉음', stand_up: '서 있음' });   // states, not moves
 const EVENT = { appear: '나타남', move: '움직임', fall: '넘어짐!' };
 async function refreshAct() {
   let st;
