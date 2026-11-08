@@ -1,5 +1,7 @@
 """train.py: augmentation and a tiny overfit: python -m unittest test_train (from tools/host/act, ~/.venvs/dvsact)."""
+import json
 import os
+import sys
 import tempfile
 import unittest
 
@@ -8,7 +10,10 @@ import torch
 
 from evaluate import evaluate
 from model import Step
-from train import augment, batches, collate, seq_loss
+from train import augment, batches, collate, load, seq_loss
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../linux510'))
+from dvsact import CLASSES  # noqa: E402
 
 
 def run_tiny(steps):
@@ -42,6 +47,31 @@ class TestTrain(unittest.TestCase):
         self.assertEqual((a.shape, a.dtype), (c.shape, np.uint16))
         self.assertTrue(np.array_equal(augment(c, np.random.default_rng(1), True), a))   # same seed, same result
         self.assertFalse(np.array_equal(augment(c, np.random.default_rng(2), True), a))
+
+    def test_augment_board_background(self):    # the board's own empty scene under a public clip, not moved with it
+        c = np.zeros((10, 2, 120, 160), np.uint8)
+        bg = np.zeros((30, 2, 120, 160), np.uint8)
+        bg[:, 0, 5, 7] = np.arange(30)          # a hot pixel counting the steps: the window is 10 steps in a row
+        a = augment(c, np.random.default_rng(1), public=True, bg=[bg])
+        self.assertEqual(np.diff(a[:, 0, 5, 7].astype(int)).tolist(), [1] * 9)
+        a[:, 0, 5, 7] = 0
+        self.assertEqual(int(a.sum()), 0)       # nothing else: no synthetic noise on top
+
+    def test_load_mix(self):        # public train clips and the board clips, the latest board clip of a class held out
+        with tempfile.TemporaryDirectory() as d:
+            man = [('paf/0.npz', 'paf', None, 'fall', 'a.aedat'), ('daily/1.npz', 'daily', 'val', 'fall', 'b.aedat4'),
+                   ('ours/2.npz', 'ours', None, 'none', '20261108T140000Z-none.bin'),
+                   ('ours/3.npz', 'ours', None, 'none', '20261108T140100Z-none.bin')]
+            with open(d + '/manifest.jsonl', 'w') as f:
+                for file, src, split, cls, path in man:
+                    os.makedirs(os.path.dirname(os.path.join(d, file)), exist_ok=True)
+                    np.savez(os.path.join(d, file), counts=np.zeros((3, 2, 120, 160), np.uint8), mask=np.ones(3, bool),
+                             cls=CLASSES.index(cls))
+                    f.write(json.dumps({'file': file, 'src': src, 'split': split, 'cls': cls, 'path': path}) + '\n')
+            clips = load(d, 'mix', 1, d + '/m.pt')
+            held = json.load(open(d + '/m.pt.holdout.json'))
+        self.assertEqual(sorted(c['src'] for c in clips), ['ours', 'paf'])
+        self.assertEqual(held, ['ours/3.npz'])
 
     def test_batches(self):         # MPS memory grows with the frames in a step (~9 MB each): a frame budget
         lengths = [100, 100, 100, 300, 50, 20, 20, 20, 20, 20, 20, 20, 20, 20]
