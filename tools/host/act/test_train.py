@@ -57,6 +57,11 @@ class TestTrain(unittest.TestCase):
         a[:, 0, 5, 7] = 0
         self.assertEqual(int(a.sum()), 0)       # nothing else: no synthetic noise on top
 
+    def test_augment_no_empty_border(self):     # zoom / shift left 20% of a board clip at 0: the model learned 'none'
+        c = np.full((4, 2, 120, 160), 3, np.uint8)  # from the empty strip, which the board's input never has (11.43)
+        rng = np.random.default_rng(0)
+        self.assertTrue(all((augment(c, rng, public=False) > 0).all() for _ in range(20)))
+
     def test_load_mix(self):        # public train clips and the board clips, the latest board clip of a class held out
         with tempfile.TemporaryDirectory() as d:
             man = [('paf/0.npz', 'paf', None, 'fall', 'a.aedat'), ('daily/1.npz', 'daily', 'val', 'fall', 'b.aedat4'),

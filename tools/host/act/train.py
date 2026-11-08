@@ -32,7 +32,7 @@ FRAMES = 256            # ~2.4 GB on MPS; 8 clips of up to 245 steps (~8 GB) swa
 def augment(c, rng, public, bg=None):
     """one clip uint8 [N, 2, GH, GW] -> uint16; public: our sensor's noise added (bg: a window of one of these board
     clips, after the geometry, which moves the person and not the sensor; else synthetic), then thinned; all: mirror,
-    zoom 0.8-1.2 and shift +-10% (nearest, the same for the whole clip)"""
+    zoom 0.8-1.2 and shift +-10% (nearest, the same for the whole clip; the board's input has no empty border, 11.43)"""
     c = c.astype(np.int64)
     if public and not bg:
         c = c + rng.poisson(rng.uniform(0, 2, 2)[None, :, None, None] * NOISE, c.shape)
@@ -44,7 +44,7 @@ def augment(c, rng, public, bg=None):
     yi = np.round((np.arange(GH) - GH / 2 - dy) / s + GH / 2).astype(int)
     xi = np.round((np.arange(GW) - GW / 2 - dx) / s + GW / 2).astype(int)
     vy, vx = (yi >= 0) & (yi < GH), (xi >= 0) & (xi < GW)
-    out = np.zeros(c.shape, np.uint16)
+    out = np.minimum(c, 65535).astype(np.uint16)   # cells moved in from outside keep the clip's own: no empty strip
     out[:, :, np.flatnonzero(vy)[:, None], np.flatnonzero(vx)] = np.minimum(c[:, :, yi[vy][:, None], xi[vx]], 65535)
     if public and bg:
         b = bg[rng.integers(len(bg))]
