@@ -309,7 +309,9 @@ class DvsLive:
 
     def show(self, buf):
         p = ctypes.c_char.from_buffer(buf)      # the dma-buf mmap itself: C decodes and zeroes it in place
-        self.lib.dvs_ingest(ctypes.addressof(p), a.W * a.H)
+        # the sensor sends H + 1 packets a frame (DT H, VRESOL mismatch let through, 11.22); the last one lands
+        # after line H; it held a sub timestamp in 3 of 14 raw buffers, a scan lost each time unread (11.46)
+        self.lib.dvs_ingest(ctypes.addressof(p), a.W * (a.H + 1))
         del p                                   # drop the buffer export so the mmap can close at exit
 
 
