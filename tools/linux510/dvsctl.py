@@ -5,7 +5,8 @@ threads, all on CPU7 at the top clock (pin(), 11.30):
   GET  /           dvsctl.html
   GET  /params     settings with default and range, JSON (dvs_params())
   POST /params     {"name": int, ...}: apply (dvs_set) and save to SAVED for the next start
-  GET  /stats      the renderer's last 2 s of stats + the CSIS CRC error count, JSON
+  GET  /stats      the renderer's last 2 s of stats + the CSIS CRC error count, JSON; the link counters since
+                   the start (link) and the CIS D-PHY PLL readback (pll; 11.46)
   GET  /frame.png  the frame on HDMI now, 960x720 (before zoom)
   GET  /sensor     sensor settings: saved and in the CIS module now, with ranges (11.29)
   POST /sensor     {"margin": int, "flush_us": int}: save to SENSOR and restart (dvslive.service brings the
@@ -37,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 W, H = 960, 720
 CIS = '/sys/module/is_cis_s5krc1s/parameters/'
 CRC = '/sys/module/fimc_is/parameters/e850_csi_crc_count'
+PLL = CIS + 'pll_live'                      # the last 0x30A5-0x30A7 readback (11.46)
 # name: (min, max, default) as in dvslive.sh: margin 17 = a 985 us scan (0 = the setfile's 2, 495 us), flush 50 us
 SENSOR_RANGE = {'margin': (0, 140, 17), 'flush_us': (1, 1023, 50)}
 # the page's own core (11.30): no device IRQ (they all land on CPU0), systemd keeps the rest on 0-6 (e850-cpu7.conf)
@@ -203,6 +205,10 @@ def start(lib, port):
                 try:
                     st['crc'] = int(open(CRC).read())
                 except (OSError, ValueError):
+                    pass
+                try:
+                    st['pll'] = open(PLL).read().strip()
+                except OSError:                 # a CIS module from before 11.46
                     pass
                 self.send(json.dumps(st).encode())
             elif path == '/sensor':

@@ -30,7 +30,8 @@
  *                   polarity bit 16 (group1) / 17 (group2), 1 = OFF
  *   [31:26] 000001  COLUMN, [10:0] x
  *   [31:26] 000010  TIMESTAMP, [23] = 0: reference [21:0] ms, [23] = 1: sub [9:0] us
- *   others (frame end, IMU, padding, the undefined 000000/000101 of 11.23) are skipped.
+ *   [31:26] 000011  FRAME END, [18:11] frame number: only counted (the link counters, 11.46)
+ *   others (IMU, padding, the undefined 000000/000101 of 11.23) are skipped and counted as unknown.
  *
  * Build (Debian 12 arm64, same glibc as the board):
  *   docker run --rm -v "$PWD/tools/linux510:/s" debian:12 sh -c 'apt-get -qq update &&
@@ -127,7 +128,7 @@ static struct {
 	size_t stride;
 	int xres, yres, zoom;
 	uint32_t *back;
-	char stats[2][512];		/* the last stats as JSON, double-buffered for dvs_stats() */
+	char stats[2][1024];		/* the last stats as JSON, double-buffered for dvs_stats() */
 	_Atomic int stats_cur;
 	/* dvs_record(): each line's packet words and a zero word; the decoder queues them, a writer thread gzips */
 	pthread_mutex_t rec_lock;	/* the decoder's queueing against start and stop */
@@ -140,8 +141,18 @@ static struct {
 	pthread_t rec_thr;
 	gzFile rec;
 	_Atomic uint64_t act_lost;	/* events dvs_events() skipped: the decoder was about to overwrite them */
+	/* link counters for the D-PHY PLL tests (11.46), since dvs_start, on the words as they came: the decoder adds,
+	 * dvs_stats() reports. *_first: the step was the buffer's first (its packets follow the last buffer's). */
+	struct {
+		_Atomic uint64_t bufs, short_bufs, lines, unknown, sub_fixed, fe, fe_skips, fe_skips_first, fe_missed,
+			ts, ts_miss, ts_miss_first, ts_missed, ts_fixed, ts_bad, ts_back, ts_restarts;
+	} lk;
+	int lk_first_ts, lk_first_fe, lk_have_fe;	/* decoder: the next step is the buffer's first; a frame number */
+	uint32_t lk_fe;
 } S = { .col = -1, .anchor = -1, .zoom = -1, .scan = SCAN, .rec_lock = PTHREAD_MUTEX_INITIALIZER,
 	.flock = PTHREAD_MUTEX_INITIALIZER, .fcond = PTHREAD_COND_INITIALIZER };
+
+#define LK(f, n) atomic_fetch_add_explicit(&S.lk.f, (n), memory_order_relaxed)
 
 /* display settings: dvs_set() from the dvsctl page (ov5647-cap.py --ctl, 11.28), read by the render thread */
 static struct param {
@@ -211,13 +222,14 @@ static int64_t now_us(void)
 static void timestamp(int64_t raw)
 {
 	int64_t dt = raw - S.raw;
-	int fixed = 0, scan;
+	int fixed = 0, scan, first = S.lk_first_ts;
 
 	if (!S.have_ts) {
 		S.raw = raw;
 		S.have_ts = 1;
 		return;
 	}
+	S.lk_first_ts = 0;
 	for (int b = 1; (dt <= -1000 || dt >= 100000) && b < 22; b++) {
 		int64_t f = 1000LL << b;
 
@@ -226,18 +238,29 @@ static void timestamp(int64_t raw)
 		else if (dt + f >= 0 && dt + f < 100000)
 			dt += f, fixed = 1;
 	}
-	if (dt < 0 && dt > -1000)
+	if (dt < 0 && dt > -1000) {
+		LK(ts_back, 1);
 		return;
+	}
 	if (dt < 0 || dt >= 100000 || (fixed && S.bad)) {
+		LK(ts_bad, 1);
 		if (++S.bad >= (dt >= 100000 ? 4 : 64)) {
 			S.tot += dt > 0 && dt < 60000000 ? dt : 0;	/* a gap is sensor time without data */
 			S.raw = raw;
 			S.bad = 0;
+			LK(ts_restarts, 1);
 		}
 		return;
 	}
 	S.bad = 0;
 	scan = atomic_load_explicit(&S.scan, memory_order_relaxed);
+	LK(ts, 1);
+	LK(ts_fixed, fixed);
+	if (2 * dt > 3 * scan) {		/* a scan or more missing before this one */
+		LK(ts_miss, 1);
+		LK(ts_miss_first, first);
+		LK(ts_missed, (dt + scan / 2) / scan - 1);
+	}
 	S.t += dt <= 3 * scan ? dt : scan;
 	S.tot += dt;
 	S.cov += dt <= 3 * scan ? dt : 0;
@@ -391,11 +414,30 @@ static size_t decode(const uint32_t *p, size_t n)
 			}
 			continue;
 		}
-		if ((w & 0xfffffc00) == 0x00800000)
+		if ((w & 0xfffffc00) == 0x00800000) {
 			w |= 2u << 26;		/* a SUB whose type bits the link cleared: all of them for 256 ms at times (11.28) */
+			LK(sub_fixed, 1);
+		}
 		switch (w >> 26) {
 		case 1:
 			S.col = w & 0x7ff;
+			break;
+		case 3: {			/* FRAME END, one per scan: its 8-bit number [18:11] steps by one */
+			uint32_t f = w >> 11 & 0xff, d = (f - S.lk_fe) & 0xff;
+
+			if (S.lk_have_fe && d != 1) {
+				LK(fe_skips, 1);
+				LK(fe_skips_first, S.lk_first_fe);
+				LK(fe_missed, d > 1 && d <= 16 ? d - 1 : 0);
+			}
+			S.lk_fe = f;
+			S.lk_have_fe = 1;
+			S.lk_first_fe = 0;
+			LK(fe, 1);
+			break;
+		}
+		default:			/* no defined type: a bit error (11.23); dvslink.py counts the same */
+			LK(unknown, 1);
 			break;
 		case 2:
 			if (w >> 23 & 1) {
@@ -453,13 +495,16 @@ static void rec_put(const void *p, size_t n)
  */
 static size_t decode_lines(uint8_t *buf, size_t len)
 {
-	size_t bytes = 0;
+	size_t bytes = 0, lines = 0, data = 0;
 	uint64_t w0 = atomic_load_explicit(&S.wr, memory_order_relaxed);
 
 	pthread_mutex_lock(&S.rec_lock);
 	for (size_t l = 0; l + 4 <= len; l += LINE) {
 		uint32_t *p = (uint32_t *)(buf + l);
 		size_t n = decode(p, (len - l < LINE ? len - l : LINE) / 4);
+
+		lines++;
+		data += n > 0;
 
 		if (S.rec_on && n) {
 			static const uint32_t zero;
@@ -471,11 +516,29 @@ static size_t decode_lines(uint8_t *buf, size_t len)
 		flush((uint8_t *)p, n * 4);
 		bytes += n * 4;
 	}
+	LK(bufs, 1);
+	LK(lines, data);
+	LK(short_bufs, data < lines);	/* a MIPI frame cut short: fewer packets than lines (0x391A/B) */
 	if (S.rec_on)
 		S.rec_events += atomic_load_explicit(&S.wr, memory_order_relaxed) - w0;
 	pthread_mutex_unlock(&S.rec_lock);
 	asm volatile("dsb sy" : : : "memory");
 	return bytes;
+}
+
+/* Append the link counters (S.lk, since dvs_start) and close the stats object s */
+static void link_stats(char *s, size_t size)
+{
+	size_t k = strlen(s);
+#define L(f) (unsigned long long)atomic_load_explicit(&S.lk.f, memory_order_relaxed)
+
+	snprintf(s + k, size - k, "\"link\":{\"bufs\":%llu,\"short_bufs\":%llu,\"data_lines\":%llu,\"unknown\":%llu,"
+		 "\"sub_fixed\":%llu,\"fe\":%llu,\"fe_skips\":%llu,\"fe_skips_first\":%llu,\"fe_missed\":%llu,\"ts\":%llu,"
+		 "\"ts_miss\":%llu,\"ts_miss_first\":%llu,\"ts_missed\":%llu,\"ts_fixed\":%llu,\"ts_bad\":%llu,"
+		 "\"ts_back\":%llu,\"ts_restarts\":%llu}}", L(bufs), L(short_bufs), L(lines), L(unknown), L(sub_fixed),
+		 L(fe), L(fe_skips), L(fe_skips_first), L(fe_missed), L(ts), L(ts_miss), L(ts_miss_first), L(ts_missed),
+		 L(ts_fixed), L(ts_bad), L(ts_back), L(ts_restarts));
+#undef L
 }
 
 /* One VC0 buffer, in the cached dma-buf mmap between DMA_BUF_IOCTL_SYNC start and end (ov5647-cap.py). */
@@ -487,6 +550,7 @@ int dvs_ingest(uint8_t *buf, size_t len)
 
 	if (!pinned++)
 		pin(DECODE_CPU, NULL);		/* the capture loop's thread: its name is the process's */
+	S.lk_first_ts = S.lk_first_fe = 1;
 	n = decode_lines(buf, len);
 	wake_filter();
 
@@ -979,9 +1043,10 @@ static void *render(void *arg)
 				events, bps, ingest, imax, (unsigned long long)kb, behind, cover, dips, scan);
 			snprintf(S.stats[next_stats], sizeof(S.stats[0]), "{\"fps\":%.1f,\"draw_ms\":%.1f,\"events\":%.0f,"
 				 "\"buffers\":%.1f,\"ingest_ms\":%.1f,\"kb\":%llu,\"behind_ms\":%.0f,\"coverage\":%.0f,"
-				 "\"dips\":%u,\"scan_us\":%d,\"act_lost\":%llu}", fps, draw, events, bps, ingest,
+				 "\"dips\":%u,\"scan_us\":%d,\"act_lost\":%llu,", fps, draw, events, bps, ingest,
 				 (unsigned long long)kb, behind, cover, dips, scan,
 				 (unsigned long long)atomic_load(&S.act_lost));
+			link_stats(S.stats[next_stats], sizeof(S.stats[0]));
 			atomic_store(&S.stats_cur, next_stats);
 			frames = dips = 0;
 			frame_sum = frame_max = shown = lag = 0;
@@ -1434,6 +1499,28 @@ int main(int argc, char **argv)
 	feed((const uint32_t[]){ 0x0800006f, 0x088001ad }, 2);	/* ref 111: a 5 ms gap, one 1 ms scan on the display */
 	if (S.t != 23969)
 		return fprintf(stderr, "gap at a 1 ms scan: t %lld\n", (long long)S.t), 1;
+	{	/* link counters, 1 ms scans: 3 lines, the last empty; a scan missing (2 ms step), one word of no type,
+		 * frame numbers 7 8 10 */
+		static uint32_t b[3 * LINE / 4];
+		static const uint32_t l0[] = { 0x080000c8, 0x08800000, 0x0c003800, 0x080000c9, 0x08800000, 0x0c004000 };
+		static const uint32_t l1[] = { 0x080000cb, 0x08800000, 0x14000000, 0x0c005000 };
+		char js[1024] = "{";
+
+		reset();
+		atomic_store(&S.scan, 1000);
+		memset(&S.lk, 0, sizeof(S.lk));
+		S.lk_have_fe = 0;
+		for (size_t i = 0; i < 6; i++)
+			b[i] = __builtin_bswap32(l0[i]);
+		for (size_t i = 0; i < 4; i++)
+			b[LINE / 4 + i] = __builtin_bswap32(l1[i]);
+		decode_lines((uint8_t *)b, sizeof(b));
+		link_stats(js, sizeof(js));
+		if (!strstr(js, "{\"link\":{\"bufs\":1,\"short_bufs\":1,\"data_lines\":2,\"unknown\":1,\"sub_fixed\":0,"
+			    "\"fe\":3,\"fe_skips\":1,\"fe_skips_first\":0,\"fe_missed\":1,\"ts\":2,\"ts_miss\":1,"
+			    "\"ts_miss_first\":0,\"ts_missed\":1,\"ts_fixed\":0,\"ts_bad\":0,\"ts_back\":0,\"ts_restarts\":0}}"))
+			return fprintf(stderr, "link counters: %s\n", js), 1;
+	}
 	{					/* a black frame with one ON pixel at (1, 2) as a PNG, inflated back */
 		static uint8_t png[XS * YS * 3 + YS + 65536], raw[YS * (1 + XS * 3)];
 		int n, lit = 0;
@@ -1592,6 +1679,8 @@ int main(int argc, char **argv)
 	/* capture files, consecutive VC0 buffers: decode speed, timestamp coverage, the box filter on that scene */
 	reset();
 	B.warm = 0;				/* learn this scene's background, not the synthetic one */
+	memset(&S.lk, 0, sizeof(S.lk));
+	S.lk_have_fe = 0;
 	for (int f = 1; f < argc; f++) {
 		FILE *fp = fopen(argv[f], "rb");
 		static uint8_t buf[8192 * 127];
@@ -1604,6 +1693,7 @@ int main(int argc, char **argv)
 			return perror(argv[f]), 1;
 		fclose(fp);
 		t0 = now_us();
+		S.lk_first_ts = S.lk_first_fe = 1;
 		n = decode_lines(buf, len);
 		printf("%s: %zu B, %zu B of packets, %llu events, decode %.2f ms\n", argv[f], len, n,
 		       (unsigned long long)(nev() - w0), (now_us() - t0) / 1e3);
@@ -1611,8 +1701,12 @@ int main(int argc, char **argv)
 	if (argc > 1) {
 		int windows = 0, boxes = 0, most = 0;
 
+		char js[1024] = "{";
+
 		printf("sensor time %.1f ms, %.1f%% of it with scans back to back\n", S.tot / 1e3,
 		       S.tot ? 100.0 * S.cov / S.tot : 0.0);
+		link_stats(js, sizeof(js));
+		printf("%s\n", js);
 		for (uint64_t i = 0, j = 0; j < (uint64_t)nev(); i = j) {
 			int n, c;
 

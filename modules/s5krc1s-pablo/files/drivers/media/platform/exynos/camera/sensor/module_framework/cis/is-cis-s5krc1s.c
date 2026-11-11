@@ -51,6 +51,28 @@ MODULE_PARM_DESC(margin, "DTAG_FRM_MARGIN 0x321D/E, blank after each scan in 2^1
 static char *regs;
 module_param(regs, charp, 0644);
 MODULE_PARM_DESC(regs, "extra writes at each mode change, \"addr=val,...\" in hex (11.29)");
+/*
+ * D-PHY PLL 0x30A5-0x30A7 for the link tests (docs/DVS-PLL-TESTS.md), written at each mode change (sensor in
+ * standby, before the CSIS stream on) after the setfile, before regs. Empty or "setfile" keeps the setfile's
+ * 00/75/00, which is experimental (11.29: CRC 0 for 3 min), not a validated setting (11.46).
+ */
+struct s5krc1s_pll {
+	const char *name;
+	u8 a5, a6, a7;
+};
+static const struct s5krc1s_pll sensor_s5krc1s_pll[] = {
+	{ "experimental_00_75_00", 0x00, 0x75, 0x00 },
+	{ "recommended_00_8b_b0", 0x00, 0x8b, 0xb0 },	/* 2244 Mbps/lane by formula; Jetson 64 h CRC 0 (Minsu) */
+	{ "alternative_00_8b_f8", 0x00, 0x8b, 0xf8 },	/* 2298 Mbps/lane by formula */
+	{ "default_00_8d_00", 0x00, 0x8d, 0x00 },	/* vendor Delta_10_2000FPS, 2496: ~4800 CRC/s here (11.28) */
+};
+static char *pll;
+module_param(pll, charp, 0644);
+MODULE_PARM_DESC(pll, "D-PHY PLL at each mode change: setfile (default, 00/75/00 experimental), experimental_00_75_00, "
+		 "recommended_00_8b_b0, alternative_00_8b_f8, default_00_8d_00 (11.46)");
+static char pll_live[128];
+module_param_string(pll_live, pll_live, sizeof(pll_live), 0444);
+MODULE_PARM_DESC(pll_live, "last 0x30A5-0x30A7 readback with P M S and the formula rates (calculated, not measured)");
 
 static int sensor_s5krc1s_write8(struct is_cis *cis, u16 reg, u8 value)
 {
@@ -66,6 +88,69 @@ static int sensor_s5krc1s_read8(struct is_cis *cis, u16 reg, u8 *value)
 		return -EINVAL;
 
 	return is_sensor_read8(cis->client, reg, value);
+}
+
+/*
+ * Read back the D-PHY PLL word: P [18:13], M [12:3], S [2:0]. rate = 24 MHz x M / P (Minsu, S = 0 settings),
+ * rate_s = 24 x M / (P x 2^S) (Karim's S divider: experimental, not in the datasheet). Both are calculations;
+ * the readback shows what the sensor holds, not the PLL frequency or the lane rate.
+ */
+static void sensor_s5krc1s_log_pll(struct is_cis *cis, const char *when)
+{
+	char s[sizeof(pll_live)];
+	u8 r[3];
+	u32 word, p, m, sd;
+	int i;
+
+	for (i = 0; i < 3; i++)
+		if (sensor_s5krc1s_read8(cis, 0x30A5 + i, &r[i]))
+			break;
+	if (i < 3) {
+		snprintf(s, sizeof(s), "read 0x%04x failed", 0x30A5 + i);
+	} else {
+		word = r[0] << 16 | r[1] << 8 | r[2];
+		p = word >> 13 & 0x3f;
+		m = word >> 3 & 0x3ff;
+		sd = word & 7;
+		if (p)
+			snprintf(s, sizeof(s), "%02x %02x %02x word 0x%05x P=%u M=%u S=%u rate=%u rate_s=%u",
+				 r[0], r[1], r[2], word, p, m, sd, 24 * m / p, 24 * m / (p << sd));
+		else
+			snprintf(s, sizeof(s), "%02x %02x %02x word 0x%05x P=0 M=%u S=%u rate=none",
+				 r[0], r[1], r[2], word, m, sd);
+	}
+	kernel_param_lock(THIS_MODULE);
+	strscpy(pll_live, s, sizeof(pll_live));
+	kernel_param_unlock(THIS_MODULE);
+	probe_info("%s: D-PHY PLL %s: %s (Mbps/lane calculated, not measured)\n", __func__, when, s);
+}
+
+/* the pll profile; empty or "setfile" keeps the setfile's word, an unknown name fails the mode change */
+static int sensor_s5krc1s_set_pll(struct is_cis *cis)
+{
+	const struct s5krc1s_pll *p = NULL;
+	bool keep;
+	int i, ret;
+
+	kernel_param_lock(THIS_MODULE);
+	keep = !pll || sysfs_streq(pll, "") || sysfs_streq(pll, "setfile");	/* echo > pll leaves "\n" */
+	for (i = 0; !keep && !p && i < ARRAY_SIZE(sensor_s5krc1s_pll); i++)
+		if (sysfs_streq(pll, sensor_s5krc1s_pll[i].name))
+			p = &sensor_s5krc1s_pll[i];
+	if (!keep && !p)
+		err("%s: unknown pll profile \"%s\"\n", __func__, pll);
+	kernel_param_unlock(THIS_MODULE);
+	if (keep)
+		return 0;
+	if (!p)
+		return -EINVAL;
+
+	ret = sensor_s5krc1s_write8(cis, 0x30A5, p->a5);
+	ret = ret ?: sensor_s5krc1s_write8(cis, 0x30A6, p->a6);
+	ret = ret ?: sensor_s5krc1s_write8(cis, 0x30A7, p->a7);
+	probe_info("%s: D-PHY PLL profile %s: %02x %02x %02x written (%d)\n",
+		   __func__, p->name, p->a5, p->a6, p->a7, ret);
+	return ret;
 }
 
 static int sensor_s5krc1s_cis_init(struct v4l2_subdev *subdev)
@@ -242,6 +327,9 @@ static int sensor_s5krc1s_cis_mode_change(struct v4l2_subdev *subdev, u32 mode)
 		if (ret < 0)
 			return ret;
 	}
+	ret = sensor_s5krc1s_set_pll(cis);
+	if (ret < 0)
+		return ret;
 	/* the lock keeps a sysfs write from freeing the string under us; parsing stops at the first bad entry */
 	kernel_param_lock(THIS_MODULE);
 	s = regs;
@@ -257,6 +345,7 @@ static int sensor_s5krc1s_cis_mode_change(struct v4l2_subdev *subdev, u32 mode)
 
 	/* Bring-up readback: verify programmed CSI-2 transport registers. */
 	sensor_s5krc1s_cis_log_status(subdev);
+	sensor_s5krc1s_log_pll(cis, "mode change");
 
 	cis->cis_data->cur_width = 8192;
 	cis->cis_data->cur_height = sensor_s5krc1s_mode_lines[mode];
@@ -289,6 +378,7 @@ static int sensor_s5krc1s_cis_stream_on(struct v4l2_subdev *subdev)
 
 	/* Bring-up readback: confirm stream state after 0x3000 write. */
 	sensor_s5krc1s_cis_log_status(subdev);
+	sensor_s5krc1s_log_pll(cis, "stream on");
 
 	return 0;
 }

@@ -7,8 +7,8 @@ PROFILE is the CIS pll parameter (setfile = the setfile's 00/75/00, experimental
 alternative_00_8b_f8, default_00_8d_00); RX_MBPS is fimc_is.e850_csi_speed, the CSIS lane rate setting (0 = the
 DT's 1600; settle follows it unless --settle). Order: the parameters, then dvslive restarted: its stream off puts
 the sensor in standby, the next stream's mode change writes the PLL word (sensor still in standby), CSIS starts at
-RX_MBPS, then the sensor streams. After WARM s the /stats JSON (CRC count, link counters, V4L2 sequence, PLL
-readback) goes to OUT/stats.jsonl every STEP s for MINUTES; OUT/summary.json has the counter deltas and the
+RX_MBPS, then the sensor streams. After WARM s the /stats JSON (CRC count, link counters, PLL readback) goes to
+OUT/stats.jsonl every STEP s for MINUTES; OUT/summary.json has the counter deltas and the
 pass/fail of each criterion. --sample N: before and after the run, dvslive stopped for N VC0 buffers
 (OUT/raw-pre, raw-post, gzipped) and dvslink.py on them. At the end (also on Ctrl-C or SIGTERM) the profile goes
 back to setfile and the DT speed and dvslive restarts, unless --keep. Long runs: systemd-run --unit=plltest ...
@@ -86,7 +86,7 @@ def sample(out, n, dvslink):
 
 
 def summarize(rows, profile, minutes):
-    s = {'samples': len(rows), 'crc': 0, 'seq_skips': 0, 'seq_lost': 0, 'restarts': 0, 'seconds': 0.0}
+    s = {'samples': len(rows), 'crc': 0, 'restarts': 0, 'seconds': 0.0}
     s.update({k: 0 for k in LINK})
     for a, b in zip(rows, rows[1:]):
         s['seconds'] += b['t'] - a['t']
@@ -96,8 +96,6 @@ def summarize(rows, profile, minutes):
             continue
         for k in LINK:
             s[k] += b['st'].get('link', {}).get(k, 0) - a['st'].get('link', {}).get(k, 0)
-        for k in ('seq_skips', 'seq_lost'):
-            s[k] += b['st'].get(k, 0) - a['st'].get(k, 0)
     sec, bufs, ts = s['seconds'] or 1, s['bufs'] or 1, s['ts'] or 1
     s['rate'] = {'crc_per_s': s['crc'] / sec, 'bufs_per_s': s['bufs'] / sec, 'scans_missed_pct': 100.0 *
                  s['ts_missed'] / (ts + s['ts_missed']), 'short_bufs_pct': 100.0 * s['short_bufs'] / bufs,
@@ -105,7 +103,6 @@ def summarize(rows, profile, minutes):
     want = WORDS[profile]
     ok = [r['st'] for r in rows if r['st']]
     pll = [st['pll'] for st in ok if 'pll' in st]
-    seqs = {st.get('seq') for st in ok}
     link = bool(ok) and all('link' in st for st in ok)     # None below: not measured (a libdvsview before 11.46)
     s['criteria'] = {
         'readback': all(p.startswith(want) for p in pll) if pll else None,
@@ -113,23 +110,23 @@ def summarize(rows, profile, minutes):
         'stream': s['restarts'] == 0 and (s['bufs'] > 0 or not link),
         'crc': s['crc'] == 0,
         'frames_complete': s['short_bufs'] == 0 if link else None,
-        'no_buffer_loss': s['seq_lost'] == 0 if len(seqs) > 1 else None,    # None: the sequence is not filled in
+        # the V4L2 sequence stays 0 here; a lost buffer is a gap of ~28 scans, so: every gap is one scan
+        'no_buffer_loss': s['ts_missed'] == s['ts_miss'] if link else None,
         'no_scan_loss': s['ts_missed'] == 0 and s['fe_missed'] == 0 if link else None,
         'ts_continuity': all(s[k] == 0 for k in ('ts_bad', 'ts_back', 'ts_fixed', 'sub_fixed', 'ts_restarts'))
         if link else None,
         'no_unknown_words': s['unknown'] == 0 if link else None}
-    # any failed: False; else not judged (None) while one is not measured, but the V4L2 sequence (scan loss covers it)
-    c = s['criteria'].values()
-    s['pass'] = False if False in c else None if any(v is None and k != 'no_buffer_loss'
-                                                      for k, v in s['criteria'].items()) else True
+    # any failed: False; else not judged (None) while one is not measured
+    c = list(s['criteria'].values())
+    s['pass'] = False if False in c else None if None in c else True
     return s
 
 
 def selftest():
-    def row(t, pid, crc, k, seq):
+    def row(t, pid, crc, k):
         return {'t': t, 'pid': pid, 'crc': crc, 'st': {'link': dict.fromkeys(LINK, k) | {'ts': 1000 * k},
-                                                       'seq': seq, 'seq_skips': 0, 'seq_lost': 0, 'pll': '00 8b b0 P=4'}}
-    rows = [row(0, '1', 5, 0, 10), row(10, '1', 5, 0, 20), row(20, '2', 7, 3, 0), row(30, '2', 7, 4, 30)]
+                                                       'pll': '00 8b b0 P=4'}}
+    rows = [row(0, '1', 5, 0), row(10, '1', 5, 0), row(20, '2', 7, 3), row(30, '2', 7, 4)]
     s = summarize(rows, 'recommended_00_8b_b0', 0.5)
     assert s['crc'] == 2 and s['restarts'] == 1 and s['bufs'] == 1 and s['ts'] == 1000 and s['seconds'] == 30, s
     c = s['criteria']
