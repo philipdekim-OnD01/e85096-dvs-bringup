@@ -2968,17 +2968,43 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 **만든 것(저장소).**
 - `tools/host/dvslink.py`: 녹화(`.gz`, `.bin`)와 VC0 raw 버퍼를 검사한다. 워드 종류, 모르는 워드, 타임스탬프 단계(다음/1개 빠짐/2개 빠짐/틈/반복/뒤로/비트 하나), frame_end 번호 연속, 줄 채움을 본다. 자체 시험 통과.
 - `tools/board/plltest.py`: 시험 한 번 실행기다(파라미터 → dvslive 재시작 → `/stats` 기록 → 판정 → 되돌리기). 자체 시험 통과. 보드에서는 `--observe`만 실행했다.
-- 작업 트리에만 있는 것(빌드나 보드 설치 전, 커밋 안 함):
-  - CIS 모듈: `pll` 파라미터(이름 4개), mode change·stream on 뒤 0x30A5~A7 다시 읽기(dmesg, `pll_live`)
-  - `dvsview.c`: `/stats`에 `link` 계수기
-  - `dvsctl.py`: `/stats`에 `pll`과 V4L2 sequence. 단위 시험 4개 통과
-  - `ov5647-cap.py`: VC0 버퍼 V4L2 sequence 세기
-  - setA.h: 0x75 실험값 주석. 값은 그대로다
+- CIS 모듈: `pll` 파라미터(이름 4개, 비우면 setfile), mode change·stream on 뒤 0x30A5~A7 다시 읽기(dmesg, `pll_live`). setA.h는 0x75 실험값 주석만 바꿨다.
+- `dvsview.c`: `/stats`에 `link` 계수기. `-DDVSVIEW_TEST` 자체 시험 통과.
+- `dvsctl.py`: `/stats`에 `pll`. 단위 시험 4개 통과.
+- V4L2 sequence 세기도 `ov5647-cap.py`에 넣었지만 이 드라이버는 sequence를 늘 0으로 둔다(보드에서 확인). 그래서 지웠다. 잃은 버퍼는 타임스탬프 틈(버퍼 하나 = 약 28 scan)으로 본다.
 
-**막힌 것.**
-- Docker Desktop이 꺼져 있다. `open -a Docker`와 `open /Applications/Docker.app`로도 켜지지 않았다. 그래서 모듈과 lib을 빌드하지 못했다.
-- 보드 root 경로가 없다. ACM 장치 노드는 Mac에 있지만 응답이 없고, 보드 UDC는 `not attached`다(11.31의 `e850-vbus` 경합 증상). sudo 비밀번호도 없다. UART도 빠져 있다.
+**막혔던 것(2026-11-12 풀림).**
+- 2026-11-11에는 Docker Desktop이 켜지지 않았다(`open -a Docker`, `open /Applications/Docker.app`). 11-12에는 동작했다.
+- ACM 장치 노드는 Mac에 있었지만 응답이 없었고, 보드 UDC는 `not attached`였다. 사용자가 USB를 Mac mini 앞쪽 포트에 다시 꽂자 `configured`가 되고 root 셸이 돌아왔다. UART는 빠져 있었다.
 
-**보드에 바꾼 것.** `/var/tmp`에 `plltest.py`, `dvslink.py`, `dvslink-rec.tsv`, `plltest/baseline-observe-20261111/`을 두었다(모두 philip). 모듈, 서비스, 파라미터는 바꾸지 않았다.
+**커널 소스(`e850-kernel` 볼륨).**
+- DT mode0 settle은 0(자동)이다. settle은 `is_hw_find_settle()`이 `is-hw-settle-8nm-lpp.h`(10 Mbps 간격, 6500까지)에서 고른다. `ALIGN(speed, 10)`이 2의 거듭제곱용 매크로라 10 단위로 올리지 못한다. 그래서 2244는 표에 없는 값이 되어 이웃 11을, 2298은 2306이 되어 12를 받았다(dmesg). 1600은 8이다.
+- PHY 0x0503.0008(`__set_phy_cfg_0503_0008_dphy`): 1500 이상에서 deskew 보정을 켜고, `skew_delay_sel`은 1500~1999 → 3, 2000~2999 → 2다. 속도 상한 검사는 없다. SoC 하드웨어 상한은 모른다.
 
-**다음.** DVS-PLL-TESTS.md 7장: 빌드 → PHY 표 확인 → 설치 → 기준선(0x75) → `recommended_00_8b_b0`, `alternative_00_8b_f8`(수신 DT 그대로와 맞춤) → 반복 → 1시간 → 24시간.
+**설치와 시험(2026-11-12, ACM root).**
+- 관찰 실행을 5시간 2분에 멈췄다. CRC 0, 재시작 0, 버퍼 34.5~35.6/s, coverage 98~100%였다.
+- dvslive를 멈추고 CIS 모듈을 rmmod/modprobe로 바꿨다. lib, `dvsctl.py`도 바꿨다. 다시 읽기: `00 75 00 word 0x07500 P=3 M=672 S=0`.
+- `link` 계수기 첫 10초: scan 누락 159개, frame_end 누락 98개가 모두 버퍼 첫 단계였다.
+- `plltest.py` 5번(각 10분, `--sample 20`, `systemd-run`). 표는 DVS-PLL-TESTS.md 8장에 있다.
+
+| 조건 | CRC | 버퍼/s | scan 누락 | 시간 되돌아감 |
+|---|---|---|---|---|
+| 0x75, 수신 1600 | 0 | 35.2 | 1.58%(99.75% 첫 단계) | 24 |
+| 00/8B/B0, 1600 | 0 | 37.8 | 0.92%(모두 첫 단계) | 0 |
+| 00/8B/B0, 2244(settle 11) | 0 | 37.8 | 0.92% | 0 |
+| 00/8B/F8, 1600 | 0 | 38.0 | 1.53% | 0 |
+| 00/8B/F8, 2298(settle 12) | 0 | 38.0 | 1.53% | 0 |
+
+- 모든 시험에서 짧은 버퍼 0, 모르는 워드 0, 잃은 버퍼 0, 재시작 0이었다. 다시 읽기는 프로파일과 같았다. raw 버퍼 200개 안에서는 누락이 없었다.
+- 수신 설정을 센서에 맞춰도 결과가 같았다. scan 누락은 PLL 값에 따라 달랐지만 없어지지 않았다. 버퍼 경계 누락은 PLL과 다른 원인(CSIS 프레임 전환 쪽)으로 본다(가설).
+- 10분씩 한 번이다. 반복, 1시간, 24시간은 하지 않았다. 기본 setfile(0x75)은 그대로 두었다.
+
+**보드에 바꾼 것.**
+- `/lib/modules/.../is-cis-s5krc1s.ko`: 182f06f0…(sha256, strip). 이전 판은 `/root/is-cis-s5krc1s.ko.prev-11.46`(md5 0b35f571).
+- `/usr/local/lib/libdvsview.so`: db2b51bd…(sha256). 이전 판은 `.prev-11.46`.
+- `/usr/local/share/dvsview/dvsctl.py`: 5ec64db2…(md5, 저장소와 같음). 이전 판은 `/root/dvsctl.py.prev-11.46`.
+- `/usr/local/bin/ov5647-cap.py`: 저장소 HEAD와 같다(7d82fa17…). sequence판을 잠깐 올렸다가 되돌렸다.
+- `/var/tmp`: `plltest.py`, `dvslink.py`, `pll-ab.sh`, `pll-1146/`, `dvslink-rec.tsv`, `plltest/`(결과, Mac `~/e850-logs/plltest/`에 사본).
+- 파라미터는 모두 기본값(`pll` setfile, `e850_csi_speed` 0, settle 0)으로 돌아왔다. dvslive는 동작 중이다.
+
+**다음.** DVS-PLL-TESTS.md 7장 4번: 순서를 바꿔 반복한다. 그다음 00/8B/B0을 1시간, 24시간 돌린다. 버퍼 경계 누락은 따로 원인을 찾는다(CSIS FE와 다음 FS 사이에 오는 패킷).

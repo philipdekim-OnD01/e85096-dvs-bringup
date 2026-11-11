@@ -17,14 +17,21 @@
 
 **FACT**
 
-- [확인] 보드는 11.29부터 setfile의 0x30A5/0x30A6/0x30A7 = **00/75/00**을 쓴다. 센서에서 다시 읽은 값은 아직 없다. 읽기 코드는 썼지만 빌드하지 못했다(Docker가 꺼져 있음).
+- [확인] 보드는 11.29부터 setfile의 0x30A5/0x30A6/0x30A7 = **00/75/00**을 쓴다. 2026-11-12 새 CIS 모듈로 센서에서 다시 읽은 값도 mode change와 stream on 두 번 모두 `00 75 00`(P=3 M=672 S=0)이다.
 - [확인] 녹화 42개(2026-11-07~08, 0x75, margin 17, flush 50 µs, 273초, 이벤트 3.6억 개)를 `tools/host/dvslink.py`로 검사했다.
   - 모르는 워드: 0개
   - sub 타임스탬프 범위 오류: 0개
   - scan 단계 272,857개 중 4,427개(1.62%)가 정확히 scan 2개 간격이다. 즉 scan 1개가 빠졌다. 2개 이상 빠진 곳과 큰 틈은 없다.
   - frame_end 번호 274,561개 중 2,702개가 하나씩 건너뛰었다.
   - 시간이 거꾸로 간 곳 12개는 모두 비트 하나 차이다.
-- [확인] 지금 live(0x75, 2026-11-11 15:37 UTC 부팅): CRC 0, 버퍼 34.9~35.0/s, coverage 99~100%다. 관찰 실행(`plltest.py setfile 0 600 --observe`)의 첫 9개 표본이다.
+- [확인] live 관찰(0x75, 이전 lib, `plltest.py setfile 0 600 --observe`, 2026-11-11 16:11 UTC부터 **5시간 2분**): CRC 0, dvslive 재시작 0, 버퍼 34.5~35.6/s, coverage 98~100%.
+- [확인] 새 `link` 계수기(live 10초, 버퍼 352개): 짧은 버퍼 0, 모르는 워드 0, CRC 0. scan 누락 159개(scan 하나씩)와 frame_end 누락 98개가 **모두 버퍼의 첫 단계**, 즉 버퍼(MIPI 프레임) 사이에서 났다. 버퍼마다 127줄이 모두 찼다.
+- [확인] 2026-11-12 A/B 첫 회(각 10분, 8장): 0x75, 00/8B/B0, 00/8B/F8 모두 CRC 0, 짧은 버퍼 0, 모르는 워드 0, 잃은 버퍼 0, dvslive 재시작 0이다. 다시 읽기는 모두 프로파일과 같았다.
+  - scan 누락: 0x75 1.58%, **00/8B/B0 0.92%**, 00/8B/F8 1.53%. 수신 설정(1600 / 맞춤)은 결과를 바꾸지 않았다(같은 프로파일끼리 차이 0.01%p 안).
+  - 누락은 00/8B/*에서 100%, 0x75에서 99.75%가 버퍼 첫 단계였다.
+  - 시간 되돌아감: 0x75만 24번, 00/8B/*는 0번.
+  - 버퍼/s: 0x75 35.2, 00/8B/B0 37.8, 00/8B/F8 38.0(같은 장면).
+  - raw 버퍼(시험마다 앞뒤 20개씩, 모두 200개): 버퍼 안에서는 누락, 시간 오류, 모르는 워드가 하나도 없다.
 
 **CAUSE**
 
@@ -33,9 +40,8 @@
 - [가설] 범위 밖 단어에서는 공식값이 실제 속도가 아닐 것이다.
   - 11.29에서 같은 수신 설정(1600, settle 8)으로 0x84(공식 768)와 0x72~0x78(공식 4608~6144)이 모두 CRC 0이었다.
   - 공식값이 실제라면 한 수신 설정으로 6~8배 차이 나는 속도를 모두 받기는 어렵다.
-- [가설] 1.62% scan 누락은 패킷(줄) 손실이다.
-  - 녹화 하나에서 scan이 빠진 구간에는 줄 경계가 6~7개 있었다. 정상 구간은 4~5개다. scan 하나가 통째로 빠진 것이 아니라 줄 2~3개가 빠진 것으로 보인다.
-  - 어디서 빠지는지(센서 송신, 링크, CSIS 수신, 버퍼 경계, 녹화 경로)는 모른다. CRC가 0인데도 빠진다.
+- [확인] 1.6% scan 누락은 버퍼 경계에서 난다(위 `link` 계수기). 링크 중간의 비트 오류가 아니다. CRC가 0인데도 빠진다.
+- [가설] 프레임과 프레임 사이에 오는 패킷 2~3개를 CSIS가 받지 못한다(녹화에서 누락 구간의 줄 경계가 6~7개, 정상 4~5개). 센서가 FE 뒤 다음 FS 전에 보내는지, CSIS DMA가 버퍼를 바꾸는 동안 버리는지는 모른다. 누락률은 PLL 값에 따라 달라졌지만(0.92~1.58%) 어느 값에서도 없어지지 않았다. 10분씩 한 번이라 이 차이가 반복되는지는 아직 모른다.
 
 **EVIDENCE**: 8장 표와 다음 파일.
 
@@ -44,10 +50,9 @@
 - 11.29 sweep 원 기록: BOOT.md 11.29.
 - 데이터시트: `S5KRC1SY_DataSheet_REV0.01_Preliminary`, 6.1절과 표 11, 29(3장).
 
-**NEXT**: 7장 순서로 한다. 막힌 것은 두 가지다.
+**NEXT**: 7장 4번(순서를 바꿔 반복)부터 한다. 그다음 00/8B/B0을 1시간, 24시간 돌린다. 버퍼 경계 누락은 PLL과 따로 CSIS 프레임 전환 쪽을 본다. 기본 setfile(0x75)은 아직 바꾸지 않는다.
 
-- Docker Desktop이 꺼져 있다. `open -a Docker`로 켜지지 않았다. 그래서 모듈과 lib을 빌드하지 못했다.
-- 보드 root 경로가 없다. ACM이 응답하지 않고, UDC가 `not attached`다. sudo 비밀번호도 없다. 그래서 설치와 시험을 하지 못했다.
+- (2026-11-12 해결) Docker가 켜졌고, USB를 Mac mini 앞쪽 포트에 다시 꽂자 ACM root 셸이 돌아왔다. 모듈과 lib을 빌드해 보드에 설치했다.
 
 ## 1. 레지스터 해석
 
@@ -121,7 +126,7 @@ S = word & 7
   - E850에서는 SoC가 MCLK를 주지 않는다. CN4 12번을 RSTN으로 쓰기 때문이다(BOOT.md 11.19).
   - 모듈 발진기는 확인하지 않았다. 24 MHz는 데이터시트의 최대 scan rate에서 거꾸로 계산한 값이다(BOOT.md 11.23). 측정한 값이 아니다.
   - MCLK가 다르면 1·2장의 공식값이 모두 같은 비율로 바뀐다.
-- **E850 CSIS D-PHY의 최대 수신 속도, 2244/2298에서의 settle·deskew 표:** vendor 커널 소스(`is_hw_find_settle`과 PHY 표)는 Docker 볼륨 `e850-kernel` 안에만 있다. 아직 보지 못했다.
+- **E850 CSIS D-PHY의 하드웨어 최대 수신 속도:** SoC 데이터시트가 없다. 드라이버 쪽은 4장에서 확인했다(상한 검사 없음).
 - **실제 lane 속도:** 고속 계측기가 없다. 간접 측정 방법도 아직 없다.
 
 ## 4. 수신기(CSIS) 설정
@@ -135,8 +140,15 @@ S = word & 7
 | 적용 시점 | stream on 때. settle을 정하지 않으면 `is_hw_find_settle`이 속도로 고른다 | `csi-speed-param.patch` |
 | CRC 계수 | `/sys/module/fimc_is/parameters/e850_csi_crc_count`. dvslive는 `crc_keep`=1, `err_stop`=0 | |
 
+[확인] vendor 커널 소스(`e850-kernel` 볼륨)에서 본 속도의 쓰임은 다음과 같다.
+
+- DT mode0의 settle은 0(자동)이다. 그래서 settle은 `is_hw_find_settle(speed)`가 `include/is-hw-settle-8nm-lpp.h`(is-v8_20_0)에서 고른다. 표는 6500 Mbps까지 10 Mbps 간격이다. 실제로 고른 값(dmesg)은 1600 → 8, 2244 → **11**, 2298 → 12다. `ALIGN(speed, 10)`은 2의 거듭제곱용 매크로라 10 단위로 올리지 못한다(2244 → 2244, 2298 → 2306). 표에 없는 값이면 이진 탐색이 이웃 값을 고른다.
+- PHY는 0x0503.0008 D-PHY이고 `drivers/phy/samsung/phy-exynos-mipi.c`의 `__set_phy_cfg_0503_0008_dphy`가 설정한다. 1500 이상이면 deskew 보정을 켜고 hs_mode_sel 0이다. `skew_delay_sel`은 1500~1999 → 3, 2000~2999 → 2, 3000~4500 → 1이다. 그다음 settle을 쓴다. 속도 상한 검사는 없다.
+- 수신기는 lane 클록을 받아 쓰므로 속도 값 자체로 클록을 만들지 않는다. 속도가 바꾸는 것은 settle과 deskew 지연 범위다. 그래서 2244/2298로 맞추면 settle 8 → 11/12, skew_delay_sel 3 → 2가 바뀐다.
+- `csi_hw_s_lane`은 덮어쓴 속도가 아니라 DT 속도를 받지만 lane 수만 쓴다.
+
 - [보고] Minsu는 Jetson에서 수신 속도를 센서 속도에 맞췄다(DT `pix_clk_hz` 1122 MHz). E850에는 이 값을 그대로 옮기지 않는다.
-- E850에서 맞출 값은 `e850_csi_speed`다. 7장 시험에서는 두 가지를 함께 시험한다. 하나는 DT 그대로(0)이고, 다른 하나는 센서 공식값(2244/2298)이다. 공식값은 PHY 표가 그 속도를 지원하는지 확인한 뒤에만 쓴다.
+- E850에서 맞출 값은 `e850_csi_speed`다. 7장 시험에서는 두 가지를 함께 시험한다. 하나는 DT 그대로(0, settle 8)이고, 다른 하나는 센서 공식값(2244/2298, settle 11/12)이다.
 
 ## 5. 코드
 
@@ -144,12 +156,11 @@ S = word & 7
 
 | 파일 | 바꾼 것 | 상태(2026-11-12) |
 |---|---|---|
-| `modules/s5krc1s-pablo/.../is-cis-s5krc1s.c` | <ul><li>`pll` 파라미터(0644): 이름 4개 중 하나, 비우거나 `setfile`이면 setfile 그대로이고, 모르는 이름이면 `-EINVAL`</li><li>mode change와 stream on 뒤 0x30A5~A7을 읽어 dmesg와 `pll_live`(0444)에 남긴다: `"00 75 00 word 0x07500 P=3 M=672 S=0 rate=5376 rate_s=5376"`, "계산값, 측정 아님"</li></ul> | 작성만 했다. **빌드 안 함** |
+| `modules/s5krc1s-pablo/.../is-cis-s5krc1s.c` | <ul><li>`pll` 파라미터(0644): 이름 4개 중 하나, 비우거나 `setfile`이면 setfile 그대로이고, 모르는 이름이면 `-EINVAL`</li><li>mode change와 stream on 뒤 0x30A5~A7을 읽어 dmesg와 `pll_live`(0444)에 남긴다: `"00 75 00 word 0x07500 P=3 M=672 S=0 rate=5376 rate_s=5376"`, "계산값, 측정 아님"</li></ul> | 빌드, 2026-11-12 보드 설치(rmmod/modprobe). 다시 읽기 동작 확인 |
 | `.../is-cis-s5krc1s-setA.h` | 주석만. 0x75는 실험값이다. 값은 그대로 0x75 | 작성 |
-| `tools/linux510/dvsview.c` | <ul><li>`/stats`에 `link` 계수기: 버퍼, 짧은 버퍼(데이터 줄 < 줄), 데이터 줄, 모르는 워드, sub 고침, frame_end 번호 건너뜀, scan 누락(버퍼 첫 단계 따로), 시간 오류·되돌아감·재시작</li><li>자체 시험에 기대 JSON</li></ul> | 작성만 했다. **빌드·자체 시험 안 함** |
-| `tools/linux510/dvsctl.py` | `/stats`에 `pll`(`pll_live`)과 호출자가 준 값(V4L2 sequence) | 단위 시험 4개 통과. 보드 설치 안 함 |
-| `tools/linux510/ov5647-cap.py` | VC0 버퍼의 V4L2 `sequence`로 잃은 버퍼를 센다(`seq_skips`, `seq_lost`) | 문법 확인, 계수 함수 시험. 보드 설치 안 함 |
-| `tools/board/plltest.py` | 시험 한 번 실행기(6장) | 자체 시험 통과. 보드에서 `--observe`로 실행 중 |
+| `tools/linux510/dvsview.c` | <ul><li>`/stats`에 `link` 계수기: 버퍼, 짧은 버퍼(데이터 줄 < 줄), 데이터 줄, 모르는 워드, sub 고침, frame_end 번호 건너뜀, scan 누락(버퍼 첫 단계 따로), 시간 오류·되돌아감·재시작</li><li>자체 시험에 기대 JSON</li></ul> | 빌드, `-DDVSVIEW_TEST` 자체 시험 통과(`selftest ok`), 2026-11-12 보드 설치 |
+| `tools/linux510/dvsctl.py` | `/stats`에 `pll`(`pll_live`) | 단위 시험 4개 통과, 보드 설치 |
+| `tools/board/plltest.py` | 시험 한 번 실행기(6장) | 자체 시험 통과. 보드에서 관찰 5시간, 기준선 10분 |
 | `tools/host/dvslink.py` | 녹화(`.gz`, `.bin`)와 VC0 raw 버퍼 검사(6장) | 자체 시험 통과. 녹화 42개에 실행 |
 
 ## 6. 측정 항목과 판정 기준
@@ -173,14 +184,14 @@ S = word & 7
 | `stream` | dvslive 재시작 0, 버퍼 > 0 | |
 | `crc` | CRC 증가 0 | 링크 비트 오류 |
 | `frames_complete` | 짧은 버퍼 0 | 잘린 프레임(Minsu: 2220 미만에서 CRC 없이 잘림) |
-| `no_buffer_loss` | V4L2 sequence 건너뜀 0 | 사용자 공간까지 오지 못한 버퍼 |
+| `no_buffer_loss` | `ts_missed` = `ts_miss`(틈마다 scan 하나) | 버퍼 하나를 잃으면 약 28 scan 틈이 된다. V4L2 sequence는 이 드라이버에서 늘 0이라 쓰지 않는다 |
 | `no_scan_loss` | scan 누락 0, frame_end 누락 0 | CRC 없이 빠진 데이터 |
 | `ts_continuity` | 시간 오류·되돌아감·고침·재시작 0 | |
 | `no_unknown_words` | 모르는 워드 0 | 깨진 워드 |
 
-- 하나라도 실패하면 `pass`는 false다. 측정하지 못한 기준이 있으면 null이다. 다만 V4L2 sequence는 예외다. 드라이버가 채우지 않으면 null로 두고, scan 누락이 같은 것을 잡는다.
+- 하나라도 실패하면 `pass`는 false다. 측정하지 못한 기준이 있으면 null이다.
 - 비율도 남긴다: CRC/s, 버퍼/s, scan 누락 %, 짧은 버퍼 %, 버퍼당 데이터 줄.
-- **기준선 0x75도 `no_scan_loss`에서 실패할 것으로 본다(녹화에서 1.62%).** 그래서 후보는 절대 기준과 함께 같은 날 기준선의 비율과도 비교한다.
+- **기준선 0x75도 `no_scan_loss`에서 실패한다(버퍼 경계 누락 약 1.6%).** 그래서 후보는 절대 기준과 함께 같은 날 기준선의 비율과도 비교한다. `link`의 `ts_miss_first`, `fe_skips_first`는 그중 버퍼 첫 단계에서 난 수다.
 
 ## 7. 시험 순서
 
@@ -188,16 +199,16 @@ S = word & 7
 
 준비:
 
-1. Docker에서 CIS 모듈(`modules/s5krc1s-pablo/build-module.sh`)과 `libdvsview.so`를 빌드한다. `-DDVSVIEW_TEST` 자체 시험을 돌린다.
-2. 커널 소스에서 E850 CSIS PHY 표가 2244/2298을 지원하는지, 그때 settle이 얼마인지 확인한다.
-3. 보드에 설치한다. 이전 판은 `/root/*.prev-11.46`으로 남긴다. CIS 모듈은 dvslive를 멈추고 rmmod/modprobe로 바꾼다(11.25에서 재부팅 없이 했다).
-4. 관찰 실행(`baseline-observe-20261111`)을 멈춘다.
+1. (끝남) Docker에서 CIS 모듈(`modules/s5krc1s-pablo/build-module.sh`)과 `libdvsview.so`를 빌드하고 `-DDVSVIEW_TEST` 자체 시험을 돌렸다.
+2. (끝남) 커널 소스에서 settle과 PHY 설정을 확인했다(4장).
+3. (끝남) 보드에 설치했다. 이전 판은 `/root/*.prev-11.46`, `/usr/local/lib/libdvsview.so.prev-11.46`이다. CIS 모듈은 dvslive를 멈추고 rmmod/modprobe로 바꿨다.
+4. (끝남) 관찰 실행을 멈췄다.
 
 | 순서 | 프로파일 | RX | 시간 | 목적 |
 |---|---|---|---|---|
-| 0 | `setfile`(00/75/00) | 0 | 10분, `--sample 20` | 기준선. 새 계수기로 0x75를 다시 잰다 |
+| 0 | `setfile`(00/75/00) | 0 | 10분, `--sample 20` | 기준선. 새 계수기로 0x75를 다시 잰다(0~3 첫 회 끝남, 8장) |
 | 1 | `recommended_00_8b_b0` | 0 | 10분, `--sample 20` | 수신 설정 그대로 |
-| 2 | `recommended_00_8b_b0` | 2244 | 10분 | 수신 맞춤(2단계 확인 뒤) |
+| 2 | `recommended_00_8b_b0` | 2244 | 10분 | 수신 맞춤(settle 11) |
 | 3 | `alternative_00_8b_f8` | 0 / 2298 | 10분씩 | |
 | 4 | 0~3 반복 | | 10분씩 | 순서를 바꿔 2번 더. 다시 시작할 때마다 결과가 같은지 본다 |
 | 5 | 4까지 통과(또는 기준선보다 나은)한 것 | | 1시간 | |
@@ -220,10 +231,19 @@ systemd-run --unit=plltest python3 /var/tmp/plltest.py recommended_00_8b_b0 2244
 | 날짜 | 조건 | 시간 | CRC | 버퍼/s | scan 누락 | frame_end 누락 | 짧은 버퍼 | 다시 읽기 | 판정 |
 |---|---|---|---|---|---|---|---|---|---|
 | 2026-11-07~08 | 0x75, 녹화 42개 | 273초 | 기록 안 됨 | — | 4,427 / 272,857(1.62%) | 2,702 / 274,561 | 녹화로는 모름 | 없음 | 기준 아님(녹화 검사) |
-| 2026-11-11 | 0x75, 관찰(이전 lib) | 진행 중, 첫 9 표본 | 0 | 34.9~35.0 | 이전 lib이라 못 잼 | 못 잼 | 못 잼 | 없음 | 판정 못 함 |
+| 2026-11-11~12 | 0x75, 관찰(이전 lib) | 5시간 2분 | 0 | 34.5~35.6 | 이전 lib이라 못 잼 | 못 잼 | 못 잼 | 없음 | 판정 못 함(CRC만) |
+| 2026-11-12 | 0x75, 수신 1600(settle 8) | 10분 | 0 | 35.2 | 9,627(1.58%), 첫 단계 9,603 | 6,006 | 0 | 00 75 00 | 실패: scan 누락, 시간 되돌아감 24 |
+| 2026-11-12 | 00/8B/B0, 수신 1600(settle 8) | 10분 | 0 | 37.8 | 5,613(0.92%), 모두 첫 단계 | 7,309 | 0 | 00 8b b0 | 실패: scan 누락만 |
+| 2026-11-12 | 00/8B/B0, 수신 2244(settle 11) | 10분 | 0 | 37.8 | 5,611(0.92%), 모두 첫 단계 | 7,337 | 0 | 00 8b b0 | 실패: scan 누락만 |
+| 2026-11-12 | 00/8B/F8, 수신 1600(settle 8) | 10분 | 0 | 38.0 | 9,340(1.53%), 모두 첫 단계 | 6,917 | 0 | 00 8b f8 | 실패: scan 누락만 |
+| 2026-11-12 | 00/8B/F8, 수신 2298(settle 12) | 10분 | 0 | 38.0 | 9,345(1.53%), 모두 첫 단계 | 6,847 | 0 | 00 8b f8 | 실패: scan 누락만 |
+
+- 2026-11-12 시험은 모두 같은 장면(가만히 둔 책상), margin 17, flush 50, mode0 8192×127, 2-lane이다. 버퍼마다 127줄이 모두 찼고(짧은 버퍼 0), 틈은 모두 scan 하나였다(`no_buffer_loss` 통과). raw 표본 200개도 버퍼 안은 깨끗했다.
+- 판정은 `plltest.py`의 지금 기준(`no_buffer_loss` = 틈마다 scan 하나)으로 `stats.jsonl`에서 다시 계산했다. 시험 때의 `summary.json`은 0번만 V4L2 sequence 기준이다.
+- 원 자료: 보드 `/var/tmp/plltest/`, Mac `~/e850-logs/plltest/`.
 
 ## 9. 되돌리기
 
 - `plltest.py`는 끝날 때 `pll`=`setfile`, `e850_csi_speed`=0, `e850_csi_settle`=0으로 되돌리고 dvslive를 다시 시작한다. 파라미터는 재부팅하면 기본값으로 돌아간다.
-- 모듈과 lib은 `/root/*.prev-11.46`, `/usr/local/lib/libdvsview.so.prev-11.46`으로 되돌린다.
+- 모듈은 `/root/is-cis-s5krc1s.ko.prev-11.46`(dvslive를 멈추고 rmmod/modprobe), lib은 `/usr/local/lib/libdvsview.so.prev-11.46`, `dvsctl.py`와 `ov5647-cap.py`는 `/root/*.prev-11.46`으로 되돌린다.
 - 보드가 멈추면 워치독 → fastboot → `~/e850-logs/boot-nokvm/boot.img`(CLAUDE.md 복구)를 따른다.
