@@ -2003,6 +2003,7 @@ settle 값은 결과에 영향이 없었다.
 6. 새 기본값(setfile 0x75, `regs` 비움, 수신 DT)으로 재부팅했다. 부팅 뒤 3분 동안 `e850_csi_crc_count`가 0이다. 버퍼 35/s, 158 kB/버퍼, coverage 99%, 어두운 프레임 0이다.
 
 - 우연히 잰 것: 센서는 원래 속도인데 수신이 800 설정(settle 40)으로 남았을 때 CRC 4855/s, coverage 7~9%였다.
+- **(11.46 정정)** 아래 83%·1328·1404 Mbps 추정은 틀렸다. 0x30A5~A7은 19비트 단어이고 0x30A6의 위 3비트는 P다. "M만 바꿨다"도 틀렸다. 해석은 [DVS-PLL-TESTS.md](DVS-PLL-TESTS.md) 1·2장에 있다.
 - **실제 lane 속도는 모른다.** M에 비례한다면 0x75는 원래 값의 83%다. 원래가 1600이면 1328 Mbps, 24 MHz × 141 / 2로 계산한 1692면 1404 Mbps다. DT의 1600은 그대로 두었다. 수신은 1600 설정과 1400 설정 모두에서 CRC 0이었다.
 
 **웹 서비스(측정).**
@@ -2940,3 +2941,44 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
   - 분류기가 이벤트를 놓친다(`act_lost`, 한 실행에 3,400만 개). 사람이 움직이거나 화면이 흔들릴 때다.
   - 다시 시작할 때 가짜 판정이 한 번 남는다.
   - USB 네트워크가 안 된다.
+
+### 11.46 D-PHY PLL 다시 보기: 19비트 해석, 진단 코드, 시험 준비 (2026-11-11~12)
+
+사용자 요청(붙여 넣은 지시): main의 `docs/DVS_PLL_MINSU_KARIM_REVIEW_2026-11-10.md`를 먼저 읽는다. 센서 드라이버, setfile, PLL, CSI 수신 설정, 디코더를 검토한다. PLL 레지스터 다시 읽기와 진단을 먼저 만든다. 지금 동작하는 설정은 그대로 두고 00/8B/B0과 00/8B/F8 시험을 준비한다. CRC, 프레임 완전성, 버퍼 손실, 타임스탬프 연속성을 확인한다. 0x75를 검증된 설정으로 다루지 않는다. FACT/CAUSE/EVIDENCE/NEXT로 보고하고, 확인한 변경과 시험 문서를 GitHub에 커밋한다.
+
+계획, 해석 표, 판정 기준, 결과 표는 [DVS-PLL-TESTS.md](DVS-PLL-TESTS.md)에 모았다. 여기에는 경과만 적는다.
+
+**확인한 것.**
+- 0x30A5~A7을 19비트 단어(P [18:13], M [12:3], S [2:0], Minsu 보고)로 보았다. 11.29 sweep에서 0x68~0x7C는 P=3, 0x80~0x8D는 P=4다. 그래서 11.29의 "M만 바꿨다"와 "0x75는 83%, 1328/1404 Mbps"는 틀렸다(11.29에 정정 줄을 넣었다).
+- 00/75/00은 공식값 24×672/3 = 5376 Mbps다. 데이터시트 REV0.01의 output PLL VCO 1250~2500 MHz 밖이다. 실제 lane 속도는 모른다. 0x75는 실험값이다.
+- 데이터시트 REV0.01:
+  - 식은 `PLL_CLK = MCLK × M / (P × 2^S)`다.
+  - S에 대해서는 "not controllable and equals 0"이라고 쓰면서, 표 11에는 S 범위가 있다.
+  - Fref는 6~12 MHz, D-PHY는 lane당 2.5 Gbps, PLL lock은 표준 200·최대 1000이다.
+  - 0x30A5~A7 주소, lock·상태 레지스터는 없다(UNKNOWN).
+- MCLK: SoC가 주지 않는다(11.19). 24 MHz는 11.23의 계산 결론이다. 측정하지 않았다.
+- 0x75 녹화 42개(273초)를 새 검사기 `tools/host/dvslink.py`로 봤다.
+  - 모르는 워드 0, sub 범위 오류 0이다.
+  - scan 단계 272,857개 중 4,427개(1.62%)가 scan 하나를 건너뛰었다. 2개 이상 건너뛴 곳은 없다.
+  - frame_end 번호는 2,702번 하나씩 건너뛰었다.
+  - 시간이 거꾸로 간 곳 12개는 모두 비트 하나 차이다(ref 워드를 잃은 것과 구분 못 함).
+  - 녹화 하나에서 scan을 건너뛴 구간의 줄 경계는 6~7개(정상 4~5개)였다. 가설: CRC 없이 패킷 2~3개가 빠진다. 녹화에는 버퍼 경계가 남지 않아 어디서 빠지는지는 모른다.
+- live(0x75): CRC 0, 버퍼 35/s, coverage 99~100%. 관찰 실행 `plltest.py setfile 0 600 --observe`(philip, 16:11 UTC부터 10시간, 이전 lib이라 CRC·버퍼·coverage만 잰다).
+
+**만든 것(저장소).**
+- `tools/host/dvslink.py`: 녹화(`.gz`, `.bin`)와 VC0 raw 버퍼를 검사한다. 워드 종류, 모르는 워드, 타임스탬프 단계(다음/1개 빠짐/2개 빠짐/틈/반복/뒤로/비트 하나), frame_end 번호 연속, 줄 채움을 본다. 자체 시험 통과.
+- `tools/board/plltest.py`: 시험 한 번 실행기다(파라미터 → dvslive 재시작 → `/stats` 기록 → 판정 → 되돌리기). 자체 시험 통과. 보드에서는 `--observe`만 실행했다.
+- 작업 트리에만 있는 것(빌드나 보드 설치 전, 커밋 안 함):
+  - CIS 모듈: `pll` 파라미터(이름 4개), mode change·stream on 뒤 0x30A5~A7 다시 읽기(dmesg, `pll_live`)
+  - `dvsview.c`: `/stats`에 `link` 계수기
+  - `dvsctl.py`: `/stats`에 `pll`과 V4L2 sequence. 단위 시험 4개 통과
+  - `ov5647-cap.py`: VC0 버퍼 V4L2 sequence 세기
+  - setA.h: 0x75 실험값 주석. 값은 그대로다
+
+**막힌 것.**
+- Docker Desktop이 꺼져 있다. `open -a Docker`와 `open /Applications/Docker.app`로도 켜지지 않았다. 그래서 모듈과 lib을 빌드하지 못했다.
+- 보드 root 경로가 없다. ACM 장치 노드는 Mac에 있지만 응답이 없고, 보드 UDC는 `not attached`다(11.31의 `e850-vbus` 경합 증상). sudo 비밀번호도 없다. UART도 빠져 있다.
+
+**보드에 바꾼 것.** `/var/tmp`에 `plltest.py`, `dvslink.py`, `dvslink-rec.tsv`, `plltest/baseline-observe-20261111/`을 두었다(모두 philip). 모듈, 서비스, 파라미터는 바꾸지 않았다.
+
+**다음.** DVS-PLL-TESTS.md 7장: 빌드 → PHY 표 확인 → 설치 → 기준선(0x75) → `recommended_00_8b_b0`, `alternative_00_8b_f8`(수신 DT 그대로와 맞춤) → 반복 → 1시간 → 24시간.
