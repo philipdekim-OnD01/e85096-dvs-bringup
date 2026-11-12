@@ -3057,6 +3057,8 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - 고친 `libdvsview.so`(c10b0382)를 넣고 한다. 이전 판은 `/usr/local/lib/libdvsview.so.prev-wrap`(db798ea1)이다.
 - 결과는 `/var/tmp/plltest/8-wifi-<프로파일>-<회>/`에 남고, 분석은 `python3 /var/tmp/stuckscan.py /var/tmp/plltest/8-wifi-*/stats.jsonl`로 한다.
 
+**이상 상태 자동 재시작(2026-11-12 23:43~23:56 KST, setfile, 강제 Wi-Fi 패닉 60초마다 10번).** `ov5647-cap.py`가 2초마다 `dvs_stats()`의 짧은 버퍼를 보고, 2초에 `--stuck`(기본 10)개 이상이면 `/dev/kmsg`에 남긴 뒤 자기에게 SIGTERM을 보낸다(dvsctl `/sensor`와 같은 경로). 그러면 스트림을 끄고 systemd가 3초 뒤 다시 띄운다. 시작 10초 동안은 판정하지 않는다. [확인] 10번 가운데 2번이 이상 상태가 됐다(14:49:17·14:53:17 UTC 패닉). 둘 다 3초 뒤 감지됐다(`stuck capture, 26 / 23 short buffers in 2 s`). 프레임은 패닉 10초·14초 뒤 다시 들어왔다. 다시 시작한 뒤 구간은 짧은 버퍼 0, 비트 고침 0, CRC 0이었다. 나머지 8번 중 1번은 짧은 버퍼 3개(기준 아래)였다. 전에는 이상 상태가 2분(시험 끝까지)~14분 갔다. [관찰] 첫 재시작은 스트림을 끈 뒤 프로세스가 SIGABRT로 끝났다(`code=killed, status=6/ABRT`). 두 번째는 정상 종료였다. 그 앞의 plltest 재시작들도 정상 종료였다. 어디서 abort했는지는 모른다(core 없음). systemd는 두 번 모두 다시 띄웠다. 원 자료: 보드 `/var/tmp/plltest/9-stuckfix-setfile*`.
+
 **다음.**
 1. 재현 시험 결과를 본다(패닉 뒤 이상 상태가 나는가, 프로파일에 따라 다른가).
 2. 고친 lib으로 70분 넘게 돌려 한 바퀴 때 `ts_bad`가 0인지 본다.

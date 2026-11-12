@@ -102,6 +102,7 @@
 | `/lib/modules/.../scsc_mx.ko`, `scsc_wlan.ko` | 2026-11-07 `mx_panic` 0600, system error log 크기 버그 수정(ee2b5944…, a02d408e…, 11.33). 이전: `/root/scsc_*.ko.prev-11.33` |
 | `/var/tmp/boxbench/boxes.jsonl` | 추가(11.35). 상자 측정 1차 시험 기록. 지워도 된다 |
 | `/lib/modules/.../is-cis-s5krc1s.ko`, `/usr/local/lib/libdvsview.so`, `/usr/local/share/dvsview/dvsctl.py` | **2026-11-12 11.46판**: CIS `pll` 파라미터와 `pll_live` 다시 읽기(182f06f0…), `/stats`의 `link` 계수기(db2b51bd…), `pll`(5ec64db2…). 이전: `/root/is-cis-s5krc1s.ko.prev-11.46`, `/usr/local/lib/libdvsview.so.prev-11.46`, `/root/dvsctl.py.prev-11.46` |
+| `/usr/local/bin/ov5647-cap.py` | **2026-11-12 23:43 KST**: 이상 상태가 되면 스트림을 다시 켠다(`--stuck`, md5 bcfde139, 11.46). 이전 판은 `/root/ov5647-cap.py.prev-stuck`(md5 03fdbff4)이다 |
 | `/usr/local/lib/libdvsview.so` | **2026-11-12 23:04 KST**: 22비트 기준값 한 바퀴를 처리한다(md5 c10b0382, 11.46). 이전 판은 `.prev-wrap`(md5 db798ea1, 11.46판)이다. `/var/tmp`에 `wifistuck.sh`, `stuckscan.py`, `stuck2/`(이상 상태 dmesg·녹화)를 추가했다 |
 | `/var/tmp/plltest.py`, `dvslink.py`, `pll-ab.sh`, `plltest/` | 추가(11.46). PLL 시험 실행기, 기록 검사기, A/B 묶음, 결과(Mac `~/e850-logs/plltest/`에 사본) |
 | `/usr/local/bin/ov5647-cap.py` | **2026-11-12 128줄 디코딩**(`dvs_ingest(buf, W × (H + 1))`, md5 `03fdbff4…`, 11.46). 이전: `/root/ov5647-cap.py.prev-11.46`(7d82fa17) |
@@ -161,6 +162,7 @@
      2. (끝남, 2026-11-12 07:51~17:51 KST) 00/8B/B0, 수신 1600, 10시간: CRC 0. Wi-Fi 패닉 직후 이상 구간 382초를 빼면 짧은 버퍼·scan 누락·frame_end 누락 0이었다. 타임스탬프 오류는 22비트 기준값 한 바퀴(약 4208초마다) 8번 × 64뿐이었다. `pass: false`는 이 두 가지 때문이다.
      3. (보드에 넣음, 23:04 KST) 기준값 한 바퀴를 처리하는 `libdvsview.so`(c10b0382). 이전 판은 `/usr/local/lib/libdvsview.so.prev-wrap`(db798ea1)이다. 보드에서 한 바퀴를 넘겨 확인하는 것은 아직 안 했다.
      4. **(끝남) Wi-Fi 패닉 재현 시험.** 강제 Wi-Fi 패닉 6번(프로파일마다 3번) 가운데 2번이 패닉 2초 안에 이상 상태가 됐다. 00/8B/B0에서 1/3(2회째, 23:12:49부터 시험이 끝날 때까지 120초), setfile(0x75)에서 1/3(1회째, 23:08:23부터 끝날 때까지 120초)이다. setfile 2회째는 패닉 직후 10초 표본 하나에 짧은 버퍼 1, 오류 4, 재시작 1만 있었다(이상 상태 아님). 패닉 전에는 6번 모두 이상이 없었다. 6번 모두 CRC 0이었다. **그래서 Wi-Fi 패닉이 이상 상태를 일으킨다(재현됨, 6번 중 2번). 0x75에서도 난다. PLL 설정 탓이 아니다.** 앞의 "00/8B/B0 2/2, 0x75 0/3"은 우연으로 본다. 원 자료: 보드 `/var/tmp/plltest/8-wifi-*`, Mac `~/e850-logs/plltest/8-wifi-*`. `mx_recovery_count` 6 → 12. 시험 방법: 2026-11-12 23:04 KST 시작, 약 23:35 끝. root `systemd-run --unit=wifistuck sh /var/tmp/wifistuck.sh 3`. 00/8B/B0과 setfile을 번갈아 4분씩 3회 돌리고, 매번 140초째에 Wi-Fi 패닉을 낸다. 지금까지 패닉 5번 가운데 00/8B/B0에서는 2/2가 이상 상태가 됐고, 0x75에서는 0/3이었다(11.46).
+     4a. (끝남, 2026-11-12 23:56 KST) live가 이상 상태를 알아채 스트림을 다시 켠다(`ov5647-cap.py --stuck 10`, 보드 설치). 강제 패닉 10번 중 2번이 이상 상태가 됐고, 둘 다 10~14초 만에 정상으로 돌아왔다. 첫 재시작의 종료는 SIGABRT였다(원인 모름, 11.46).
      5. **Mac 재시동 뒤 이어서 하기:**
         - Mac 쪽: `~/claude-transcript-backup` rsync를 다시 켠다(`nohup sh -c 'while :; do /usr/bin/rsync -a ~/.claude/projects/ ~/claude-transcript-backup/; sleep 300; done' &`). Docker Desktop은 빌드할 때만 켠다. USB는 Mac mini **앞쪽** 포트에 꽂는다.
         - 재현 시험이 끝났는지: `ssh philip@192.168.0.236 'systemctl is-active wifistuck; ls -d /var/tmp/plltest/8-wifi-*'`. 끝나면 inactive이고 디렉터리가 6개다.

@@ -14,8 +14,15 @@ K = ('short_bufs', 'ts_bad', 'ts_restarts', 'ts_fixed', 'ts_missed', 'ts_miss', 
 
 
 def scan(rows):
-    eps, wraps, cur = [], [], None
+    eps, wraps, restarts, cur = [], [], [], None
+    rows = [r for r in rows if (r.get('st') or {}).get('link')]   # no /stats while live starts again
     for a, b in zip(rows, rows[1:]):
+        if a.get('pid') != b.get('pid'):       # live started again: its counters start over
+            restarts.append(b['t'])
+            if cur:
+                eps.append(cur)
+                cur = None
+            continue
         d = {k: b['st']['link'][k] - a['st']['link'][k] for k in K}
         d['crc'] = b['crc'] - a['crc']
         if d['short_bufs'] > 0 or d['ts_fixed'] > 0:
@@ -32,17 +39,18 @@ def scan(rows):
             wraps.append(b['t'])
     if cur:
         eps.append(cur)
-    return eps, wraps
+    return eps, wraps, restarts
 
 
 def selftest():
     def row(t, short=0, bad=0, rs=0, fix=0):
         return {'t': t, 'crc': 0, 'st': {'link': dict(dict.fromkeys(K, 0), short_bufs=short, ts_bad=bad,
                                                        ts_restarts=rs, ts_fixed=fix)}}
-    rows = [row(0), row(10, bad=64, rs=1), row(20, 5, 64 + 30, 2, 9), row(30, 9, 64 + 60, 3, 20), row(40, 9, 124, 3, 20)]
-    eps, wraps = scan(rows)
+    rows = [row(0), row(10, bad=64, rs=1), row(20, 5, 64 + 30, 2, 9), row(30, 9, 64 + 60, 3, 20), row(40, 9, 124, 3, 20),
+            dict(row(50), pid='2'), dict(row(60), pid='2')]
+    eps, wraps, restarts = scan(rows)
     assert wraps == [10] and len(eps) == 1 and eps[0]['start'] == 10 and eps[0]['end'] == 30, (eps, wraps)
-    assert eps[0]['short_bufs'] == 9 and eps[0]['ts_fixed'] == 20, eps
+    assert eps[0]['short_bufs'] == 9 and eps[0]['ts_fixed'] == 20 and restarts == [50], (eps, restarts)
 
 
 def main():
@@ -50,12 +58,13 @@ def main():
     kst = lambda t: time.strftime('%H:%M:%S', time.gmtime(t + 9 * 3600))
     for p in sys.argv[1:]:
         rows = [json.loads(l) for l in open(p)]
-        eps, wraps = scan(rows)
+        eps, wraps, restarts = scan(rows)
         pf = os.path.dirname(os.path.abspath(p)) + '.panic'
         panic = float(open(pf).read()) if os.path.exists(pf) else None
         crc = rows[-1]['crc'] - rows[0]['crc']
-        print('%s: %.2f h, crc %d, wraps %d%s' % (p, (rows[-1]['t'] - rows[0]['t']) / 3600, crc, len(wraps),
-                                                  ', panic %s KST' % kst(panic) if panic else ''))
+        print('%s: %.2f h, crc %d, wraps %d, live restarts %s%s' % (
+            p, (rows[-1]['t'] - rows[0]['t']) / 3600, crc, len(wraps), [kst(t) for t in restarts],
+            ', panic %s KST' % kst(panic) if panic else ''))
         for e in eps:
             near = panic is not None and -10 <= e['start'] - panic <= 30
             print('  stuck %s-%s KST (%.0f s)%s %s' % (kst(e['start']), kst(e['end']), e['end'] - e['start'],

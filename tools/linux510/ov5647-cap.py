@@ -35,6 +35,7 @@ import argparse
 import atexit
 import ctypes
 import fcntl
+import json
 import mmap
 import os
 import select
@@ -96,6 +97,8 @@ ap.add_argument('--box-window', type=int, default=5000, help='--boxes: us of eve
 ap.add_argument('--ctl', type=int, default=0, help='--live --raw8: serve the display settings page on this port')
 ap.add_argument('--act', help='--live --raw8: append person action changes to this file (JSON lines)')
 ap.add_argument('--act-model', help='--act: the ONNX model (tools/host/act/export.py)')
+ap.add_argument('--stuck', type=int, default=10,
+                help='--live --raw8: this many short buffers in one 2 s stats window restarts the stream (0: off)')
 a = ap.parse_args()
 PIX_FMT, PIX_BITS = (PIX_FMT_SBGGR8, 8) if a.raw8 else (PIX_FMT_SBGGR10, 10)
 
@@ -306,6 +309,29 @@ class DvsLive:
             sys.path.append('/usr/local/share/dvsview')
             import dvsact
             dvsact.start(self.lib, a.act, a.act_model)
+        self.lib.dvs_stats.restype = ctypes.c_char_p
+        self.next_check = time.monotonic() + 10        # no verdict in the first 10 s
+        self.short = None
+
+    def check(self):
+        """A Wi-Fi firmware panic can leave the CSIS buffer bookkeeping one slot off for minutes: short buffers,
+        contents of the ring's last turn (11.46, 2 of 6 forced panics). Then SIGTERM ourselves like dvsctl's
+        /sensor: stream off here, systemd starts dvslive again, a new stream on is in step."""
+        now = time.monotonic()
+        if not a.stuck or now < self.next_check:
+            return
+        self.next_check = now + 2
+        n = json.loads(self.lib.dvs_stats()).get('link', {}).get('short_bufs')
+        if n is not None and self.short is not None and n - self.short >= a.stuck:
+            msg = 'dvslive: stuck capture, %d short buffers in 2 s: restarting the stream' % (n - self.short)
+            log(msg)
+            try:                                # /tmp/dvslive.log starts over with the next process
+                with open('/dev/kmsg', 'w') as k:
+                    k.write(msg + '\n')
+            except OSError:
+                pass
+            os.kill(os.getpid(), signal.SIGTERM)
+        self.short = n
 
     def show(self, buf):
         p = ctypes.c_char.from_buffer(buf)      # the dma-buf mmap itself: C decodes and zeroes it in place
@@ -347,6 +373,8 @@ try:
                 saved += 1
                 last = time.time()
                 vc0.qbuf(idx)
+                if a.raw8:
+                    live.check()
                 continue
             data = vc0.bufs[idx][0][1][:]           # whole allocation (2x the plane) to see overruns
             name = '%s_%d.raw' % (a.o, saved)
