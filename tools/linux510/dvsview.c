@@ -218,10 +218,12 @@ static int64_t now_us(void)
  * decode() drops the events until a good one; so is a corrected one inside a bad stretch, or a reference that is
  * off would keep the stretch going. 4 in a row forward are a real gap (> 100 ms), 64 others (~2 buffers) a counter
  * reset. The display clock steps one scan over a gap: a lost buffer (30-60 ms, ~0.6/s in 11.28) is then a repeated
- * frame instead of a black one. */
+ * frame instead of a black one. The 22-bit ms reference wraps every 4194.304 s: steps are taken modulo that (11.46,
+ * 64 bad and a restart at the wrap before). */
+#define TS_WRAP (1000LL << 22)
 static void timestamp(int64_t raw)
 {
-	int64_t dt = raw - S.raw;
+	int64_t dt = ((raw - S.raw) % TS_WRAP + TS_WRAP + TS_WRAP / 2) % TS_WRAP - TS_WRAP / 2;
 	int fixed = 0, scan, first = S.lk_first_ts;
 
 	if (!S.have_ts) {
@@ -1499,6 +1501,10 @@ int main(int argc, char **argv)
 	feed((const uint32_t[]){ 0x0800006f, 0x088001ad }, 2);	/* ref 111: a 5 ms gap, one 1 ms scan on the display */
 	if (S.t != 23969)
 		return fprintf(stderr, "gap at a 1 ms scan: t %lld\n", (long long)S.t), 1;
+	reset();						/* the reference wraps: ref 2^22 - 1 to ref 0 is +1 ms */
+	feed((const uint32_t[]){ 0x083fffff, 0x088001ad, 0x08000000, 0x088001ad }, 4);
+	if (S.t != 1000)
+		return fprintf(stderr, "reference wrap: t %lld\n", (long long)S.t), 1;
 	{	/* link counters, 1 ms scans: 3 lines, the last empty; a scan missing (2 ms step), one word of no type,
 		 * frame numbers 7 8 10 */
 		static uint32_t b[3 * LINE / 4];

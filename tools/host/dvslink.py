@@ -53,7 +53,8 @@ def timestamps(w, k):
 
 
 def ts_steps(t):
-    dt = np.diff(t)
+    w = 1000 << 22                       # the 22-bit ms reference wraps every 4194.304 s (11.46)
+    dt = (np.diff(t) + w // 2) % w - w // 2
     ok = (dt > 0) & (dt < 100000)
     if not ok.any():
         return {'n': int(dt.size)}

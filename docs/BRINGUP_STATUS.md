@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-12 08:00 KST)
+# E850-96 bring-up 현재 상태 (2026-11-12 10:20 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -159,12 +159,14 @@
      1. (끝남, 11.46) 빌드·설치, PHY 설정 확인, 첫 A/B(각 10분). 모두 CRC 0, 00/8B/B0의 scan 누락이 가장 적었다(0.92%).
      2. (끝남) 버퍼 경계 누락의 원인은 디코더가 128번째 줄을 버린 것이었다. 고친 뒤 10분 통과(11.46).
      3. **진행 중:** 고친 디코더로 00/8B/B0, 수신 DT 1600, **10시간**(사용자 지시). 2026-11-12 07:51 KST 시작, 약 17:53 KST 끝. root `systemd-run --unit=plltest-10h-b`, 결과 `/var/tmp/plltest/7-8bb0-rx0-10h-line128/`. 끝나면 `setfile`로 자동으로 돌아온다. 첫 시도(`5-8bb0-rx0-10h`, 고치기 전 디코더)는 이상 상태로 14분에 멈췄다(11.46).
+        - 2.34시간까지 CRC 0, scan·frame_end 누락 0, 짧은 버퍼 0이다. 09:01과 10:11 KST에 `ts_bad` +64, `ts_restarts` +1이 났다. 22비트 ms 기준값이 약 70분마다 한 바퀴 도는 것으로 본다(근거 강함, 11.46). 지금 보드 lib은 이것을 고치지 못한다. 다음 예측은 11:21:23~53 KST다. 이 모양(64 + 1, 다른 값 0)은 이상 상태가 아니다.
+        - 고친 디코더(`dvsview.c` 2²² ms 접기, 자체 시험 통과)는 보드에 아직 넣지 않았다. 10시간 시험이 끝나면 넣는다.
      4. **Mac 재시동 뒤 이어서 하기:**
         - Mac 쪽: Docker Desktop을 켠다(빌드할 때만). `~/claude-transcript-backup` rsync를 다시 켠다. UART를 꽂았으면 `uartlog.py`를 띄운다. USB는 Mac mini **앞쪽** 포트에 꽂는다(2026-11-12 사용자가 앞쪽에 다시 꽂은 뒤 ACM이 돌아왔다).
         - 진행 확인: `ssh philip@192.168.0.236 'systemctl is-active plltest-10h-b; wc -l < /var/tmp/plltest/7-8bb0-rx0-10h-line128/stats.jsonl'`. 10초에 한 줄이고, 10시간이면 약 3,600줄이다.
         - 중간 점검: `stats.jsonl`의 첫 줄과 마지막 줄 `link` 차이로 `ts_fixed`, `ts_bad`, `short_bufs`, `ts_missed`를 본다. 0이 아니면 이상 상태가 다시 난 것이다. 그때는 시각과 `dmesg | grep -E 'overlapped|DMA off|no frame'`를 남긴다.
         - 끝난 뒤: `summary.json`을 DVS-PLL-TESTS.md 8장, BOOT.md 11.46, 이 표에 적는다. `ssh … 'cd /var/tmp && tar czf - plltest' | tar xzf - -C ~/e850-logs/`로 받는다.
-     5. 그다음: 고친 디코더로 0x75와 00/8B/B0을 번갈아 10분씩 두 번 비교한다. 그다음 24시간 시험을 한다. 기본 setfile(0x75)은 그 결과를 보고 사용자와 정한다.
+     5. 그다음: 고친 `libdvsview.so`를 넣는다(이전 판은 `/usr/local/lib/libdvsview.so.prev-11.46`처럼 남긴다). 70분 넘게 돌려 한 바퀴 때 `ts_bad`가 0인지 본다. 그 뒤 고친 디코더로 0x75와 00/8B/B0을 번갈아 10분씩 두 번 비교한다. 그다음 24시간 시험을 한다. 기본 setfile(0x75)은 그 결과를 보고 사용자와 정한다.
 
 ## 4. 사용자 결정 대기
 
