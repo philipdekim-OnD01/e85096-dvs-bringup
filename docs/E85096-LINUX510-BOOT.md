@@ -3126,7 +3126,18 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - `/vendor/etc/wifi`: Linaro A13 판(위)이다. 재부팅해도 남는다(rootfs). 옛 판은 `/var/tmp/wifi-a10-vendor`에 있고, 넣을 때 쓴 `/var/tmp/wifi-a13.tgz`, `/var/tmp/wifi-fwswap.sh`도 보드에 있다.
 - Wi-Fi 절전: 00:12~00:47 KST에 off였다가 지금은 on(기본값)이다. `wifi-pskeep` unit은 멈췄다(`/var/tmp/wifi-pskeep.sh`, `/var/tmp/wifi-ps.log`는 남겼다).
 - `/var/tmp/stuck2/panicrec.txt`: 부팅 뒤 모든 R4 기록. root `journalctl -k`에서 뽑았다.
-- 새 rootfs를 만들 때: `build-rootfs.sh`에는 Wi-Fi 펌웨어가 없다. `wifi-fw-extract.sh`는 2019년 판을 꺼낸다. 새 판은 `wifi-fw-linaro.py`로 받은 tgz를 `/vendor/etc/wifi`에 풀어서 넣는다.
+- `/usr/local/bin/e850-wifi.sh`: 펌웨어 출처 주석만 고쳤다(md5 22c43270). 이전 판은 `/root/e850-wifi.sh.prev-11.47`(47489536)이다. `/var/tmp/wifi-fwswap.sh`도 저장소 판(7cc10009)으로 맞췄다.
+
+**rootfs 빌드에 Wi-Fi를 넣었다(01:15 KST).** 지금까지 `build-rootfs.sh`에는 Wi-Fi가 아예 없었다. 펌웨어도 패키지도 `e850-wifi`도 없어서, 보드에는 10장과 11.31에서 손으로 넣었다. 그래서 rootfs를 새로 만들면 Wi-Fi가 없어지거나, 2019년 펌웨어(`wifi-fw-extract.sh`)를 다시 넣게 된다. 고친 것은 다음과 같다.
+- debootstrap에 `wpasupplicant`, `iw`, `wireless-regdb`를 넣는다.
+- `e850-wifi.sh`, `e850-wifi.service`를 설치하고 서비스를 enable한다. 서비스는 `e850-wifi.sh SSID PASSWORD`로 네트워크를 저장한 뒤에만 돈다(`ConditionPathExists`). 비밀번호는 이미지에 넣지 않는다.
+- `/lib/firmware`를 만들고, `/lib/etc/wifi`를 `/vendor/etc/wifi`로 링크한다.
+- `out/wifi-a13.tgz`(`wifi-fw-linaro.py`로 받은 것)가 있으면 `/vendor/etc/wifi`에 푼다. 없으면 경고를 낸다.
+- `wifi-fw-extract.sh`와 `e850-wifi.sh` 머리 주석에 새 판을 쓰라고 적었다.
+- [확인] Docker로 실제 빌드했다. 빌드는 성공했고(`wifi firmware: S612_E3830_R4-1_Y23W13A`, `rootfs.simg` 432 MB), 이미지를 `simg2img`와 `debugfs`로 열어 보았다.
+  - 들어 있는 것: `wpa_supplicant`, `iw`, `wpa_passphrase`, `regulatory.db`, `e850-wifi.sh`(0755), `e850-wifi.service`(multi-user에 enable됨), `/lib/etc/wifi` → `/vendor/etc/wifi`.
+  - 펌웨어: `mx140.bin` md5 792565d8(root 소유), `slsi_reg_database.bin` 7556바이트, `wlan.hcf`, `log-strings.bin`.
+- [미확인] 이 이미지로 부팅해 보지는 않았다. `userdata`에 구우면 지금 보드의 rootfs가 지워지므로 굽지 않았다.
 
 **다음.**
 1. 2026-11-14 00:47 KST에 `mx_recovery_count`와 커널 로그를 본다(위 명령).

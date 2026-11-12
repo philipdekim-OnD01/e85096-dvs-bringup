@@ -6,7 +6,7 @@
 #                                    start wpa_supplicant@wlan0 and DHCP (systemd-networkd)
 #   e850-wifi.sh up                  driver + wlan0 up, rejoin the saved network (used at boot by
 #                                    e850-wifi.service)
-# Firmware: /vendor/etc/wifi (from the Android vendor image, tools/linux510/wifi-fw-extract.sh).
+# Firmware: /vendor/etc/wifi (Linaro Android 13 set, tools/linux510/wifi-fw-linaro.py, docs 11.47).
 # The driver asks request_firmware() for "../etc/wifi/mx140.bin", i.e. /lib/firmware/../etc/wifi,
 # so /lib/firmware must exist and /lib/etc/wifi points at /vendor/etc/wifi.
 set -e

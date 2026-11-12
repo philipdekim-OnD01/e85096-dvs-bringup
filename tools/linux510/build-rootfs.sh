@@ -6,6 +6,8 @@
 #       ubuntu:22.04 sh /t/build-rootfs.sh
 #
 # Output: /out/rootfs.simg  -> fastboot flash userdata rootfs.simg   (userdata = mmcblk0p24)
+# Wi-Fi firmware: /out/wifi-a13.tgz from `python3 tools/linux510/wifi-fw-linaro.py out/wifi-a13.tgz` (docs 11.47);
+#         without it the image has no Wi-Fi firmware. Then on the board: e850-wifi.sh SSID PASSWORD (once).
 # Login : USB serial (Mac: /dev/cu.usbmodem*) logs in as root automatically;
 #         ssh e850@192.168.7.1 over the USB network; user "e850", password "e850".
 set -eu
@@ -17,7 +19,7 @@ apt-get -qq install -y debootstrap e2fsprogs android-sdk-libsparse-utils binutil
 
 rm -rf $R
 debootstrap --arch=arm64 --variant=minbase \
-    --include=systemd-sysv,udev,kmod,iproute2,iputils-ping,procps,less,nano,sudo,openssh-server,i2c-tools,v4l-utils,python3,python3-numpy,ca-certificates,dbus \
+    --include=systemd-sysv,udev,kmod,iproute2,iputils-ping,procps,less,nano,sudo,openssh-server,i2c-tools,v4l-utils,python3,python3-numpy,ca-certificates,dbus,wpasupplicant,iw,wireless-regdb \
     bookworm $R http://deb.debian.org/debian
 
 echo e850-96 > $R/etc/hostname
@@ -74,6 +76,20 @@ install -m 755 /t/ov5647-cap.py $R/usr/local/bin/ov5647-cap.py
 install -m 755 /t/raw10-view.py $R/usr/local/bin/raw10-view.py
 install -m 644 /t/e850-hdmi.service $R/etc/systemd/system/e850-hdmi.service
 chroot $R systemctl enable e850-hdmi.service
+
+# Wi-Fi (docs 10, 11.31, 11.47): the driver loads ../etc/wifi/* from /lib/firmware, i.e. /lib/etc/wifi -> /vendor/etc/wifi.
+# e850-wifi.service only runs once `e850-wifi.sh SSID PASSWORD` has saved a network.
+install -m 755 /t/e850-wifi.sh $R/usr/local/bin/e850-wifi.sh
+install -m 644 /t/e850-wifi.service $R/etc/systemd/system/e850-wifi.service
+chroot $R systemctl enable e850-wifi.service
+mkdir -p $R/vendor/etc/wifi $R/lib/firmware $R/lib/etc
+ln -sfn /vendor/etc/wifi $R/lib/etc/wifi
+if [ -f /out/wifi-a13.tgz ]; then
+    tar xzf /out/wifi-a13.tgz --no-same-owner -C $R/vendor/etc/wifi
+    echo "wifi firmware: $(strings $R/vendor/etc/wifi/mx140.bin | grep -m1 -o 'S612_E3830_[A-Z0-9_-]*')"
+else
+    echo "WARNING: no /out/wifi-a13.tgz, the image has no Wi-Fi firmware"
+fi
 
 # Student account
 chroot $R useradd -m -s /bin/bash -G sudo,video,i2c e850 2>/dev/null || chroot $R useradd -m -s /bin/bash -G sudo,video e850

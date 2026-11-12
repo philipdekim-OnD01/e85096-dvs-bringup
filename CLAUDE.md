@@ -56,7 +56,8 @@ docker run --rm -v ~/e850-a13-build:/work -v e850-out:/work/out -v ~/e850-logs:/
 docker run --rm -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v <out>:/out \
     -v ~/Desktop/E850_Android10_backup_20261031:/b:ro ubuntu:22.04 sh /t/build-bootimg.sh root=PARTLABEL=userdata
 
-# rootfs (출력: out/rootfs.simg → fastboot flash userdata)
+# rootfs (출력: out/rootfs.simg → fastboot flash userdata). Wi-Fi 펌웨어(Linaro A13 판, 11.47)를 먼저 받아 둔다:
+python3 tools/linux510/wifi-fw-linaro.py out/wifi-a13.tgz
 docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v "$PWD/out:/out" \
     ubuntu:22.04 sh /t/build-rootfs.sh
 ```

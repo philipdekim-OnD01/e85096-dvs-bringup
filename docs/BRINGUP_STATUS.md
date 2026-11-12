@@ -106,7 +106,8 @@
 | `/usr/local/lib/libdvsview.so` | **2026-11-12 23:04 KST**: 22비트 기준값 한 바퀴를 처리한다(md5 c10b0382, 11.46). 이전 판은 `.prev-wrap`(md5 db798ea1, 11.46판)이다. `/var/tmp`에 `wifistuck.sh`, `stuckscan.py`, `stuck2/`(이상 상태 dmesg·녹화)를 추가했다 |
 | `/var/tmp/plltest.py`, `dvslink.py`, `pll-ab.sh`, `plltest/` | 추가(11.46). PLL 시험 실행기, 기록 검사기, A/B 묶음, 결과(Mac `~/e850-logs/plltest/`에 사본) |
 | `/usr/local/bin/ov5647-cap.py` | **2026-11-12 128줄 디코딩**(`dvs_ingest(buf, W × (H + 1))`, md5 `03fdbff4…`, 11.46). 이전: `/root/ov5647-cap.py.prev-11.46`(7d82fa17) |
-| `/vendor/etc/wifi` | **2026-11-13 00:47 KST**: Linaro A13 WLBT 펌웨어(`mx140.bin` md5 792565d8, `S612_E3830_R4-1_Y23W13A`, 규제 DB `regulatory_db_2_7`, 11.47). 이전(Android 10) 판은 `/var/tmp/wifi-a10-vendor`에 있다. 되돌리기는 root `sh /var/tmp/wifi-fwswap.sh a10`이다. 받기는 `tools/linux510/wifi-fw-linaro.py`다. 이 디렉터리는 `build-rootfs.sh`에 없으니 새 rootfs에는 따로 넣는다 |
+| `/vendor/etc/wifi` | **2026-11-13 00:47 KST**: Linaro A13 WLBT 펌웨어(`mx140.bin` md5 792565d8, `S612_E3830_R4-1_Y23W13A`, 규제 DB `regulatory_db_2_7`, 11.47). 이전(Android 10) 판은 `/var/tmp/wifi-a10-vendor`에 있다. 되돌리기는 root `sh /var/tmp/wifi-fwswap.sh a10`이다. 받기는 `tools/linux510/wifi-fw-linaro.py`다. 01:15 KST부터는 `build-rootfs.sh`가 `out/wifi-a13.tgz`를 넣고, Wi-Fi 패키지와 `e850-wifi`도 넣는다(11.47) |
+| `/usr/local/bin/e850-wifi.sh` | 2026-11-13 펌웨어 출처 주석만 고침(22c43270, 11.47). 이전: `/root/e850-wifi.sh.prev-11.47`(47489536) |
 | `/etc/sysctl.d/90-e850-autoreboot.conf` | 추가(11.22). `softlockup_panic=1`, `panic=5` |
 | `/root/csis-irqstat.ko` | 추가(11.22). kretprobe IRQ 계수기, 캡처 전에 insmod하고 끝나면 rmmod |
 | `/usr/local/bin/dvscap.sh` | 추가(11.23). devfreq 최대 + 캡처 + IRQ 계수 |

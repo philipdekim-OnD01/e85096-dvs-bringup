@@ -1,5 +1,7 @@
 #!/bin/sh
 # Pull the Maxwell (SCSC) Wi-Fi firmware out of the Android 10 backup:
+# (the 2019 S612_E3830_C4_Y19W51A build, which takes Data Aborts every few hours with this driver;
+#  use the newer Linaro Android 13 set instead: wifi-fw-linaro.py, docs 11.47)
 #   super (mmcblk0p12) -> vendor -> /etc/wifi  ==>  wifi-fw.tgz  (vendor/etc/wifi/...)
 #
 #   sh tools/linux510/wifi-fw-extract.sh ~/Desktop/E850_Android10_backup_20261031 OUTDIR
