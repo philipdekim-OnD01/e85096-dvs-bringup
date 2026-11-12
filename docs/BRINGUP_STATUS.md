@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-12 10:45 KST)
+# E850-96 bring-up 현재 상태 (2026-11-12 23:10 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -102,6 +102,7 @@
 | `/lib/modules/.../scsc_mx.ko`, `scsc_wlan.ko` | 2026-11-07 `mx_panic` 0600, system error log 크기 버그 수정(ee2b5944…, a02d408e…, 11.33). 이전: `/root/scsc_*.ko.prev-11.33` |
 | `/var/tmp/boxbench/boxes.jsonl` | 추가(11.35). 상자 측정 1차 시험 기록. 지워도 된다 |
 | `/lib/modules/.../is-cis-s5krc1s.ko`, `/usr/local/lib/libdvsview.so`, `/usr/local/share/dvsview/dvsctl.py` | **2026-11-12 11.46판**: CIS `pll` 파라미터와 `pll_live` 다시 읽기(182f06f0…), `/stats`의 `link` 계수기(db2b51bd…), `pll`(5ec64db2…). 이전: `/root/is-cis-s5krc1s.ko.prev-11.46`, `/usr/local/lib/libdvsview.so.prev-11.46`, `/root/dvsctl.py.prev-11.46` |
+| `/usr/local/lib/libdvsview.so` | **2026-11-12 23:04 KST**: 22비트 기준값 한 바퀴를 처리한다(md5 c10b0382, 11.46). 이전 판은 `.prev-wrap`(md5 db798ea1, 11.46판)이다. `/var/tmp`에 `wifistuck.sh`, `stuckscan.py`, `stuck2/`(이상 상태 dmesg·녹화)를 추가했다 |
 | `/var/tmp/plltest.py`, `dvslink.py`, `pll-ab.sh`, `plltest/` | 추가(11.46). PLL 시험 실행기, 기록 검사기, A/B 묶음, 결과(Mac `~/e850-logs/plltest/`에 사본) |
 | `/usr/local/bin/ov5647-cap.py` | **2026-11-12 128줄 디코딩**(`dvs_ingest(buf, W × (H + 1))`, md5 `03fdbff4…`, 11.46). 이전: `/root/ov5647-cap.py.prev-11.46`(7d82fa17) |
 | `/etc/sysctl.d/90-e850-autoreboot.conf` | 추가(11.22). `softlockup_panic=1`, `panic=5` |
@@ -156,18 +157,21 @@
    - 계획, 판정 기준, 지금까지의 결과는 [DVS-PLL-TESTS.md](DVS-PLL-TESTS.md)에 있다. 배경은 main의 `DVS_PLL_MINSU_KARIM_REVIEW_2026-11-10.md`이다.
    - 0x75를 검증된 설정으로 다루지 않는다. 기본 setfile과 README는 E850 측정 결과가 나온 뒤에만 바꾼다.
    - 할 일:
-     1. (끝남, 11.46) 빌드·설치, PHY 설정 확인, 첫 A/B(각 10분). 모두 CRC 0, 00/8B/B0의 scan 누락이 가장 적었다(0.92%).
-     2. (끝남) 버퍼 경계 누락의 원인은 디코더가 128번째 줄을 버린 것이었다. 고친 뒤 10분 통과(11.46).
-     3. **진행 중:** 고친 디코더로 00/8B/B0, 수신 DT 1600, **10시간**(사용자 지시). 2026-11-12 07:51 KST 시작, 약 17:53 KST 끝. root `systemd-run --unit=plltest-10h-b`, 결과 `/var/tmp/plltest/7-8bb0-rx0-10h-line128/`. 끝나면 `setfile`로 자동으로 돌아온다. 첫 시도(`5-8bb0-rx0-10h`, 고치기 전 디코더)는 이상 상태로 14분에 멈췄다(11.46).
-        - 2.34시간까지 CRC 0, scan·frame_end 누락 0, 짧은 버퍼 0이다. 09:01과 10:11 KST에 `ts_bad` +64, `ts_restarts` +1이 났다. 22비트 ms 기준값이 약 70분마다 한 바퀴 도는 것으로 본다(근거 강함, 11.46). 지금 보드 lib은 이것을 고치지 못한다. 다음 예측은 11:21:23~53 KST다. 이 모양(64 + 1, 다른 값 0)은 이상 상태가 아니다.
-        - 고친 디코더(`dvsview.c` 2²² ms 접기, 자체 시험 통과)는 보드에 아직 넣지 않았다. 10시간 시험이 끝나면 넣는다.
-        - 10:18~10:24 KST에 이상 상태가 다시 났고(6분), 저절로 풀렸다. 첫 시도와 이번 모두 Wi-Fi 펌웨어 패닉 1초 안에 시작했다(2/2, 11.46). 버퍼에 VC0 고리 한 바퀴(188 ms) 전 내용이 섞인다. 가설은 CPU0에서 CSIS 인터럽트가 빠져 버퍼 대응이 어긋나는 것이다(확인 안 함). 자료는 보드 `/var/tmp/stuck2/`, Mac `~/e850-logs/stuck2/`에 있다.
-     4. **Mac 재시동 뒤 이어서 하기:**
-        - Mac 쪽: Docker Desktop을 켠다(빌드할 때만). `~/claude-transcript-backup` rsync를 다시 켠다. UART를 꽂았으면 `uartlog.py`를 띄운다. USB는 Mac mini **앞쪽** 포트에 꽂는다(2026-11-12 사용자가 앞쪽에 다시 꽂은 뒤 ACM이 돌아왔다).
-        - 진행 확인: `ssh philip@192.168.0.236 'systemctl is-active plltest-10h-b; wc -l < /var/tmp/plltest/7-8bb0-rx0-10h-line128/stats.jsonl'`. 10초에 한 줄이고, 10시간이면 약 3,600줄이다.
-        - 중간 점검: `stats.jsonl`의 첫 줄과 마지막 줄 `link` 차이로 `ts_fixed`, `ts_bad`, `short_bufs`, `ts_missed`를 본다. 0이 아니면 이상 상태가 다시 난 것이다. 그때는 시각과 `dmesg | grep -E 'overlapped|DMA off|no frame'`를 남긴다.
-        - 끝난 뒤: `summary.json`을 DVS-PLL-TESTS.md 8장, BOOT.md 11.46, 이 표에 적는다. `ssh … 'cd /var/tmp && tar czf - plltest' | tar xzf - -C ~/e850-logs/`로 받는다.
-     5. 그다음: 고친 `libdvsview.so`를 넣는다(이전 판은 `/usr/local/lib/libdvsview.so.prev-11.46`처럼 남긴다). 70분 넘게 돌려 한 바퀴 때 `ts_bad`가 0인지 본다. 그 뒤 고친 디코더로 0x75와 00/8B/B0을 번갈아 10분씩 두 번 비교한다. 그다음 24시간 시험을 한다. 기본 setfile(0x75)은 그 결과를 보고 사용자와 정한다.
+     1. (끝남, 11.46) 빌드·설치, PHY 설정 확인, 첫 A/B(각 10분). 버퍼 경계 누락의 원인은 디코더가 128번째 줄을 버린 것이었다(고침).
+     2. (끝남, 2026-11-12 07:51~17:51 KST) 00/8B/B0, 수신 1600, 10시간: CRC 0. Wi-Fi 패닉 직후 이상 구간 382초를 빼면 짧은 버퍼·scan 누락·frame_end 누락 0이었다. 타임스탬프 오류는 22비트 기준값 한 바퀴(약 4208초마다) 8번 × 64뿐이었다. `pass: false`는 이 두 가지 때문이다.
+     3. (보드에 넣음, 23:04 KST) 기준값 한 바퀴를 처리하는 `libdvsview.so`(c10b0382). 이전 판은 `/usr/local/lib/libdvsview.so.prev-wrap`(db798ea1)이다. 보드에서 한 바퀴를 넘겨 확인하는 것은 아직 안 했다.
+     4. **진행 중: Wi-Fi 패닉 재현 시험.** 2026-11-12 23:04 KST 시작, 약 23:35 끝. root `systemd-run --unit=wifistuck sh /var/tmp/wifistuck.sh 3`. 00/8B/B0과 setfile을 번갈아 4분씩 3회 돌리고, 매번 140초째에 Wi-Fi 패닉을 낸다. 지금까지 패닉 5번 가운데 00/8B/B0에서는 2/2가 이상 상태가 됐고, 0x75에서는 0/3이었다(11.46).
+     5. **Mac 재시동 뒤 이어서 하기:**
+        - Mac 쪽: `~/claude-transcript-backup` rsync를 다시 켠다(`nohup sh -c 'while :; do /usr/bin/rsync -a ~/.claude/projects/ ~/claude-transcript-backup/; sleep 300; done' &`). Docker Desktop은 빌드할 때만 켠다. USB는 Mac mini **앞쪽** 포트에 꽂는다.
+        - 재현 시험이 끝났는지: `ssh philip@192.168.0.236 'systemctl is-active wifistuck; ls -d /var/tmp/plltest/8-wifi-*'`. 끝나면 inactive이고 디렉터리가 6개다.
+        - 결과: `ssh philip@192.168.0.236 'python3 /var/tmp/stuckscan.py /var/tmp/plltest/8-wifi-*/stats.jsonl'`. 프로파일마다 "AFTER PANIC"(패닉 30초 안에 이상 상태 시작)이 몇 번인지 본다. 패닉 시각은 `<디렉터리>.panic`에, `Took:`는 root `journalctl -k | grep Took:`로 본다.
+        - 받기: `ssh philip@192.168.0.236 'cd /var/tmp && tar czf - plltest/8-wifi-*' | tar xzf - -C ~/e850-logs/`.
+        - 기록: DVS-PLL-TESTS.md 0장·8장, BOOT.md 11.46 "재현 시험", 이 항목.
+     6. 그다음:
+        - 재현되면 CSIS 드라이버의 버퍼 처리를 본다(`is-device-csi_v4.c`의 `csi_dma_tag` 710행, `wq_csis_dma_vc0` 1109행, `csi_s_buffer` 2607행). live가 이상 상태를 알아채 스트림을 다시 켜는 방법도 함께 정한다.
+        - 고친 lib으로 70분 넘게 돌려 한 바퀴 때 `ts_bad`가 0인지 본다.
+        - 0x75와 00/8B/B0을 번갈아 10분씩 두 번 비교하고, 그다음 24시간 시험을 한다. 기본 setfile(0x75)은 그 결과를 보고 사용자와 정한다.
+        - git: 로컬 커밋이 push 전이다(사용자 확인 대기).
 
 ## 4. 사용자 결정 대기
 
