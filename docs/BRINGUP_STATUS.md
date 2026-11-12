@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-13 01:10 KST)
+# E850-96 bring-up 현재 상태 (2026-11-13 01:45 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -147,9 +147,9 @@
      - `/vendor/etc/wifi`를 Linaro Android 13 BSP 판으로 바꿨다(`S612_E3830_R4-1_Y23W13A`, 2023-03-27, 드라이버와 같은 세대). 출처는 GitLab `Linaro/96boards/e850-96/platform/vendor/samsung_slsi` 커밋 11e9c19a다.
      - [확인] 강제 패닉 한 번으로 올렸고, 8초 뒤 다시 연결됐다. 처리량은 61.9 Mbit/s였다.
      - 절전은 기본값(on)이다. 절전 끄기 시험(`wifi-pskeep`)은 바꾸기 전에 멈췄다.
-     - 판정: 이 동안 강제 패닉을 내지 않는다. `mx_recovery_count`가 23 그대로이면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `wlbt-panic.py`로 푼다. 기호는 `~/e850-logs/wifi/fw-a13/mx140/debug/common/`에 있다.
-     - 재부팅하면 `mx_recovery_count`가 0부터 다시 센다. 그때는 `journalctl -k -b -1`도 본다.
-     - [미확인] 부팅 때 나던 `Type mismatch`·`Failed to read regdb`가 없어졌는지는 다음 부팅 때 본다.
+     - 판정: 이 동안 강제 패닉을 내지 않는다. 01:31 KST에 재부팅해서 `mx_recovery_count`는 0부터 센다(그 전 44분은 0번). 이 값이 늘지 않으면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `wlbt-panic.py`로 푼다. 기호는 `~/e850-logs/wifi/fw-a13/mx140/debug/common/`에 있다.
+     - 또 재부팅하면 `journalctl -k -b -1`도 본다.
+     - [확인] 재부팅(01:31 KST)해 보니 부팅 때도 새 펌웨어가 올라와 다시 붙었다. 규제 DB를 읽게 됐다(`Regulatory Version: 2.7`, 예전에는 `Failed to read regdb`). `Type mismatch`는 그대로인데, HE·TWT·WPA3 MIB가 없다는 뜻이고 Android 기능 문자열에만 쓰여 해가 없다(11.47).
    - 11.31에서 한 것: 자동 복구 켬(강제 패닉 4번 모두 복구, 5.6~6.5초). 큰 송수신 약 1.1 GB, 재결합, roaming 11분 동안 재현 0번. 0x04는 펌웨어 내부 번호라 호스트 소스에 뜻이 없다.
    - 할 일:
      - 패닉이 났는지는 `mx_recovery_count`로 본다. 났으면 `journalctl -g 'WLBT FW PANIC|panic_record'`로 기록을 꺼낸다. 11.32부터 journal이 약 2주 남는다(추정).

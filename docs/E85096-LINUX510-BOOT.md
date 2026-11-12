@@ -3117,9 +3117,13 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
   - `common_sw.hcf` 없음(-2) 경고는 옛 펌웨어를 올릴 때도 똑같이 나왔다(가동 83774초).
   - `mx_recovery_count`는 22에서 23이 됐다(이번 강제 패닉).
 - [확인] 이번 강제 패닉으로 카메라 캡처가 다시 이상 상태가 됐다. live 자동 재시작이 처리했다(`dvslive: stuck capture, 10 short buffers in 2 s`, 가동 87006.28초). 이번에는 정상 종료였고(`Deactivated successfully`), 15:47:17 UTC에 다시 떴다. 11.46 시험의 2번에 이어 세 번째 재시작이다.
-- [미확인] 11.31의 `slsi_get_qsf_mib_data: Type mismatch`와 `Failed to read regdb freq_ranges`는 부팅할 때 나온다. 교체한 뒤에는 아직 부팅하지 않았다. 다음 부팅 때 `journalctl -k -b | grep -E 'Type mismatch|regdb'`로 본다.
+- [확인] **재부팅해서 부팅 경로를 확인했다(2026-11-13 01:31 KST, `systemctl reboot`, 46초 뒤 ssh).** UART 어댑터는 꽂혀 있지 않았다.
+  - 부팅할 때도 새 펌웨어가 올라왔다(`WLBT FW: …R4-1_Y23W13A`). `e850-wifi`가 같은 AP(5745 MHz)에 다시 붙었다. `mx_recovery_count`는 0이고, `e850-vbus`는 `after 0 ms`였다. dvslive는 CRC 0으로 돌았다.
+  - **규제 DB를 이제 읽는다.** `slsi_read_regulatory: Regulatory Version: 2.7 , Script Version: 2 , Number of Countries: 252`가 나온다. 앞 부팅(옛 판)에서는 `Failed to read regdb freq_ranges`였다.
+  - `slsi_qsf_extract_bool_data: Type mismatch for index: 0/1/2`는 그대로 나온다. 앞 부팅도 같았다. [확인, 소스] `qsfs.c`는 펌웨어에 HE(802.11ax)·TWT·WPA3 켜짐 여부를 MIB로 묻는다. 두 펌웨어 모두 값을 주지 않는다(type 4 = `SLSI_MIB_TYPE_NONE`). 그 값은 false로 남고, Android용 기능 문자열(`qsfs_feature_set`)에만 쓰인다. Wi-Fi 동작에는 상관이 없어서 고치지 않는다.
+  - `cfg80211: failed to load regulatory.db`(-2)는 커널 cfg80211 쪽 메시지다. 앞 부팅들에도 있었다. slsi 드라이버는 자기 DB(`slsi_reg_database.bin`)를 쓴다.
 - [가설] 저절로 나던 0x04 Data Abort(약 3.8시간에 1번)는 2019년 펌웨어와 A13 드라이버가 맞지 않거나 펌웨어 자체 버그 때문이다. 새 펌웨어가 그것을 없앤다고 본다. 측정하지 않았다.
-- 판정: 절전은 기본값(on)으로 두고 24시간(2026-11-14 00:47 KST까지) 강제 패닉 없이 둔다. 이 동안 `mx_recovery_count`가 23 그대로이면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `tools/host/wlbt-panic.py`로 R4 기록을 푼다. 이때 기호와 문자열은 새 펌웨어 것(`~/e850-logs/wifi/fw-a13/mx140/debug/common/`)을 쓴다. 확인 방법:
+- 판정: 절전은 기본값(on)으로 두고 24시간(2026-11-14 00:47 KST까지) 강제 패닉 없이 둔다. 교체(00:47)부터 재부팅(01:31)까지 44분 동안은 패닉이 0번이었다(23 그대로). 재부팅 뒤에는 0부터 센다. 이 동안 `mx_recovery_count`가 늘지 않으면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `tools/host/wlbt-panic.py`로 R4 기록을 푼다. 이때 기호와 문자열은 새 펌웨어 것(`~/e850-logs/wifi/fw-a13/mx140/debug/common/`)을 쓴다. 확인 방법:
   `ssh philip@192.168.0.236 'cat /proc/driver/mxman_ctrl0/mx_recovery_count'`, root `journalctl -k --since "2026-11-12 15:48" | grep -E "WLBT FW PANIC|r4_panic_record\[2\]"`.
 
 **보드에 바꾼 것.**
@@ -3141,5 +3145,5 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 
 **다음.**
 1. 2026-11-14 00:47 KST에 `mx_recovery_count`와 커널 로그를 본다(위 명령).
-2. 다음 부팅 때 regdb와 `Type mismatch` 줄을 본다.
+2. (끝남) 다음 부팅 때 regdb와 `Type mismatch` 줄을 본다. regdb는 고쳐졌다. `Type mismatch`는 해가 없다(위).
 3. 새 펌웨어에서도 패닉이 나면: 그 기록을 풀고, 절전 끄기를 다시 시험한다(`wifi-pskeep`). 그다음 대역 고정(2.4/5 GHz)을 시험한다.

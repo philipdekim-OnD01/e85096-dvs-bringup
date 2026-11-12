@@ -88,7 +88,7 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
 - **카메라:** `ov5647-cap.py`는 실행하는 동안 콘솔 printk를 끈다. 프레임마다 나오는 커널 메시지가 UART로 나가면 CSIS 인터럽트를 놓치기 때문이다.
 - **USB 호스트:** 꺼져 있어서 키보드·마우스가 없다. 데스크톱 환경은 보류했다(GPU 사용자 공간 드라이버 없음).
 - **포트:** nginx가 80번 포트를 쓴다. Apache를 올리기 전에 사용자와 포트를 정한다.
-- **Wi-Fi:** 펌웨어가 패닉하면(`WLBT FW PANIC`) 드라이버가 펌웨어를 다시 올리고 약 6초 뒤 다시 연결한다(11.31, `e850-wifi.sh`의 `disable_recovery_handling=0`). 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`로 본다. `mx_panic`은 읽기만 해도 펌웨어가 패닉하니 `cat`하지 않는다(11.33부터 root만 읽고 쓸 수 있다, 0600). 강제 패닉 반복 시험은 `tools/board/wifi-panicloop.sh N`(root, 보드 `/var/tmp/wifi-panicloop.sh`).
+- **Wi-Fi:** 펌웨어가 패닉하면(`WLBT FW PANIC`) 드라이버가 펌웨어를 다시 올리고 약 6초 뒤 다시 연결한다(11.31, `e850-wifi.sh`의 `disable_recovery_handling=0`). 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`로 본다. `mx_panic`은 읽기만 해도 펌웨어가 패닉하니 `cat`하지 않는다(11.33부터 root만 읽고 쓸 수 있다, 0600). 강제 패닉 반복 시험은 `tools/board/wifi-panicloop.sh N`(root, 보드 `/var/tmp/wifi-panicloop.sh`). 2026-11-13부터 펌웨어는 Linaro Android 13 판(`R4-1_Y23W13A`, 11.47)이다. 옛 2019년 판은 3.8시간마다 Data Abort가 났다. 되돌리기는 root로 `sh /var/tmp/wifi-fwswap.sh a10`.
 - **재부팅 뒤 ACM이 안 보일 때:** UDC가 `not attached`이고 UART에 `dwc3_otg_start_gadget does not have any gadget`이 있으면 `e850-vbus` 경합이다(11.31). 11.32부터 `e850-vbus`가 gadget을 기다린다(`dmesg`에 `VBUS on … after N ms`). 그래도 안 보이면 ssh에서 `sudo sh -c "rmmod e850_vbus; modprobe e850-vbus"`를 한다(비밀번호는 사용자에게 묻는다). 정상 상태에서는 ACM이 3초 안에 돌아왔다(11.32). 경합 상태에서는 시험하지 못했다. 안 되면 재부팅한다.
 - **ACM 셸에서 USB를 끊는 명령:** ACM 셸은 `serial-getty@ttyGS0.service` cgroup 안에 있다. ACM이 끊기면 systemd가 `setsid`로 띄운 자식까지 죽인다(11.32). 그런 명령은 ssh에서 하거나 `systemd-run`으로 띄운다.
 - **보드 `/tmp`:** 부팅 때 비워진다. 남길 파일은 `/var/tmp`에 둔다.
