@@ -3064,3 +3064,51 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 2. 고친 lib으로 70분 넘게 돌려 한 바퀴 때 `ts_bad`가 0인지 본다.
 3. 재현되면 CSIS 드라이버의 버퍼 처리를 더 보고, live가 이상 상태를 알아채 스트림을 다시 켜는 방법도 함께 정한다.
 4. 고친 디코더로 0x75와 00/8B/B0을 번갈아 10분씩 두 번 비교한다. 그다음 24시간 시험을 한다.
+
+### 11.47 Wi-Fi 펌웨어 패닉 0x04의 정체: 펌웨어 Data Abort(힙 할당기), 절전 끄기 시험 (2026-11-13)
+
+사용자 요청: "와이파이 문제 해결해". 11.46에서 Wi-Fi 펌웨어 패닉이 카메라 캡처를 어긋나게 한다는 것을 재현했다. 그쪽은 live 자동 재시작으로 막았다. 이번에는 패닉 자체를 본다.
+
+**펌웨어 기호를 찾았다(11.31 정정).** 11.31에서는 "펌웨어 기호 정보가 없다"고 적었다. 실제로는 보드 vendor에 있었다.
+- `/vendor/etc/wifi/mx140/debug/common/mx140.sym`(objdump 기호표, `nacho_s612/.../mx140.elf`)
+- `log-strings.bin`(펌웨어 로그·패닉 형식 문자열)
+- `mx140/debug/wlan/id.txt`(`2019-12-20 13:10 nachos612_core_hardmac_ram_gcc_integrated`, 올라가는 `mx140.bin`과 같은 빌드)
+- 사본은 Mac `~/e850-logs/wifi/fw/`에 있다. 부팅 로그상 올라가는 것은 `mx140.bin`과 `mx140/conf/wlan/wlan.hcf`·`wlan_sw.hcf`, `common.hcf`다. `mx140_t`(WlanLite)는 쓰지 않는다.
+
+**R4 기록(v2, 53워드) 읽기.** 드라이버(`fw_panic_record.c`)에 정의된 것은 [1] 길이, [51] sympathetic, [52]뿐이다.
+- [확인] **[2]는 `log-strings.bin` 안의 패닉 형식 문자열 위치다.**
+  - 강제 패닉은 `0x9beed` = `mxagent.c:252:CMN: SYSERR_SERVICE_MANAGEMENT/MXAGENT_FORCED_TERMINATION(0x%08x)`이고 인자 [3] = `070600f0`이다. 강제 패닉 16번 모두 같았다.
+  - **저절로 난 0x04 패닉 6번(가동 24148·34881·69882·76561·78475·82585초)은 모두 `0x9cb57` = `Data Abort`다.** 펌웨어가 잘못된 메모리 접근으로 예외를 냈다. 0x04는 "data abort" 종류 번호로 본다.
+- [관찰] 6번의 코드 주소 워드(`tools/host/wlbt-panic.py`로 기호 이름을 붙임):
+
+  | 워드 | 6번의 값 |
+  |---|---|
+  | [30] | 모두 `panic_dabrt_handler+0x2` |
+  | [43] | 모두 `undefined_instruction_handler` |
+  | [33] | `pfree_set_free_list_ptr+0x6`, `dplane_dpif_resource_topup_all_rx_pools+0x12`(2번), `pmalloc_debug_validate_free_list+0x32`, `bmsg_gbuf+0x30`, `mbulk_smapper_alloc+0x0` |
+  | [34] | `…0000003f`(SYS 모드, Thumb) |
+  | [21] | 모두 `common_heap_mem` 안(+0x38e0~+0x4b44) |
+  | [24] | 5번이 `xQueueGenericSend+0x3c`, 1번이 `ulTaskNotifyTake+0x24` |
+
+- [가설] [33]·[34]는 abort가 난 위치와 그때 상태(SYS 모드 태스크)로 본다. 그렇다면 abort는 늘 **메모리 할당·해제나 free list 검사, 수신 버퍼 풀 채우기** 안에서 난다. 펌웨어 힙(free list)이 깨져 있고, 할당기가 그 포인터를 따라가다 abort한다고 본다.
+  - 깨는 쪽은 모른다. 후보는 태스크 스택 넘침([21]이 스택 포인터라면 스택이 힙 안이다. `mbulk_smapper_alloc+0x0`은 함수 첫 명령, 곧 스택 push에서의 abort일 수 있다)이나 버퍼 넘침이다.
+  - v2의 나머지 배치는 소스에 없어서 워드 뜻은 추정이다.
+- [관찰] 패닉 앞 60초 동안 Wi-Fi 드라이버 로그는 없었다(4번 확인. 11.31의 06:34 패닉도 같았다).
+- [관찰] 간격: 10733, 35001, 6679, 1914, 4110초. 이번 부팅 23시간에 6번(약 3.8시간에 1번)이다.
+- 펌웨어는 고칠 수 없다(바이너리뿐). 근본 해결은 드라이버와 맞는 새 펌웨어다(11.31: 펌웨어 2019-12, 드라이버 A13 BSP 11.20.0.1.0). Mac과 커널 볼륨에는 다른 펌웨어가 없다.
+
+**완화 시험 1: 절전 끄기(2026-11-13 00:12 KST~, 진행 중).**
+- 부팅 상태는 `iw dev wlan0 get power_save` = on이었다. 드라이버는 `iw … set power_save off`를 `MLME_POWERMGT`(ACTIVE)로 펌웨어에 보낸다(`slsi_set_power_mgmt`, 연결돼 있을 때만).
+- 근거(가설): abort 자리에 수신 버퍼 풀(`dplane_dpif_resource_topup_all_rx_pools`)이 있다. 그리고 절전 진입·해제는 펌웨어 수신 경로를 바꾼다.
+- root `systemd-run --unit=wifi-pskeep sh /var/tmp/wifi-pskeep.sh`(`tools/board/wifi-pskeep.sh`): 30초마다 절전이 다시 켜졌으면 끄고, `mx_recovery_count`가 바뀌면 `/var/tmp/wifi-ps.log`에 적는다.
+- 판정: 지금 빈도면 24시간에 패닉이 없을 확률은 약 0.2%다(e^−6.3). 그래서 24시간 동안 0번이면 효과가 있다고 본다. 1번이라도 나면 그 기록을 `wlbt-panic.py`로 보고 다음 후보로 간다.
+- 시작 때 `mx_recovery_count`는 22였다(강제 패닉 포함). 15:12:16 UTC에 절전을 껐다. ping은 1.2~1.9 ms로 정상이었다.
+
+**보드에 바꾼 것.**
+- Wi-Fi 절전 off(런타임, 재부팅하면 on). 되돌리기는 `systemctl stop wifi-pskeep; iw dev wlan0 set power_save on`.
+- `/var/tmp/wifi-pskeep.sh`, `/var/tmp/wifi-ps.log`, `/var/tmp/stuck2/panicrec.txt`(부팅 뒤 모든 R4 기록, root `journalctl -k`에서).
+
+**다음.**
+1. 24시간 뒤(2026-11-14 00:12 KST) `/var/tmp/wifi-ps.log`와 `mx_recovery_count`를 본다.
+2. 효과가 있으면 `e850-wifi.sh`에 넣는다. 연결 뒤와 복구 뒤에 꺼야 하므로 wpa_supplicant 연결 이벤트를 쓰거나 지금처럼 감시한다.
+3. 효과가 없으면 다음 후보: 드라이버 쪽 수신 설정(`hip4_qos_enable`, NAPI), 대역 고정(2.4/5 GHz). 사용자에게 E850-96용 Android 11 이상 vendor 이미지(더 새 `mx140.bin`)를 구할 수 있는지 묻는다.

@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-12 23:10 KST)
+# E850-96 bring-up 현재 상태 (2026-11-13 00:30 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -140,6 +140,8 @@
    - 판정: 매번 배경 0x000000, 글자 0xffffff인지 본다.
    - 2.2의 가설 1·2를 확인하는 실험이다.
 4. **Wi-Fi 펌웨어 패닉 원인 (자동 복구는 11.31에서 켰다)**
+   - **11.47(2026-11-13):** 저절로 나는 0x04 패닉 6번은 모두 펌웨어 `Data Abort`였다(vendor의 `mx140.sym`·`log-strings.bin`으로 R4 기록 [2]를 풀었다). abort 자리는 늘 힙 할당·수신 버퍼 풀 함수였다(`pfree…`, `pmalloc_debug_validate_free_list`, `dplane_dpif_resource_topup_all_rx_pools` 등). 펌웨어 힙 손상으로 본다(가설). 해석기는 `tools/host/wlbt-panic.py`다.
+   - **진행 중:** Wi-Fi 절전 끄기 24시간 시험(2026-11-13 00:12 KST~, root unit `wifi-pskeep`, 기록 `/var/tmp/wifi-ps.log`). 24시간 0번이면 효과로 본다(지금 빈도 약 3.8시간에 1번). 재부팅하면 절전이 다시 켜진다.
    - 11.31에서 한 것: 자동 복구 켬(강제 패닉 4번 모두 복구, 5.6~6.5초). 큰 송수신 약 1.1 GB, 재결합, roaming 11분 동안 재현 0번. 0x04는 펌웨어 내부 번호라 호스트 소스에 뜻이 없다.
    - 할 일:
      - 패닉이 났는지는 `mx_recovery_count`로 본다. 났으면 `journalctl -g 'WLBT FW PANIC|panic_record'`로 기록을 꺼낸다. 11.32부터 journal이 약 2주 남는다(추정).
