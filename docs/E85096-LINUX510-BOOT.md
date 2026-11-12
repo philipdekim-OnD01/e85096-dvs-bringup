@@ -3122,6 +3122,12 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
   - **규제 DB를 이제 읽는다.** `slsi_read_regulatory: Regulatory Version: 2.7 , Script Version: 2 , Number of Countries: 252`가 나온다. 앞 부팅(옛 판)에서는 `Failed to read regdb freq_ranges`였다.
   - `slsi_qsf_extract_bool_data: Type mismatch for index: 0/1/2`는 그대로 나온다. 앞 부팅도 같았다. [확인, 소스] `qsfs.c`는 펌웨어에 HE(802.11ax)·TWT·WPA3 켜짐 여부를 MIB로 묻는다. 두 펌웨어 모두 값을 주지 않는다(type 4 = `SLSI_MIB_TYPE_NONE`). 그 값은 false로 남고, Android용 기능 문자열(`qsfs_feature_set`)에만 쓰인다. Wi-Fi 동작에는 상관이 없어서 고치지 않는다.
   - `cfg80211: failed to load regulatory.db`(-2)는 커널 cfg80211 쪽 메시지다. 앞 부팅들에도 있었다. slsi 드라이버는 자기 DB(`slsi_reg_database.bin`)를 쓴다.
+- [확인] **전원을 껐다 켠 부팅(2026-11-13 06:13 KST, 사용자가 UART를 꽂으며 전원을 다시 넣음).** UART에 `FLEXPMU-DBG: Cold boot`, `rst_stat:0x40010000 / PINRESET`가 찍혔고 RTC는 2000-01-01로 돌아가 있었다.
+  - 콜드 부팅에서도 새 펌웨어가 올라왔고 규제 DB를 읽었다. Wi-Fi는 다시 붙었다.
+  - 직전 부팅(01:31~06:13)의 `WLBT FW failure`는 0번이다. 새 펌웨어로 돈 시간은 모두 합쳐 약 5.4시간(44분 + 4시간 42분)이고 패닉은 0번이다. 옛 빈도라면 이 시간에 0번일 확률은 약 24%라서 아직 판정하지 않는다.
+  - 직전 부팅의 journal은 05:59:28 KST에서 끝난다. 그 뒤 Mac 감시가 5분마다 ssh로 접속했는데 그 기록이 없다. 전원이 끊기면서 디스크에 쓰이지 않은 것일 수 있다. 다만 그 접속이 실제로 성공했는지 확인하지 못해서 판정하지 않는다.
+  - Mac UART 기록기를 다시 켰다(`uartlog.py`, 06:13:30 KST부터 `~/e850-logs/uart.log`). LK부터 커널 32초까지 기록됐다. 그 뒤는 dvslive가 콘솔 printk를 꺼서(`printk` 1, `ignore_loglevel` N) UART가 조용하다. dmesg와 journal에는 그대로 남는다.
+  - HDMI: 부팅 때도 그 뒤에도 `LT8912B … HDMI cable: not connected`(HPD low)였다. 케이블이나 모니터 상태는 사용자가 확인하기로 했다. DVS 데이터와 웹 화면(8080)은 정상이었다(CRC 0).
 - [가설] 저절로 나던 0x04 Data Abort(약 3.8시간에 1번)는 2019년 펌웨어와 A13 드라이버가 맞지 않거나 펌웨어 자체 버그 때문이다. 새 펌웨어가 그것을 없앤다고 본다. 측정하지 않았다.
 - 판정: 절전은 기본값(on)으로 두고 24시간(2026-11-14 00:47 KST까지) 강제 패닉 없이 둔다. 교체(00:47)부터 재부팅(01:31)까지 44분 동안은 패닉이 0번이었다(23 그대로). 재부팅 뒤에는 0부터 센다. 이 동안 `mx_recovery_count`가 늘지 않으면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `tools/host/wlbt-panic.py`로 R4 기록을 푼다. 이때 기호와 문자열은 새 펌웨어 것(`~/e850-logs/wifi/fw-a13/mx140/debug/common/`)을 쓴다. 확인 방법:
   `ssh philip@192.168.0.236 'cat /proc/driver/mxman_ctrl0/mx_recovery_count'`, root `journalctl -k --since "2026-11-12 15:48" | grep -E "WLBT FW PANIC|r4_panic_record\[2\]"`.
