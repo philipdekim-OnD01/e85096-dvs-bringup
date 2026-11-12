@@ -3052,7 +3052,7 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - 인터럽트 처리부는 start와 end가 겹치면 `sw_checker`로 순서를 정해 둘 다 처리한다. 한쪽을 잃으면 `atomic_inc(&csi->fcount)`만 한다.
 - 버퍼–프레임 대응이 한 칸 어긋나는 경로가 실제로 어디인지는 아직 찾지 못했다(`csi_dma_tag` 710행, `wq_csis_dma_vc0` 1109행을 볼 차례).
 
-**재현 시험(23:04 KST 시작).**
+**재현 시험(23:04~23:30 KST).** [확인] 강제 Wi-Fi 패닉 6번(프로파일마다 3번) 가운데 2번이 패닉 2초 안에 이상 상태가 됐다. 00/8B/B0에서 1/3(2회째, 23:12:49부터 시험이 끝날 때까지 120초), setfile(0x75)에서 1/3(1회째, 23:08:23부터 끝날 때까지 120초)이다. setfile 2회째는 패닉 직후 10초 표본 하나에 짧은 버퍼 1, 오류 4, 재시작 1만 있었다(이상 상태 아님). 패닉 전에는 6번 모두 이상이 없었다. 6번 모두 CRC 0이었다. **그래서 Wi-Fi 패닉이 이상 상태를 일으킨다(재현됨, 6번 중 2번). 0x75에서도 난다. PLL 설정 탓이 아니다.** 앞의 "00/8B/B0 2/2, 0x75 0/3"은 우연으로 본다. 원 자료: 보드 `/var/tmp/plltest/8-wifi-*`, Mac `~/e850-logs/plltest/8-wifi-*`. `mx_recovery_count` 6 → 12.
 - `tools/board/wifistuck.sh 3`(root, `systemd-run --unit=wifistuck`): 00/8B/B0과 setfile을 번갈아 4분씩 3회 돌리고, 매번 140초째에 Wi-Fi 패닉을 한 번 낸다.
 - 고친 `libdvsview.so`(c10b0382)를 넣고 한다. 이전 판은 `/usr/local/lib/libdvsview.so.prev-wrap`(db798ea1)이다.
 - 결과는 `/var/tmp/plltest/8-wifi-<프로파일>-<회>/`에 남고, 분석은 `python3 /var/tmp/stuckscan.py /var/tmp/plltest/8-wifi-*/stats.jsonl`로 한다.
