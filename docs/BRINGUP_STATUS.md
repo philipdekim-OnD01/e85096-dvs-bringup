@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-13 00:30 KST)
+# E850-96 bring-up 현재 상태 (2026-11-13 01:10 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -17,7 +17,7 @@
 | 상자 크기 측정 | **사람 행동 분류와 별개 과제(3장 2번).** 목표는 컨베이어 위 상자를 1.5 m에서 보고 가로·세로·높이를 재는 것이다. 1차 시험에서 손에 든 상자는 재지 못했다. hull이 손과 팔까지 묶었다. 기록 80개는 제각각이었다. 다음 방향은 사용자 결정 대기다 | 11.35 |
 | HDMI 콘솔 색 | 흰 글씨. dpu.ko 패치로 근본 수정했다(`e850-fbpal`과 rebind는 쓰지 않음). 전원을 껐다 켠 뒤에도 사용자가 화면에서 확인했다 | 11.14~11.16 |
 | HDMI 출력 꺼짐 | 해결. `decon_release()`가 fb0를 닫을 때마다 DECON을 끄던 것을 open 수 세기로 고쳤다(dpu.ko 재빌드) | 11.15 |
-| 네트워크 | Wi-Fi 192.168.0.236(ssh), USB NCM 192.168.7.1. **Wi-Fi 펌웨어 패닉 2번**(2026-11-07, 부팅 후 2.6시간과 6분, `WLBT FW PANIC: 0x04`, 원인 모름·재현 못 함). **11.31부터 자동 복구를 켰다**(`e850-wifi.sh`가 `disable_recovery_handling=0`). 강제 패닉 4번(런타임 설정)과 1번(부팅 설정) 모두 복구, `wlan0` 재연결 5.6~6.5초, 8080 응답 5.6~7.3초. 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`. **11.32: journal을 초당 130줄 → 분당 38줄로 줄였다**(카메라 bypass 경고, 워치독 keepalive). journal은 약 2주 남는다(추정). 11.33: vendor 버그 2개 수정(`mx_panic` 0600, system error log WARN) | 11.5, 11.30, 11.31, 11.32, 11.33 |
+| 네트워크 | Wi-Fi 192.168.0.236(ssh), USB NCM 192.168.7.1. **Wi-Fi 펌웨어 패닉 2번**(2026-11-07, 부팅 후 2.6시간과 6분, `WLBT FW PANIC: 0x04`, 원인 모름·재현 못 함). **11.31부터 자동 복구를 켰다**(`e850-wifi.sh`가 `disable_recovery_handling=0`). 강제 패닉 4번(런타임 설정)과 1번(부팅 설정) 모두 복구, `wlan0` 재연결 5.6~6.5초, 8080 응답 5.6~7.3초. 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`. **11.32: journal을 초당 130줄 → 분당 38줄로 줄였다**(카메라 bypass 경고, 워치독 keepalive). journal은 약 2주 남는다(추정). 11.33: vendor 버그 2개 수정(`mx_panic` 0600, system error log WARN). **11.47: 저절로 나는 0x04 패닉(약 3.8시간에 1번)은 펌웨어 Data Abort다. 2026-11-13 00:47 KST에 펌웨어를 Linaro Android 13 판 `S612_E3830_R4-1_Y23W13A`(2023-03)로 바꿨다**(옛 판 2019-12). 다시 붙는 데 8초 걸렸고, 효과는 24시간 시험 중이다 | 11.5, 11.30, 11.31, 11.32, 11.33, 11.47 |
 | 서비스 | nginx(80), ssh, e850-hdmi, e850-wifi, systemd-timesyncd, 워치독 데몬 | |
 | 사용자 계획 | MySQL + Apache로 출입 기록, YOLO nano 영상 처리 | |
 
@@ -106,6 +106,7 @@
 | `/usr/local/lib/libdvsview.so` | **2026-11-12 23:04 KST**: 22비트 기준값 한 바퀴를 처리한다(md5 c10b0382, 11.46). 이전 판은 `.prev-wrap`(md5 db798ea1, 11.46판)이다. `/var/tmp`에 `wifistuck.sh`, `stuckscan.py`, `stuck2/`(이상 상태 dmesg·녹화)를 추가했다 |
 | `/var/tmp/plltest.py`, `dvslink.py`, `pll-ab.sh`, `plltest/` | 추가(11.46). PLL 시험 실행기, 기록 검사기, A/B 묶음, 결과(Mac `~/e850-logs/plltest/`에 사본) |
 | `/usr/local/bin/ov5647-cap.py` | **2026-11-12 128줄 디코딩**(`dvs_ingest(buf, W × (H + 1))`, md5 `03fdbff4…`, 11.46). 이전: `/root/ov5647-cap.py.prev-11.46`(7d82fa17) |
+| `/vendor/etc/wifi` | **2026-11-13 00:47 KST**: Linaro A13 WLBT 펌웨어(`mx140.bin` md5 792565d8, `S612_E3830_R4-1_Y23W13A`, 규제 DB `regulatory_db_2_7`, 11.47). 이전(Android 10) 판은 `/var/tmp/wifi-a10-vendor`에 있다. 되돌리기는 root `sh /var/tmp/wifi-fwswap.sh a10`이다. 받기는 `tools/linux510/wifi-fw-linaro.py`다. 이 디렉터리는 `build-rootfs.sh`에 없으니 새 rootfs에는 따로 넣는다 |
 | `/etc/sysctl.d/90-e850-autoreboot.conf` | 추가(11.22). `softlockup_panic=1`, `panic=5` |
 | `/root/csis-irqstat.ko` | 추가(11.22). kretprobe IRQ 계수기, 캡처 전에 insmod하고 끝나면 rmmod |
 | `/usr/local/bin/dvscap.sh` | 추가(11.23). devfreq 최대 + 캡처 + IRQ 계수 |
@@ -141,7 +142,13 @@
    - 2.2의 가설 1·2를 확인하는 실험이다.
 4. **Wi-Fi 펌웨어 패닉 원인 (자동 복구는 11.31에서 켰다)**
    - **11.47(2026-11-13):** 저절로 나는 0x04 패닉 6번은 모두 펌웨어 `Data Abort`였다(vendor의 `mx140.sym`·`log-strings.bin`으로 R4 기록 [2]를 풀었다). abort 자리는 늘 힙 할당·수신 버퍼 풀 함수였다(`pfree…`, `pmalloc_debug_validate_free_list`, `dplane_dpif_resource_topup_all_rx_pools` 등). 펌웨어 힙 손상으로 본다(가설). 해석기는 `tools/host/wlbt-panic.py`다.
-   - **진행 중:** Wi-Fi 절전 끄기 24시간 시험(2026-11-13 00:12 KST~, root unit `wifi-pskeep`, 기록 `/var/tmp/wifi-ps.log`). 24시간 0번이면 효과로 본다(지금 빈도 약 3.8시간에 1번). 재부팅하면 절전이 다시 켜진다.
+   - **진행 중: 새 펌웨어 24시간 시험(2026-11-13 00:47 KST ~ 11-14 00:47 KST).**
+     - `/vendor/etc/wifi`를 Linaro Android 13 BSP 판으로 바꿨다(`S612_E3830_R4-1_Y23W13A`, 2023-03-27, 드라이버와 같은 세대). 출처는 GitLab `Linaro/96boards/e850-96/platform/vendor/samsung_slsi` 커밋 11e9c19a다.
+     - [확인] 강제 패닉 한 번으로 올렸고, 8초 뒤 다시 연결됐다. 처리량은 61.9 Mbit/s였다.
+     - 절전은 기본값(on)이다. 절전 끄기 시험(`wifi-pskeep`)은 바꾸기 전에 멈췄다.
+     - 판정: 이 동안 강제 패닉을 내지 않는다. `mx_recovery_count`가 23 그대로이면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `wlbt-panic.py`로 푼다. 기호는 `~/e850-logs/wifi/fw-a13/mx140/debug/common/`에 있다.
+     - 재부팅하면 `mx_recovery_count`가 0부터 다시 센다. 그때는 `journalctl -k -b -1`도 본다.
+     - [미확인] 부팅 때 나던 `Type mismatch`·`Failed to read regdb`가 없어졌는지는 다음 부팅 때 본다.
    - 11.31에서 한 것: 자동 복구 켬(강제 패닉 4번 모두 복구, 5.6~6.5초). 큰 송수신 약 1.1 GB, 재결합, roaming 11분 동안 재현 0번. 0x04는 펌웨어 내부 번호라 호스트 소스에 뜻이 없다.
    - 할 일:
      - 패닉이 났는지는 `mx_recovery_count`로 본다. 났으면 `journalctl -g 'WLBT FW PANIC|panic_record'`로 기록을 꺼낸다. 11.32부터 journal이 약 2주 남는다(추정).

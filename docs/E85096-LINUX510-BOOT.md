@@ -3065,7 +3065,7 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 3. 재현되면 CSIS 드라이버의 버퍼 처리를 더 보고, live가 이상 상태를 알아채 스트림을 다시 켜는 방법도 함께 정한다.
 4. 고친 디코더로 0x75와 00/8B/B0을 번갈아 10분씩 두 번 비교한다. 그다음 24시간 시험을 한다.
 
-### 11.47 Wi-Fi 펌웨어 패닉 0x04의 정체: 펌웨어 Data Abort(힙 할당기), 절전 끄기 시험 (2026-11-13)
+### 11.47 Wi-Fi 펌웨어 패닉 0x04의 정체: 펌웨어 Data Abort(힙 할당기), 새 펌웨어(Linaro A13) (2026-11-13)
 
 사용자 요청: "와이파이 문제 해결해". 11.46에서 Wi-Fi 펌웨어 패닉이 카메라 캡처를 어긋나게 한다는 것을 재현했다. 그쪽은 live 자동 재시작으로 막았다. 이번에는 패닉 자체를 본다.
 
@@ -3097,18 +3097,38 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - [관찰] 간격: 10733, 35001, 6679, 1914, 4110초. 이번 부팅 23시간에 6번(약 3.8시간에 1번)이다.
 - 펌웨어는 고칠 수 없다(바이너리뿐). 근본 해결은 드라이버와 맞는 새 펌웨어다(11.31: 펌웨어 2019-12, 드라이버 A13 BSP 11.20.0.1.0). Mac과 커널 볼륨에는 다른 펌웨어가 없다.
 
-**완화 시험 1: 절전 끄기(2026-11-13 00:12 KST~, 진행 중).**
+**완화 시험 1: 절전 끄기(2026-11-13 00:12~00:47 KST, 중지).** 아래 새 펌웨어로 바꾸기 전에 멈췄다. 변수를 하나씩 바꾸려는 것이다. 35분 동안 패닉은 없었는데, 이 길이로는 아무것도 판정할 수 없다. 절전은 다시 on(기본값)이다.
 - 부팅 상태는 `iw dev wlan0 get power_save` = on이었다. 드라이버는 `iw … set power_save off`를 `MLME_POWERMGT`(ACTIVE)로 펌웨어에 보낸다(`slsi_set_power_mgmt`, 연결돼 있을 때만).
 - 근거(가설): abort 자리에 수신 버퍼 풀(`dplane_dpif_resource_topup_all_rx_pools`)이 있다. 그리고 절전 진입·해제는 펌웨어 수신 경로를 바꾼다.
 - root `systemd-run --unit=wifi-pskeep sh /var/tmp/wifi-pskeep.sh`(`tools/board/wifi-pskeep.sh`): 30초마다 절전이 다시 켜졌으면 끄고, `mx_recovery_count`가 바뀌면 `/var/tmp/wifi-ps.log`에 적는다.
 - 판정: 지금 빈도면 24시간에 패닉이 없을 확률은 약 0.2%다(e^−6.3). 그래서 24시간 동안 0번이면 효과가 있다고 본다. 1번이라도 나면 그 기록을 `wlbt-panic.py`로 보고 다음 후보로 간다.
 - 시작 때 `mx_recovery_count`는 22였다(강제 패닉 포함). 15:12:16 UTC에 절전을 껐다. ping은 1.2~1.9 ms로 정상이었다.
 
+**새 펌웨어: Linaro Android 13 BSP의 nacho_s612(2026-11-13 00:47 KST, 진행 중).** 사용자 지시: "리나로사이트에서 확인해봐".
+- [확인] 출처는 Linaro GitLab `96boards/e850-96/platform/vendor/samsung_slsi`(project 33954066), 브랜치 `android13-e850-96`, 커밋 `11e9c19afbbe6c39da0a7bf32a2d17a5a77087fb`(2025-08-15, 브랜치 끝)다. E850-96 Android 13 BSP의 vendor 트리다. 드라이버(scsc 11.20.0.1.0)와 같은 BSP 세대다.
+  - `mx140/firmware/nacho_s612/` 아래 `mx140.bin`: sha256 `3d94b5b5…5bd7c`, md5 `792565d8`. 펌웨어가 보고하는 판은 `O|9107|2023-03-27 09:38:37 UTC|nacho_s612|S612_E3830_R4-1_Y23W13A`이다. 같은 디렉터리 `build_id.txt`는 Y22W51A라고 적혀 있는데, 펌웨어가 보고하는 값을 기준으로 삼는다.
+  - 규제 DB: `mx140/firmware/reg_domain/regulatory_db_2_7.bin`을 `slsi_reg_database.bin`으로 넣는다(sha256 `8f5da64d…`). Android 13의 `wlbt_firmware.mk`가 하는 대로다.
+  - 옛 펌웨어는 Android 10 vendor의 `S612_E3830_C4_Y19W51A`(2019-12-20)다.
+- 받기: `python3 tools/linux510/wifi-fw-linaro.py ~/e850-logs/wifi/wifi-a13.tgz`. 커밋을 고정해 받고 `mx140.bin` sha256을 검사한다. 154파일이고, `mx140/conf/`의 제품별 디렉터리 가운데 ERD 것만 넣는다. 바이너리는 저장소에 넣지 않는다. 다시 받은 것은 보드에 올린 것과 파일 내용이 같았다(`diff -rq`).
+- 넣기(root): `sh /var/tmp/wifi-fwswap.sh a13`(`tools/board/wifi-fwswap.sh`). 처음 실행할 때 옛 `/vendor/etc/wifi`를 `/var/tmp/wifi-a10-vendor`에 복사해 둔다. 그다음 파일을 바꾸고 강제 패닉을 한 번 낸다. 복구할 때 드라이버가 `mx140.bin`과 `.hcf`를 다시 읽으므로 재부팅하지 않아도 된다. 되돌리기는 `sh /var/tmp/wifi-fwswap.sh a10`이다.
+- [확인] 결과(강제 패닉 15:47:07 UTC):
+  - 강제 패닉 뒤 8초 만에 다시 연결됐다(같은 AP, 5745 MHz, 192.168.0.236). 커널 로그는 `WLBT FW: …R4-1_Y23W13A`, `WLBT Driver: 11.20.0.1.0`이다. `mx140/conf/common/common.hcf`, `conf/wlan/wlan.hcf`, `wlan_sw.hcf`를 읽었고 `MIB platform: {"platform_version":"NACHO_S612_ERD"}`이다. `log-strings.bin` 868248바이트는 판 검사를 거쳐 읽혔다.
+  - 보드→Mac ssh 100 MB 전송: 12.9초, 61.9 Mbit/s(신호 −68 dBm, rx 234 / tx 195 MBit/s, 한 번만 잼). 11.31의 옛 펌웨어 때는 36.9 Mbit/s였는데 신호 조건이 달라서 비교하지 않는다.
+  - `common_sw.hcf` 없음(-2) 경고는 옛 펌웨어를 올릴 때도 똑같이 나왔다(가동 83774초).
+  - `mx_recovery_count`는 22에서 23이 됐다(이번 강제 패닉).
+- [확인] 이번 강제 패닉으로 카메라 캡처가 다시 이상 상태가 됐다. live 자동 재시작이 처리했다(`dvslive: stuck capture, 10 short buffers in 2 s`, 가동 87006.28초). 이번에는 정상 종료였고(`Deactivated successfully`), 15:47:17 UTC에 다시 떴다. 11.46 시험의 2번에 이어 세 번째 재시작이다.
+- [미확인] 11.31의 `slsi_get_qsf_mib_data: Type mismatch`와 `Failed to read regdb freq_ranges`는 부팅할 때 나온다. 교체한 뒤에는 아직 부팅하지 않았다. 다음 부팅 때 `journalctl -k -b | grep -E 'Type mismatch|regdb'`로 본다.
+- [가설] 저절로 나던 0x04 Data Abort(약 3.8시간에 1번)는 2019년 펌웨어와 A13 드라이버가 맞지 않거나 펌웨어 자체 버그 때문이다. 새 펌웨어가 그것을 없앤다고 본다. 측정하지 않았다.
+- 판정: 절전은 기본값(on)으로 두고 24시간(2026-11-14 00:47 KST까지) 강제 패닉 없이 둔다. 이 동안 `mx_recovery_count`가 23 그대로이면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `tools/host/wlbt-panic.py`로 R4 기록을 푼다. 이때 기호와 문자열은 새 펌웨어 것(`~/e850-logs/wifi/fw-a13/mx140/debug/common/`)을 쓴다. 확인 방법:
+  `ssh philip@192.168.0.236 'cat /proc/driver/mxman_ctrl0/mx_recovery_count'`, root `journalctl -k --since "2026-11-12 15:48" | grep -E "WLBT FW PANIC|r4_panic_record\[2\]"`.
+
 **보드에 바꾼 것.**
-- Wi-Fi 절전 off(런타임, 재부팅하면 on). 되돌리기는 `systemctl stop wifi-pskeep; iw dev wlan0 set power_save on`.
-- `/var/tmp/wifi-pskeep.sh`, `/var/tmp/wifi-ps.log`, `/var/tmp/stuck2/panicrec.txt`(부팅 뒤 모든 R4 기록, root `journalctl -k`에서).
+- `/vendor/etc/wifi`: Linaro A13 판(위)이다. 재부팅해도 남는다(rootfs). 옛 판은 `/var/tmp/wifi-a10-vendor`에 있고, 넣을 때 쓴 `/var/tmp/wifi-a13.tgz`, `/var/tmp/wifi-fwswap.sh`도 보드에 있다.
+- Wi-Fi 절전: 00:12~00:47 KST에 off였다가 지금은 on(기본값)이다. `wifi-pskeep` unit은 멈췄다(`/var/tmp/wifi-pskeep.sh`, `/var/tmp/wifi-ps.log`는 남겼다).
+- `/var/tmp/stuck2/panicrec.txt`: 부팅 뒤 모든 R4 기록. root `journalctl -k`에서 뽑았다.
+- 새 rootfs를 만들 때: `build-rootfs.sh`에는 Wi-Fi 펌웨어가 없다. `wifi-fw-extract.sh`는 2019년 판을 꺼낸다. 새 판은 `wifi-fw-linaro.py`로 받은 tgz를 `/vendor/etc/wifi`에 풀어서 넣는다.
 
 **다음.**
-1. 24시간 뒤(2026-11-14 00:12 KST) `/var/tmp/wifi-ps.log`와 `mx_recovery_count`를 본다.
-2. 효과가 있으면 `e850-wifi.sh`에 넣는다. 연결 뒤와 복구 뒤에 꺼야 하므로 wpa_supplicant 연결 이벤트를 쓰거나 지금처럼 감시한다.
-3. 효과가 없으면 다음 후보: 드라이버 쪽 수신 설정(`hip4_qos_enable`, NAPI), 대역 고정(2.4/5 GHz). 사용자에게 E850-96용 Android 11 이상 vendor 이미지(더 새 `mx140.bin`)를 구할 수 있는지 묻는다.
+1. 2026-11-14 00:47 KST에 `mx_recovery_count`와 커널 로그를 본다(위 명령).
+2. 다음 부팅 때 regdb와 `Type mismatch` 줄을 본다.
+3. 새 펌웨어에서도 패닉이 나면: 그 기록을 풀고, 절전 끄기를 다시 시험한다(`wifi-pskeep`). 그다음 대역 고정(2.4/5 GHz)을 시험한다.
