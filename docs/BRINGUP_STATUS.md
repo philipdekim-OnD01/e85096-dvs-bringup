@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-13 06:40 KST)
+# E850-96 bring-up 현재 상태 (2026-11-13 08:20 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -165,7 +165,7 @@
 
 선택 실험: C2 idle에서 GICC_CTLR를 끄는 시험. 보드가 멈출 수 있어서 사용자가 있을 때만 한다.
 
-6. **DVS D-PHY PLL 시험 (11.46, 첫 A/B 끝남)**
+6. **DVS D-PHY PLL 시험 (11.46~11.48, A/B/A/B 통과, 00/8B/B0 24시간 진행 중)**
    - 계획, 판정 기준, 지금까지의 결과는 [DVS-PLL-TESTS.md](DVS-PLL-TESTS.md)에 있다. 배경은 main의 `DVS_PLL_MINSU_KARIM_REVIEW_2026-11-10.md`이다.
    - 0x75를 검증된 설정으로 다루지 않는다. 기본 setfile과 README는 E850 측정 결과가 나온 뒤에만 바꾼다.
    - 할 일:
@@ -174,17 +174,18 @@
      3. (보드에 넣음, 23:04 KST) 기준값 한 바퀴를 처리하는 `libdvsview.so`(c10b0382). 이전 판은 `/usr/local/lib/libdvsview.so.prev-wrap`(db798ea1)이다. [확인] **보드 live에서 한 바퀴를 넘겼다(2026-11-13).** 재부팅 뒤 dvslive가 01:31:58 KST부터 같은 프로세스로 78분 돌았다. 22비트 ms 기준값의 주기는 69.9분이라 이 구간에 한 바퀴가 적어도 한 번 있다. 02:50:17 KST 계수기는 버퍼 158241, ts_bad 4, ts_restarts 1, ts_fixed 0, ts_back 0이다. 모두 스트림 시작 때 값 그대로다. 옛 판이었다면 한 바퀴마다 ts_bad +64, ts_restarts +1이 늘었을 것이다.
      4. **(끝남) Wi-Fi 패닉 재현 시험.** 강제 Wi-Fi 패닉 6번(프로파일마다 3번) 가운데 2번이 패닉 2초 안에 이상 상태가 됐다. 00/8B/B0에서 1/3(2회째, 23:12:49부터 시험이 끝날 때까지 120초), setfile(0x75)에서 1/3(1회째, 23:08:23부터 끝날 때까지 120초)이다. setfile 2회째는 패닉 직후 10초 표본 하나에 짧은 버퍼 1, 오류 4, 재시작 1만 있었다(이상 상태 아님). 패닉 전에는 6번 모두 이상이 없었다. 6번 모두 CRC 0이었다. **그래서 Wi-Fi 패닉이 이상 상태를 일으킨다(재현됨, 6번 중 2번). 0x75에서도 난다. PLL 설정 탓이 아니다.** 앞의 "00/8B/B0 2/2, 0x75 0/3"은 우연으로 본다. 원 자료: 보드 `/var/tmp/plltest/8-wifi-*`, Mac `~/e850-logs/plltest/8-wifi-*`. `mx_recovery_count` 6 → 12. 시험 방법: 2026-11-12 23:04 KST 시작, 약 23:35 끝. root `systemd-run --unit=wifistuck sh /var/tmp/wifistuck.sh 3`. 00/8B/B0과 setfile을 번갈아 4분씩 3회 돌리고, 매번 140초째에 Wi-Fi 패닉을 낸다. 지금까지 패닉 5번 가운데 00/8B/B0에서는 2/2가 이상 상태가 됐고, 0x75에서는 0/3이었다(11.46).
      4a. (끝남, 2026-11-12 23:56 KST) live가 이상 상태를 알아채 스트림을 다시 켠다(`ov5647-cap.py --stuck 10`, 보드 설치). 강제 패닉 10번 중 2번이 이상 상태가 됐고, 둘 다 10~14초 만에 정상으로 돌아왔다. 첫 재시작의 종료는 SIGABRT였다(원인 모름, 11.46).
-     5. **Mac 재시동 뒤 이어서 하기:**
-        - Mac 쪽: `~/claude-transcript-backup` rsync를 다시 켠다(`nohup sh -c 'while :; do /usr/bin/rsync -a ~/.claude/projects/ ~/claude-transcript-backup/; sleep 300; done' &`). Docker Desktop은 빌드할 때만 켠다. USB는 Mac mini **앞쪽** 포트에 꽂는다.
-        - 재현 시험이 끝났는지: `ssh philip@192.168.0.236 'systemctl is-active wifistuck; ls -d /var/tmp/plltest/8-wifi-*'`. 끝나면 inactive이고 디렉터리가 6개다.
-        - 결과: `ssh philip@192.168.0.236 'python3 /var/tmp/stuckscan.py /var/tmp/plltest/8-wifi-*/stats.jsonl'`. 프로파일마다 "AFTER PANIC"(패닉 30초 안에 이상 상태 시작)이 몇 번인지 본다. 패닉 시각은 `<디렉터리>.panic`에, `Took:`는 root `journalctl -k | grep Took:`로 본다.
-        - 받기: `ssh philip@192.168.0.236 'cd /var/tmp && tar czf - plltest/8-wifi-*' | tar xzf - -C ~/e850-logs/`.
-        - 기록: DVS-PLL-TESTS.md 0장·8장, BOOT.md 11.46 "재현 시험", 이 항목.
-     6. 그다음:
-        - 재현되면 CSIS 드라이버의 버퍼 처리를 본다(`is-device-csi_v4.c`의 `csi_dma_tag` 710행, `wq_csis_dma_vc0` 1109행, `csi_s_buffer` 2607행). live가 이상 상태를 알아채 스트림을 다시 켜는 방법도 함께 정한다.
-        - 고친 lib으로 70분 넘게 돌려 한 바퀴 때 `ts_bad`가 0인지 본다.
-        - 0x75와 00/8B/B0을 번갈아 10분씩 두 번 비교하고, 그다음 24시간 시험을 한다. 기본 setfile(0x75)은 그 결과를 보고 사용자와 정한다.
-        - git: 로컬 커밋이 push 전이다(사용자 확인 대기).
+     5. (끝남) 이상 상태 자동 재시작(`ov5647-cap.py --stuck`)과 22비트 한 바퀴 수정을 보드에서 확인했다(위 0장, 2026-11-13).
+     6. **(끝남, 2026-11-13 07:25~08:09 KST) A/B/A/B 비교:** 0x75(`experimental_00_75_00`)와 00/8B/B0을 번갈아 10분씩 2회씩 돌렸다(수신 1600, 128줄 디코딩, `tools/board/pll-abab.sh`).
+        - **4회 모두 통과했다.** CRC 0, 짧은 버퍼·scan·frame_end 누락 0, 타임스탬프 오류 0, raw 표본 깨끗, readback 일치.
+        - 차이는 버퍼 속도뿐이다(0x75 35.2/s, 00/8B/B0 37.8/s, 두 번 모두 같음). 센서 scan 주기는 둘 다 985 µs다.
+        - 결과 디렉터리: `/var/tmp/plltest/10-abab-*`.
+     7. **진행 중: 00/8B/B0 24시간 시험**(`/var/tmp/plltest/11-8bb0-24h`, 2026-11-13 08:10 KST ~ 11-14 08:10 KST 무렵, unit `plltest`). 끝나면 setfile로 돌아간다.
+        - 끝났는지: `ssh philip@192.168.0.236 'systemctl is-active plltest'`
+        - 결과: `ssh philip@192.168.0.236 'cat /var/tmp/plltest/11-8bb0-24h/summary.json; python3 /var/tmp/stuckscan.py /var/tmp/plltest/11-8bb0-24h/stats.jsonl'`
+        - Wi-Fi 패닉 때문에 이상 상태가 되면 그 구간은 따로 센다(`stuckscan.py`).
+     8. **사용자 결정(2026-11-13):** 24시간 시험으로 안정성이 확인되면 다음 두 가지를 승인했다.
+        - 기본 setfile을 00/8B/B0으로 바꾼다(`is-cis-s5krc1s-setA.h`의 0x30A5~A7, 모듈 재빌드와 보드 설치, 이전 모듈 백업).
+        - `dvs-pll-diag`를 main에 병합한다.
 
 ## 4. 사용자 결정 대기
 

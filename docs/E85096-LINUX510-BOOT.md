@@ -3153,3 +3153,26 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 1. 2026-11-14 00:47 KST에 `mx_recovery_count`와 커널 로그를 본다(위 명령).
 2. (끝남) 다음 부팅 때 regdb와 `Type mismatch` 줄을 본다. regdb는 고쳐졌다. `Type mismatch`는 해가 없다(위).
 3. 새 펌웨어에서도 패닉이 나면: 그 기록을 풀고, 절전 끄기를 다시 시험한다(`wifi-pskeep`). 그다음 대역 고정(2.4/5 GHz)을 시험한다.
+
+### 11.48 PLL A/B/A/B 비교와 00/8B/B0 24시간 시험 (2026-11-13)
+
+사용자 지시는 다음 순서였다. Wi-Fi 감시 결과를 먼저 보고, A/B/A/B 40분 비교를 한다. 정상이면 00/8B/B0으로 24시간 시험을 한다. 안정성이 확인되면 기본 setfile을 바꾸고 main에 병합한다.
+
+**Wi-Fi(07:24 KST 중간 확인).**
+- [확인] 새 펌웨어로 모두 약 6.6시간 돌았고 패닉은 0번이다(전원을 다시 넣은 뒤로 1시간 10분, 복구 횟수 0).
+- 판정은 11-14 00:47 KST에 한다(11.47). 이때 연결은 2.4 GHz(2437 MHz, −57 dBm)였다. 전에는 5745 MHz였다.
+
+**A/B/A/B(07:25~08:09 KST).**
+- 실행: `tools/board/pll-abab.sh`(보드 `/var/tmp/pll-abab.sh`, root `systemd-run --unit=pllabab`).
+- 조건: A = 0x75(`experimental_00_75_00`), B = 00/8B/B0. 수신 1600(DT), 각 10분, 앞뒤 raw 표본 20버퍼, 128줄 디코딩.
+- [확인] 4회 모두 `pass: true`였다. 결과 표와 세부는 DVS-PLL-TESTS.md 0장과 8장에 있다.
+- [관찰] 버퍼 속도는 A가 35.2/s, B가 37.8/s로 매번 같았다. 센서 scan 주기는 둘 다 985 µs였다. 가설은 DVS-PLL-TESTS.md 0장에 있다.
+
+**24시간 시험(08:10 KST~).**
+- root `systemd-run --unit=plltest python3 -I /var/tmp/plltest.py recommended_00_8b_b0 0 1440 --sample 20 --out /var/tmp/plltest/11-8bb0-24h`
+- 시작할 때 readback은 `00 8b b0 word 0x08bb0 P=4 M=374 S=0 rate=2244`였다.
+
+**보드에 바꾼 것.**
+- `/var/tmp/pll-abab.sh` 추가, `/var/tmp/plltest/10-abab-*`와 `11-8bb0-24h` 결과 디렉터리.
+- 시험하는 동안에는 live가 00/8B/B0으로 돈다. 끝나면 setfile(0x75)로 돌아간다.
+
