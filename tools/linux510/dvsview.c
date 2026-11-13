@@ -10,6 +10,12 @@
  * scene and buffers come ~14/s (11.25), so drawing per buffer can not reach 30 fps; drawing by
  * timestamp shows a new 33 ms slice every frame, ~one buffer period late.
  *
+ * Threads and CPUs (11.45): the caller of dvs_ingest() decodes on CPU1; a filter thread marks noise (EV_SUP,
+ * filter_ms) behind it on CPU3; the render thread draws on CPU2. Device IRQs stay on CPU0, the action
+ * classifier on CPU4-6, the settings page on CPU7. Per event on the A55: decode 31 ns, filter 39 ns (60
+ * buffers of a recording); together in one thread they took a whole core with the board moved at walking
+ * pace (~25 ms a buffer, 35 buffers/s), and buffers were lost.
+ *
  * Boxes (dvs_boxes()): a box moving past fires along its edges across the motion; edges along the
  * motion barely change. Each frame the events of the last mwin us go into 8 x 8 px cells; cells with two
  * or more events and an active neighbour pass the noise filter, and the minimum-area rectangle around
@@ -24,7 +30,8 @@
  *                   polarity bit 16 (group1) / 17 (group2), 1 = OFF
  *   [31:26] 000001  COLUMN, [10:0] x
  *   [31:26] 000010  TIMESTAMP, [23] = 0: reference [21:0] ms, [23] = 1: sub [9:0] us
- *   others (frame end, IMU, padding, the undefined 000000/000101 of 11.23) are skipped.
+ *   [31:26] 000011  FRAME END, [18:11] frame number: only counted (the link counters, 11.46)
+ *   others (IMU, padding, the undefined 000000/000101 of 11.23) are skipped and counted as unknown.
  *
  * Build (Debian 12 arm64, same glibc as the board):
  *   docker run --rm -v "$PWD/tools/linux510:/s" debian:12 sh -c 'apt-get -qq update &&
@@ -32,11 +39,13 @@
  *     gcc -O2 -Wall -shared -fPIC -o /s/libdvsview.so /s/dvsview.c -lpthread -lm -lz &&
  *     gcc -O2 -Wall -DDVSVIEW_TEST -o /tmp/t /s/dvsview.c -lpthread -lm -lz && /tmp/t [capture.raw]'
  */
+#define _GNU_SOURCE			/* sched_setaffinity, CPU_SET */
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <math.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -44,6 +53,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -64,6 +75,10 @@
 #define HBIN 10				/* us per bin of the scan period histogram, */
 #define HBINS 512			/* up to 5.12 ms (CIS margin <= ~140, 11.29) */
 #define LINE 8192			/* bytes per MIPI line, both modes (8192 x 127, 8192 x 32) */
+#define REC_Q (64u << 20)		/* bytes of packets queued for the recording writer: ~7 s at 9 MB/s */
+#define DECODE_CPU 1			/* 11.45: the dvs_ingest() caller, */
+#define RENDER_CPU 2			/* the render thread, */
+#define FILTER_CPU 3			/* the filter thread */
 #define BROW 104			/* bytes per column of a filter bitmap: 722 rows with the border, + an 8-byte read */
 
 #define CELL 8				/* px, side of a measurement cell */
@@ -93,7 +108,10 @@ static struct {
 	int64_t raw;			/* last accepted ref * 1000 + sub, us */
 	int64_t t;			/* display clock: sum of the accepted forward steps */
 	uint8_t *baf[2];		/* filter: pixels fired in slot k (baf[k & 1]) and k - 1, column-major, 1 px border */
-	uint32_t slot, slot_us;		/* k = display clock / slot_us; slot_us = filter_ms / 2 */
+	uint32_t slot, slot_us;		/* k = display clock / slot_us; slot_us = filter_ms / 2 (filter thread's) */
+	_Atomic uint64_t fw;		/* events the filter thread has passed; with the filter on, drawn up to here */
+	pthread_mutex_t flock;		/* the decoder wakes the filter thread (fcond) after each buffer */
+	pthread_cond_t fcond;
 	/* playout: show sensor time s at real time s + delay */
 	_Atomic int64_t delay;
 	_Atomic int64_t anchor;		/* >= 0: restart the render clock at this sensor time */
@@ -110,9 +128,31 @@ static struct {
 	size_t stride;
 	int xres, yres, zoom;
 	uint32_t *back;
-	char stats[2][512];		/* the last stats as JSON, double-buffered for dvs_stats() */
+	char stats[2][1024];		/* the last stats as JSON, double-buffered for dvs_stats() */
 	_Atomic int stats_cur;
-} S = { .col = -1, .anchor = -1, .zoom = -1, .scan = SCAN };
+	/* dvs_record(): each line's packet words and a zero word; the decoder queues them, a writer thread gzips */
+	pthread_mutex_t rec_lock;	/* the decoder's queueing against start and stop */
+	int rec_on;			/* the decoder queues lines */
+	int rec_busy;			/* a recording is open: until dvs_record(NULL) has joined its writer */
+	uint64_t rec_events;		/* decoded while recording */
+	uint8_t *recq;			/* REC_Q bytes, kept for the next recording */
+	_Atomic uint64_t rq_head, rq_tail;	/* bytes queued, bytes written */
+	_Atomic int rec_stop, rec_err;	/* drain and end; the queue overflowed or a write failed */
+	pthread_t rec_thr;
+	gzFile rec;
+	_Atomic uint64_t act_lost;	/* events dvs_events() skipped: the decoder was about to overwrite them */
+	/* link counters for the D-PHY PLL tests (11.46), since dvs_start, on the words as they came: the decoder adds,
+	 * dvs_stats() reports. *_first: the step was the buffer's first (its packets follow the last buffer's). */
+	struct {
+		_Atomic uint64_t bufs, short_bufs, lines, unknown, sub_fixed, fe, fe_skips, fe_skips_first, fe_missed,
+			ts, ts_miss, ts_miss_first, ts_missed, ts_fixed, ts_bad, ts_back, ts_restarts;
+	} lk;
+	int lk_first_ts, lk_first_fe, lk_have_fe;	/* decoder: the next step is the buffer's first; a frame number */
+	uint32_t lk_fe;
+} S = { .col = -1, .anchor = -1, .zoom = -1, .scan = SCAN, .rec_lock = PTHREAD_MUTEX_INITIALIZER,
+	.flock = PTHREAD_MUTEX_INITIALIZER, .fcond = PTHREAD_COND_INITIALIZER };
+
+#define LK(f, n) atomic_fetch_add_explicit(&S.lk.f, (n), memory_order_relaxed)
 
 /* display settings: dvs_set() from the dvsctl page (ov5647-cap.py --ctl, 11.28), read by the render thread */
 static struct param {
@@ -178,17 +218,20 @@ static int64_t now_us(void)
  * decode() drops the events until a good one; so is a corrected one inside a bad stretch, or a reference that is
  * off would keep the stretch going. 4 in a row forward are a real gap (> 100 ms), 64 others (~2 buffers) a counter
  * reset. The display clock steps one scan over a gap: a lost buffer (30-60 ms, ~0.6/s in 11.28) is then a repeated
- * frame instead of a black one. */
+ * frame instead of a black one. The 22-bit ms reference wraps every 4194.304 s: steps are taken modulo that (11.46,
+ * 64 bad and a restart at the wrap before). */
+#define TS_WRAP (1000LL << 22)
 static void timestamp(int64_t raw)
 {
-	int64_t dt = raw - S.raw;
-	int fixed = 0, scan;
+	int64_t dt = ((raw - S.raw) % TS_WRAP + TS_WRAP + TS_WRAP / 2) % TS_WRAP - TS_WRAP / 2;
+	int fixed = 0, scan, first = S.lk_first_ts;
 
 	if (!S.have_ts) {
 		S.raw = raw;
 		S.have_ts = 1;
 		return;
 	}
+	S.lk_first_ts = 0;
 	for (int b = 1; (dt <= -1000 || dt >= 100000) && b < 22; b++) {
 		int64_t f = 1000LL << b;
 
@@ -197,18 +240,29 @@ static void timestamp(int64_t raw)
 		else if (dt + f >= 0 && dt + f < 100000)
 			dt += f, fixed = 1;
 	}
-	if (dt < 0 && dt > -1000)
+	if (dt < 0 && dt > -1000) {
+		LK(ts_back, 1);
 		return;
+	}
 	if (dt < 0 || dt >= 100000 || (fixed && S.bad)) {
+		LK(ts_bad, 1);
 		if (++S.bad >= (dt >= 100000 ? 4 : 64)) {
 			S.tot += dt > 0 && dt < 60000000 ? dt : 0;	/* a gap is sensor time without data */
 			S.raw = raw;
 			S.bad = 0;
+			LK(ts_restarts, 1);
 		}
 		return;
 	}
 	S.bad = 0;
 	scan = atomic_load_explicit(&S.scan, memory_order_relaxed);
+	LK(ts, 1);
+	LK(ts_fixed, fixed);
+	if (2 * dt > 3 * scan) {		/* a scan or more missing before this one */
+		LK(ts_miss, 1);
+		LK(ts_miss_first, first);
+		LK(ts_missed, (dt + scan / 2) / scan - 1);
+	}
 	S.t += dt <= 3 * scan ? dt : scan;
 	S.tot += dt;
 	S.cov += dt <= 3 * scan ? dt : 0;
@@ -241,29 +295,96 @@ static void slot(uint32_t t, uint32_t baf)
 }
 
 /*
- * baf > 0: background activity filter, EV_SUP if one of the 8 neighbours fired in this slot of baf/2 us or the
- * last one, baf/2 to baf before. One bit per pixel keeps the maps (200 kB) in cache: a 32-bit time per pixel
- * (2.8 MB) cost ~285 ns an event on the A55 (three DRAM misses in a row), 8x the decoding (11.28).
+ * baf > 0: background activity filter on ring events [from, to), in order: EV_SUP if one of the 8 neighbours
+ * fired in this slot of baf/2 us or the last one, baf/2 to baf before. One bit per pixel keeps the maps (200 kB)
+ * in cache: a 32-bit time per pixel (2.8 MB) cost ~285 ns an event on the A55 (three DRAM misses in a row), 8x
+ * the decoding (11.28). The decoder did this per event until 11.45; the same bits, from the ring.
  */
-static uint64_t put(uint64_t wr, uint32_t t, uint32_t addr, uint32_t bits, uint32_t off, uint32_t baf)
+static void filter(uint64_t from, uint64_t to, uint32_t baf)
+{
+	uint32_t last = 0;
+
+	for (uint64_t i = from; i < to; i++) {
+		struct ev *e = &S.ring[i % RING];
+		uint32_t y = e->y & EV_Y;
+		uint8_t *c, *o;
+
+		if (i == from || e->t != last)
+			slot(last = e->t, baf);
+		c = S.baf[S.slot & 1] + (e->x + 1) * BROW;
+		o = S.baf[~S.slot & 1] + (e->x + 1) * BROW;
+		if (rows3(c - BROW, y) | rows3(c + BROW, y) | (rows3(c, y) & 5) |	/* & 5: not itself */
+		    rows3(o - BROW, y) | rows3(o + BROW, y) | (rows3(o, y) & 5))
+			e->y |= EV_SUP;
+		c[(y + 1) >> 3] |= 1 << ((y + 1) & 7);
+	}
+}
+
+/* This thread on cpu only, at its cluster's top clock while it runs (uclamp, as dvsctl.pin does for the page,
+ * 11.30), renamed unless name is NULL; a CPU taken offline (hotplug) leaves it where it was. */
+static void pin(int cpu, const char *name)
+{
+	struct { uint32_t size, policy; uint64_t flags; int32_t nice; uint32_t prio; uint64_t rt, dl, per;
+		 uint32_t umin, umax; } a = { sizeof(a), 0, 0x08 | 0x10 | 0x20, 0, 0, 0, 0, 0, 1024, 1024 };
+	cpu_set_t set;
+
+	if (name)
+		prctl(PR_SET_NAME, name);
+	if (syscall(SYS_sched_setattr, 0, &a, 0))	/* KEEP_POLICY | KEEP_PARAMS | UTIL_CLAMP_MIN */
+		fprintf(stderr, "dvsview: uclamp: %s\n", strerror(errno));
+	CPU_ZERO(&set);
+	CPU_SET(cpu, &set);
+	if (sched_setaffinity(0, sizeof(set), &set))
+		fprintf(stderr, "dvsview: CPU%d: %s\n", cpu, strerror(errno));
+}
+
+/* The filter thread: woken after each buffer, it filters what came and moves fw; lapped, it skips ahead. */
+static void *filter_thread(void *arg)
+{
+	uint64_t f = 0, wr;
+	uint32_t baf;
+
+	pin(FILTER_CPU, "dvs-filter");
+	for (;;) {
+		pthread_mutex_lock(&S.flock);
+		while ((wr = atomic_load_explicit(&S.wr, memory_order_acquire)) == f)
+			pthread_cond_wait(&S.fcond, &S.flock);
+		pthread_mutex_unlock(&S.flock);
+		if (wr - f > RING / 2)		/* the decoder is overwriting what is older (or went back: a test) */
+			f = wr > RING / 2 ? wr - RING / 2 : 0;
+		if ((baf = PV(P_FILTER) * 1000))	/* once: the page may set 0 meanwhile (slot() divides by it) */
+			filter(f, wr, baf);
+		atomic_store_explicit(&S.fw, f = wr, memory_order_release);
+	}
+	return NULL;
+}
+
+static int start_filter(void)
+{
+	pthread_t th;
+
+	return -pthread_create(&th, NULL, filter_thread, NULL);
+}
+
+static void wake_filter(void)
+{
+	pthread_mutex_lock(&S.flock);
+	pthread_cond_signal(&S.fcond);
+	pthread_mutex_unlock(&S.flock);
+}
+
+static uint64_t put(uint64_t wr, uint32_t t, uint32_t addr, uint32_t bits, uint32_t off)
 {
 	while (bits) {
-		uint32_t y = addr * 8 + __builtin_ctz(bits), sup = 0;
+		uint32_t y = addr * 8 + __builtin_ctz(bits);
 		struct ev *e;
 
 		if (y >= YS)
 			break;			/* bits climb: the rest of the group is off the array too */
-		if (baf) {
-			uint8_t *c = S.baf[S.slot & 1] + (S.col + 1) * BROW, *o = S.baf[~S.slot & 1] + (S.col + 1) * BROW;
-
-			sup = (rows3(c - BROW, y) | rows3(c + BROW, y) | (rows3(c, y) & 5) |	/* & 5: not itself */
-			       rows3(o - BROW, y) | rows3(o + BROW, y) | (rows3(o, y) & 5)) != 0;
-			c[(y + 1) >> 3] |= 1 << ((y + 1) & 7);
-		}
 		e = &S.ring[wr++ % RING];
 		e->t = t;
 		e->x = S.col;
-		e->y = y | off << 15 | sup << 14;
+		e->y = y | off << 15;
 		bits &= bits - 1;
 	}
 	return wr;
@@ -273,11 +394,9 @@ static uint64_t put(uint64_t wr, uint32_t t, uint32_t addr, uint32_t bits, uint3
 static size_t decode(const uint32_t *p, size_t n)
 {
 	uint64_t wr = atomic_load_explicit(&S.wr, memory_order_relaxed);
-	uint32_t t = S.t, baf = PV(P_FILTER) * 1000;
+	uint32_t t = S.t;
 	size_t i;
 
-	if (baf)
-		slot(t, baf);
 	for (i = 0; i < n; i++) {
 		uint32_t w = __builtin_bswap32(p[i]);
 
@@ -289,26 +408,43 @@ static size_t decode(const uint32_t *p, size_t n)
 			if (S.col < 0 || S.col >= XS || S.bad)
 				continue;
 			if (!off) {
-				wr = put(wr, t, a1, w & 0xff, 0, baf);
-				wr = put(wr, t, a1, w >> 8 & 0xff, 1, baf);
+				wr = put(wr, t, a1, w & 0xff, 0);
+				wr = put(wr, t, a1, w >> 8 & 0xff, 1);
 			} else {
-				wr = put(wr, t, a1, w & 0xff, w >> 16 & 1, baf);
-				wr = put(wr, t, a1 + off, w >> 8 & 0xff, w >> 17 & 1, baf);
+				wr = put(wr, t, a1, w & 0xff, w >> 16 & 1);
+				wr = put(wr, t, a1 + off, w >> 8 & 0xff, w >> 17 & 1);
 			}
 			continue;
 		}
-		if ((w & 0xfffffc00) == 0x00800000)
+		if ((w & 0xfffffc00) == 0x00800000) {
 			w |= 2u << 26;		/* a SUB whose type bits the link cleared: all of them for 256 ms at times (11.28) */
+			LK(sub_fixed, 1);
+		}
 		switch (w >> 26) {
 		case 1:
 			S.col = w & 0x7ff;
+			break;
+		case 3: {			/* FRAME END, one per scan: its 8-bit number [18:11] steps by one */
+			uint32_t f = w >> 11 & 0xff, d = (f - S.lk_fe) & 0xff;
+
+			if (S.lk_have_fe && d != 1) {
+				LK(fe_skips, 1);
+				LK(fe_skips_first, S.lk_first_fe);
+				LK(fe_missed, d > 1 && d <= 16 ? d - 1 : 0);
+			}
+			S.lk_fe = f;
+			S.lk_have_fe = 1;
+			S.lk_first_fe = 0;
+			LK(fe, 1);
+			break;
+		}
+		default:			/* no defined type: a bit error (11.23); dvslink.py counts the same */
+			LK(unknown, 1);
 			break;
 		case 2:
 			if (w >> 23 & 1) {
 				timestamp((int64_t)S.ref * 1000 + (w & 0x3ff));
 				t = S.t;
-				if (baf)
-					slot(t, baf);
 			} else {
 				S.ref = w & 0x3fffff;
 			}
@@ -334,6 +470,23 @@ static void flush(const uint8_t *p, size_t n)
 		asm volatile("dc civac, %0" : : "r"(a) : "memory");
 }
 
+/* Queue n bytes for the recording writer (under rec_lock); when the writer is REC_Q behind (or failed) the
+ * recording loses its data, not the decoder its time: dvs_record(NULL) then says -EIO. */
+static void rec_put(const void *p, size_t n)
+{
+	uint64_t h = atomic_load_explicit(&S.rq_head, memory_order_relaxed);
+	size_t i = h % REC_Q, k = n < REC_Q - i ? n : REC_Q - i;
+
+	if (atomic_load_explicit(&S.rec_err, memory_order_relaxed) ||
+	    h + n - atomic_load_explicit(&S.rq_tail, memory_order_acquire) > REC_Q) {
+		atomic_store(&S.rec_err, 1);
+		return;
+	}
+	memcpy(S.recq + i, p, k);
+	memcpy(S.recq, (const uint8_t *)p + k, n - k);
+	atomic_store_explicit(&S.rq_head, h + n, memory_order_release);
+}
+
 /*
  * Decode a buffer of MIPI lines in place and zero the packets (bytesused is 0, so a zero is how the next frame
  * tells where its data ends); returns the bytes of packets. Every line of the 11.28 captures is one run of
@@ -344,25 +497,64 @@ static void flush(const uint8_t *p, size_t n)
  */
 static size_t decode_lines(uint8_t *buf, size_t len)
 {
-	size_t bytes = 0;
+	size_t bytes = 0, lines = 0, data = 0;
+	uint64_t w0 = atomic_load_explicit(&S.wr, memory_order_relaxed);
 
+	pthread_mutex_lock(&S.rec_lock);
 	for (size_t l = 0; l + 4 <= len; l += LINE) {
 		uint32_t *p = (uint32_t *)(buf + l);
 		size_t n = decode(p, (len - l < LINE ? len - l : LINE) / 4);
 
+		lines++;
+		data += n > 0;
+
+		if (S.rec_on && n) {
+			static const uint32_t zero;
+
+			rec_put(p, n * 4);
+			rec_put(&zero, 4);
+		}
 		memset(p, 0, n * 4);
 		flush((uint8_t *)p, n * 4);
 		bytes += n * 4;
 	}
+	LK(bufs, 1);
+	LK(lines, data);
+	LK(short_bufs, data < lines);	/* a MIPI frame cut short: fewer packets than lines (0x391A/B) */
+	if (S.rec_on)
+		S.rec_events += atomic_load_explicit(&S.wr, memory_order_relaxed) - w0;
+	pthread_mutex_unlock(&S.rec_lock);
 	asm volatile("dsb sy" : : : "memory");
 	return bytes;
+}
+
+/* Append the link counters (S.lk, since dvs_start) and close the stats object s */
+static void link_stats(char *s, size_t size)
+{
+	size_t k = strlen(s);
+#define L(f) (unsigned long long)atomic_load_explicit(&S.lk.f, memory_order_relaxed)
+
+	snprintf(s + k, size - k, "\"link\":{\"bufs\":%llu,\"short_bufs\":%llu,\"data_lines\":%llu,\"unknown\":%llu,"
+		 "\"sub_fixed\":%llu,\"fe\":%llu,\"fe_skips\":%llu,\"fe_skips_first\":%llu,\"fe_missed\":%llu,\"ts\":%llu,"
+		 "\"ts_miss\":%llu,\"ts_miss_first\":%llu,\"ts_missed\":%llu,\"ts_fixed\":%llu,\"ts_bad\":%llu,"
+		 "\"ts_back\":%llu,\"ts_restarts\":%llu}}", L(bufs), L(short_bufs), L(lines), L(unknown), L(sub_fixed),
+		 L(fe), L(fe_skips), L(fe_skips_first), L(fe_missed), L(ts), L(ts_miss), L(ts_miss_first), L(ts_missed),
+		 L(ts_fixed), L(ts_bad), L(ts_back), L(ts_restarts));
+#undef L
 }
 
 /* One VC0 buffer, in the cached dma-buf mmap between DMA_BUF_IOCTL_SYNC start and end (ov5647-cap.py). */
 int dvs_ingest(uint8_t *buf, size_t len)
 {
+	static int pinned;
 	int64_t t0 = now_us(), s_first = S.t, d, delay;
-	size_t n = decode_lines(buf, len);
+	size_t n;
+
+	if (!pinned++)
+		pin(DECODE_CPU, NULL);		/* the capture loop's thread: its name is the process's */
+	S.lk_first_ts = S.lk_first_fe = 1;
+	n = decode_lines(buf, len);
+	wake_filter();
 
 	atomic_store(&S.newest, S.t);
 	atomic_fetch_add(&S.covered, S.cov);
@@ -753,13 +945,14 @@ static void *render(void *arg)
 	unsigned frames = 0, dips = 0;
 	struct timespec next;
 
+	pin(RENDER_CPU, "dvs-render");
 	clock_gettime(CLOCK_MONOTONIC, &next);
 	for (;;) {
 		int64_t period = 1000000 / PV(P_FPS), window = PV(P_WINDOW) ? PV(P_WINDOW) * 1000LL : period;
 		int fade = PV(P_FADE), filter = PV(P_FILTER), color = PV(P_COLOR), flip = PV(P_FLIP);
 		int zoom = PV(P_ZOOM) && S.xres >= XS * 3 / 2 && S.yres >= YS * 3 / 2;
 		int64_t t0, end, anchor, newest;
-		uint64_t wr;
+		uint64_t wr, lim;
 
 		next.tv_nsec += period * 1000;
 		while (next.tv_nsec >= 1000000000) {
@@ -781,13 +974,14 @@ static void *render(void *arg)
 		if (end < prev)
 			end = prev;			/* the delay grew: hold, never step back in sensor time */
 		wr = atomic_load_explicit(&S.wr, memory_order_acquire);
+		lim = filter ? atomic_load_explicit(&S.fw, memory_order_acquire) : wr;	/* EV_SUP is set below fw */
 		if (wr - a > RING)
 			a = wr - RING;			/* the decoder lapped us: those events are gone */
 		if (wr - m > RING)
 			m = wr - RING;
 		if (b < a)
 			b = a;
-		while (b < wr && BEFORE(S.ring[b % RING].t, (uint32_t)end))
+		while (b < lim && BEFORE(S.ring[b % RING].t, (uint32_t)end))
 			b++;
 		while (a < b && BEFORE(S.ring[a % RING].t, (uint32_t)(end - window)))
 			a++;
@@ -851,8 +1045,10 @@ static void *render(void *arg)
 				events, bps, ingest, imax, (unsigned long long)kb, behind, cover, dips, scan);
 			snprintf(S.stats[next_stats], sizeof(S.stats[0]), "{\"fps\":%.1f,\"draw_ms\":%.1f,\"events\":%.0f,"
 				 "\"buffers\":%.1f,\"ingest_ms\":%.1f,\"kb\":%llu,\"behind_ms\":%.0f,\"coverage\":%.0f,"
-				 "\"dips\":%u,\"scan_us\":%d}", fps, draw, events, bps, ingest, (unsigned long long)kb, behind,
-				 cover, dips, scan);
+				 "\"dips\":%u,\"scan_us\":%d,\"act_lost\":%llu,", fps, draw, events, bps, ingest,
+				 (unsigned long long)kb, behind, cover, dips, scan,
+				 (unsigned long long)atomic_load(&S.act_lost));
+			link_stats(S.stats[next_stats], sizeof(S.stats[0]));
 			atomic_store(&S.stats_cur, next_stats);
 			frames = dips = 0;
 			frame_sum = frame_max = shown = lag = 0;
@@ -917,6 +1113,143 @@ const char *dvs_stats(void)
 	const char *s = S.stats[atomic_load(&S.stats_cur)];
 
 	return *s ? s : "{}";
+}
+
+/*
+ * The action classifier's reader (11.37): copy up to max events after *cursor into dst and move the cursor;
+ * *cursor == UINT64_MAX starts at the newest event. A reader more than RING / 2 behind jumps to there (the
+ * decoder may be overwriting the slots behind it) and the events it skipped go to act_lost.
+ */
+int dvs_events(struct ev *dst, int max, uint64_t *cursor)
+{
+	uint64_t wr = atomic_load_explicit(&S.wr, memory_order_acquire), c = *cursor, n, i;
+
+	if (c == UINT64_MAX) {
+		*cursor = wr;
+		return 0;
+	}
+	if (wr - c > RING / 2) {
+		atomic_fetch_add(&S.act_lost, wr - RING / 2 - c);
+		c = wr - RING / 2;
+	}
+	n = wr - c < (uint64_t)max ? wr - c : (uint64_t)max;
+	i = c % RING;
+	if (i + n > RING) {
+		memcpy(dst, S.ring + i, (RING - i) * sizeof(*dst));
+		memcpy(dst + (RING - i), S.ring, (n - (RING - i)) * sizeof(*dst));
+	} else {
+		memcpy(dst, S.ring + i, n * sizeof(*dst));
+	}
+	*cursor = c + n;
+	return n;
+}
+
+/* Add events e[0..n) into cells[2][120][160] (OFF after ON, 6 x 6 px each): the classifier's count frame,
+ * dvsact.Binner.push_ev. numpy took 25-50 ms for the 150-300 k events of a busy 60 ms (11.38). */
+void dvs_cells(const struct ev *e, int n, uint32_t *cells)
+{
+	for (int i = 0; i < n; i++) {
+		uint32_t x = e[i].x, y = e[i].y & EV_Y;
+
+		if (x < XS && y < YS)
+			cells[(e[i].y >> 15) * (YS / 6 * XS / 6) + y / 6 * (XS / 6) + x / 6]++;
+	}
+}
+
+/* A recording starts mid-stream: first a line that puts a fresh decoder where this one is (the last accepted
+ * timestamp, the reference after it, the column), so the replay keeps the first events and their times. */
+static void rec_state(void)
+{
+	uint32_t w[5], n = 0;
+
+	if (S.have_ts) {
+		w[n++] = 0x08000000 | (uint32_t)(S.raw / 1000 & 0x3fffff);
+		w[n++] = 0x08800000 | (uint32_t)(S.raw % 1000);
+		w[n++] = 0x08000000 | S.ref;
+	}
+	if (S.col >= 0)
+		w[n++] = 0x04000000 | S.col;
+	for (uint32_t i = 0; i < n; i++)
+		w[i] = __builtin_bswap32(w[i]);
+	w[n++] = 0;
+	if (n > 1)
+		rec_put(w, n * 4);
+}
+
+/* gzip the queue to the file until dvs_record(NULL) stops it and it is drained; on the CPUs of the thread that
+ * started the recording (dvsctl's, CPU7), off the decoder's. */
+static void *rec_writer(void *arg)
+{
+	prctl(PR_SET_NAME, "dvs-rec");
+	for (;;) {
+		uint64_t h = atomic_load_explicit(&S.rq_head, memory_order_acquire), t = atomic_load(&S.rq_tail);
+		size_t i = t % REC_Q, n = h - t < REC_Q - i ? h - t : REC_Q - i;
+
+		if (h == t) {
+			if (atomic_load(&S.rec_stop) && atomic_load_explicit(&S.rq_head, memory_order_acquire) == t)
+				break;
+			nanosleep(&(struct timespec){ 0, 2000000 }, NULL);
+			continue;
+		}
+		if (n > 1u << 20)
+			n = 1u << 20;		/* 1 MB at a time: the decoder gets the room back sooner */
+		if (!atomic_load(&S.rec_err) && gzwrite(S.rec, S.recq + i, n) != (int)n)
+			atomic_store(&S.rec_err, 1);	/* drain on: the decoder must not find the queue full */
+		atomic_store_explicit(&S.rq_tail, t + n, memory_order_release);
+	}
+	if (gzclose(S.rec) != Z_OK)
+		atomic_store(&S.rec_err, 1);
+	return arg;
+}
+
+/*
+ * Record the packets to path (gzip) until dvs_record(NULL), which returns the events decoded meanwhile once the
+ * writer has drained the queue (-EINVAL: not recording, -EIO: the queue overflowed or a write failed).
+ * -EBUSY: already recording. Replay: t --replay (11.37).
+ */
+int dvs_record(const char *path)
+{
+	int r = 0;
+	uint64_t n;
+
+	pthread_mutex_lock(&S.rec_lock);
+	if (path) {
+		errno = 0;
+		if (S.rec_busy)
+			r = -EBUSY;
+		else if (!S.recq && !(S.recq = malloc(REC_Q)))
+			r = -ENOMEM;
+		else if (!(S.rec = gzopen(path, "wb1")))
+			r = errno ? -errno : -ENOMEM;
+		else {
+			atomic_store(&S.rq_head, 0);
+			atomic_store(&S.rq_tail, 0);
+			atomic_store(&S.rec_stop, 0);
+			atomic_store(&S.rec_err, 0);
+			S.rec_events = 0;
+			rec_state();
+			if ((r = -pthread_create(&S.rec_thr, NULL, rec_writer, NULL)))
+				gzclose(S.rec);
+			else
+				S.rec_on = S.rec_busy = 1;
+		}
+		pthread_mutex_unlock(&S.rec_lock);
+		return r;
+	}
+	if (!S.rec_on) {			/* not recording, or another call is closing it */
+		pthread_mutex_unlock(&S.rec_lock);
+		return -EINVAL;
+	}
+	S.rec_on = 0;
+	n = S.rec_events;
+	pthread_mutex_unlock(&S.rec_lock);
+	atomic_store(&S.rec_stop, 1);		/* the decoder queues no more: drain, close */
+	pthread_join(S.rec_thr, NULL);
+	r = atomic_load(&S.rec_err) ? -EIO : (int)n;
+	pthread_mutex_lock(&S.rec_lock);
+	S.rec_busy = 0;
+	pthread_mutex_unlock(&S.rec_lock);
+	return r;
 }
 
 /* Length and type in front of the n data bytes at p + 8, CRC after them; returns the end of the chunk. */
@@ -990,7 +1323,7 @@ int dvs_start(const char *fbdev, int fps)
 		return -ENOMEM;
 	for (int i = 0; i < XS * YS; i++)
 		S.back[i] = BLACK;
-	return -pthread_create(&th, NULL, render, NULL);
+	return start_filter() ?: -pthread_create(&th, NULL, render, NULL);
 }
 
 #ifdef DVSVIEW_TEST
@@ -1027,6 +1360,41 @@ static void ev_add(uint32_t t, float x, float y)
 		return;
 	S.ring[w % RING] = (struct ev){ t, x, y };
 	atomic_store(&S.wr, w + 1);
+}
+
+/* --replay in.gz out.bin: a dvs_record() file, one zero-ended line at a time, back through decode() with the
+ * filter off; the events go to out.bin as struct ev (tools/host/act/readers.py reads it). */
+static int replay(const char *in, const char *out)
+{
+	static uint32_t line[LINE / 4];
+	gzFile g = gzopen(in, "rb");
+	FILE *fp = g ? fopen(out, "wb") : NULL;
+	uint64_t total = 0, w0;
+	size_t n = 0;
+	uint32_t w;
+	int r;
+
+	if (!g || !fp)
+		return perror(g ? out : in), 1;
+	dvs_set("filter_ms", 0);
+	while ((r = gzread(g, &w, 4)) == 4 || n) {
+		if (r == 4 && w) {
+			line[n++] = w;
+			if (n < LINE / 4)
+				continue;
+		}
+		w0 = nev();			/* a zero word, the end of the file, or a full line */
+		decode(line, n);
+		for (uint64_t i = w0; i < (uint64_t)nev(); i++)
+			fwrite(&S.ring[i % RING], sizeof(struct ev), 1, fp);
+		total += nev() - w0;
+		n = 0;
+	}
+	gzclose(g);
+	if (fclose(fp))
+		return perror(out), 1;
+	printf("replay: %llu events\n", (unsigned long long)total);
+	return 0;
 }
 
 /*
@@ -1092,6 +1460,8 @@ int main(int argc, char **argv)
 
 	if (alloc_ring())
 		return 1;
+	if (argc == 4 && !strcmp(argv[1], "--replay"))
+		return replay(argv[2], argv[3]);
 	feed(groups, 3);
 	if (nev() != 4)
 		return fprintf(stderr, "events %d, want 4\n", nev()), 1;
@@ -1131,6 +1501,32 @@ int main(int argc, char **argv)
 	feed((const uint32_t[]){ 0x0800006f, 0x088001ad }, 2);	/* ref 111: a 5 ms gap, one 1 ms scan on the display */
 	if (S.t != 23969)
 		return fprintf(stderr, "gap at a 1 ms scan: t %lld\n", (long long)S.t), 1;
+	reset();						/* the reference wraps: ref 2^22 - 1 to ref 0 is +1 ms */
+	feed((const uint32_t[]){ 0x083fffff, 0x088001ad, 0x08000000, 0x088001ad }, 4);
+	if (S.t != 1000)
+		return fprintf(stderr, "reference wrap: t %lld\n", (long long)S.t), 1;
+	{	/* link counters, 1 ms scans: 3 lines, the last empty; a scan missing (2 ms step), one word of no type,
+		 * frame numbers 7 8 10 */
+		static uint32_t b[3 * LINE / 4];
+		static const uint32_t l0[] = { 0x080000c8, 0x08800000, 0x0c003800, 0x080000c9, 0x08800000, 0x0c004000 };
+		static const uint32_t l1[] = { 0x080000cb, 0x08800000, 0x14000000, 0x0c005000 };
+		char js[1024] = "{";
+
+		reset();
+		atomic_store(&S.scan, 1000);
+		memset(&S.lk, 0, sizeof(S.lk));
+		S.lk_have_fe = 0;
+		for (size_t i = 0; i < 6; i++)
+			b[i] = __builtin_bswap32(l0[i]);
+		for (size_t i = 0; i < 4; i++)
+			b[LINE / 4 + i] = __builtin_bswap32(l1[i]);
+		decode_lines((uint8_t *)b, sizeof(b));
+		link_stats(js, sizeof(js));
+		if (!strstr(js, "{\"link\":{\"bufs\":1,\"short_bufs\":1,\"data_lines\":2,\"unknown\":1,\"sub_fixed\":0,"
+			    "\"fe\":3,\"fe_skips\":1,\"fe_skips_first\":0,\"fe_missed\":1,\"ts\":2,\"ts_miss\":1,"
+			    "\"ts_miss_first\":0,\"ts_missed\":1,\"ts_fixed\":0,\"ts_bad\":0,\"ts_back\":0,\"ts_restarts\":0}}"))
+			return fprintf(stderr, "link counters: %s\n", js), 1;
+	}
 	{					/* a black frame with one ON pixel at (1, 2) as a PNG, inflated back */
 		static uint8_t png[XS * YS * 3 + YS + 65536], raw[YS * (1 + XS * 3)];
 		int n, lit = 0;
@@ -1154,21 +1550,143 @@ int main(int argc, char **argv)
 	if (dvs_set("fade", 128) || PV(P_FADE) != 128 || dvs_set("fade", 999) != -ERANGE || dvs_set("nope", 1) != -ENOENT ||
 	    !strstr(dvs_params(), "\"fade\":{\"v\":128,\"def\":0,\"min\":0,\"max\":250}") || dvs_set("fade", 0))
 		return fprintf(stderr, "settings: %s\n", dvs_params()), 1;
-	/* filter: column 5, ON at rows 16 and 17 (the second has a neighbour), then column 300 row 400 alone */
+	/* filter: column 5, ON at rows 16 and 17 (the second has a neighbour), then column 300 row 400 alone; the
+	 * decoder leaves EV_SUP to filter() (its own thread on the board, 11.45) even with the filter on */
 	dvs_set("filter_ms", 5);
 	reset();
+	S.slot_us = 0;
 	feed((const uint32_t[]){ 0x04000005, 0x80080003, 0x0400012c, 0x80000000 | 50 << 18 | 1 }, 4);
 	dvs_set("filter_ms", 0);
-	if (nev() != 3 || S.ring[0].y & EV_SUP || !(S.ring[1].y & EV_SUP) || S.ring[2].y & EV_SUP)
+	if (nev() != 3 || (S.ring[0].y | S.ring[1].y | S.ring[2].y) & EV_SUP)
+		return fprintf(stderr, "filter: the decoder set EV_SUP\n"), 1;
+	filter(0, nev(), 5000);
+	if (S.ring[0].y & EV_SUP || !(S.ring[1].y & EV_SUP) || S.ring[2].y & EV_SUP)
 		return fprintf(stderr, "filter: %d events, flags %#x %#x %#x\n", nev(), S.ring[0].y, S.ring[1].y,
 			       S.ring[2].y), 1;
 	if (synth(300, 150, 0, 600, 2) || synth(250, 120, 30, 600, 4) || synth(200, 160, 15, 900, 4))
 		return fprintf(stderr, "box measurement off\n"), 1;
+	{					/* the action classifier's reader: from the newest event, then what came after */
+		struct ev dst[16];
+		uint64_t c = UINT64_MAX;
+
+		reset();
+		if (dvs_events(dst, 16, &c) || c != (uint64_t)nev())
+			return fprintf(stderr, "dvs_events start: cursor %llu\n", (unsigned long long)c), 1;
+		feed(groups, 3);
+		if (dvs_events(dst, 16, &c) != 4)
+			return fprintf(stderr, "dvs_events: not the 4 new events\n"), 1;
+		for (int i = 0; i < 4; i++)
+			if (dst[i].x != want[i].x || dst[i].y != want[i].y)
+				return fprintf(stderr, "dvs_events %d: %u,%#x\n", i, dst[i].x, dst[i].y), 1;
+	}
+	{					/* a recording of two lines (timestamps to 300 us, then groups) replays the same */
+		static uint32_t lines[2 * LINE / 4];
+		const char *gz = "/tmp/dvsview-rec.gz", *bin = "/tmp/dvsview-rec.bin";
+		struct ev rec[8], back[8];
+		FILE *fp;
+		int n, w0;
+
+		reset();
+		w0 = nev();
+		for (int i = 0; i < 4; i++)
+			lines[i] = __builtin_bswap32(ts[i]);
+		for (int i = 0; i < 3; i++)
+			lines[LINE / 4 + i] = __builtin_bswap32(groups[i]);
+		if (dvs_record(gz) || dvs_record(gz) != -EBUSY)
+			return fprintf(stderr, "dvs_record: start, or a second start not busy\n"), 1;
+		decode_lines((uint8_t *)lines, sizeof(lines));
+		n = dvs_record(NULL);
+		if (n != 4 || nev() - w0 != 4 || dvs_record(NULL) != -EINVAL)
+			return fprintf(stderr, "dvs_record: %d events, %d decoded\n", n, nev() - w0), 1;
+		memcpy(rec, S.ring + w0, n * sizeof(*rec));
+		reset();
+		if (replay(gz, bin) || !(fp = fopen(bin, "rb")))
+			return fprintf(stderr, "replay failed\n"), 1;
+		n = fread(back, sizeof(*back), 8, fp);
+		fclose(fp);
+		if (n != 4 || rec[0].t != 300 || memcmp(rec, back, sizeof(*rec) * 4))
+			return fprintf(stderr, "replay: %d events, t %u (want 4, 300)\n", n, n ? back[0].t : 0), 1;
+	}
+	{					/* started mid-stream: a column and a clock from before the recording */
+		static uint32_t lines[LINE / 4];
+		static const uint32_t body[] = { 0x80080001 | 0x8000, 0x84000000 | 3 << 18 | 1 << 17 | 0x0402,
+						 0x088001ff, 0x80080001 | 0x8000 };	/* 4 events, +494 us, 2 */
+		const char *gz = "/tmp/dvsview-rec2.gz", *bin = "/tmp/dvsview-rec2.bin";
+		struct ev rec[8], back[8];
+		FILE *fp;
+		int n, w0;
+
+		reset();
+		feed(ts, 4);			/* t 300 */
+		feed((const uint32_t[]){ 0x04000005 }, 1);
+		w0 = nev();
+		for (int i = 0; i < 4; i++)
+			lines[i] = __builtin_bswap32(body[i]);
+		dvs_record(gz);
+		decode_lines((uint8_t *)lines, sizeof(lines));
+		n = dvs_record(NULL);
+		memcpy(rec, S.ring + w0, n * sizeof(*rec));
+		reset();
+		if (n != 6 || replay(gz, bin) || !(fp = fopen(bin, "rb")))
+			return fprintf(stderr, "mid-stream recording: %d events\n", n), 1;
+		n = fread(back, sizeof(*back), 8, fp);
+		fclose(fp);
+		for (int i = 0; i < 6; i++)
+			if (n != 6 || back[i].t != rec[i].t - rec[0].t || back[i].x != rec[i].x || back[i].y != rec[i].y)
+				return fprintf(stderr, "mid-stream replay: %d events, event %d t %u x %u (live %u, %u)\n", n,
+					       i, back[i].t, back[i].x, rec[i].t - rec[0].t, rec[i].x), 1;
+	}
+	{					/* recording must not slow the decoder: gzip in the ingest thread took 6 -> 40 ms a
+						 * buffer at 1.7 M events/s and lost buffers (11.39) */
+		static uint32_t big[127 * LINE / 4];
+		int64_t us[2] = { 0, 0 };
+		uint32_t r = 1;
+
+		for (int on = 0; on < 2; on++) {
+			reset();
+			if (on && dvs_record("/tmp/dvsview-rec3.gz"))
+				return fprintf(stderr, "dvs_record busy\n"), 1;
+			for (int b = 0; b < 16; b++) {
+				int64_t t0;
+
+				for (int l = 0; l < 127; l++) {	/* a column, then groups to the end of the line */
+					uint32_t *p = big + l * LINE / 4;
+
+					p[0] = __builtin_bswap32(0x04000000 | (r >> 8) % XS);
+					for (int i = 1; i < LINE / 4; i++) {
+						r = r * 1103515245 + 12345;
+						p[i] = __builtin_bswap32(0x80000000 | (r >> 9) % 90 << 18 | (r & 0xffff));
+					}
+				}
+				t0 = now_us();
+				decode_lines((uint8_t *)big, sizeof(big));
+				us[on] += now_us() - t0;
+			}
+			if (on && dvs_record(NULL) <= 0)
+				return fprintf(stderr, "dvs_record of 16 buffers failed\n"), 1;
+		}
+		if (us[1] > 2 * us[0])
+			return fprintf(stderr, "decode while recording %.1f ms a buffer, %.1f without\n", us[1] / 16e3,
+				       us[0] / 16e3), 1;
+	}
+	{					/* a reader RING/2 + 100 behind skips the 100 that are about to be overwritten */
+		struct ev dst[16];
+		uint64_t c = nev(), lost = atomic_load(&S.act_lost);
+
+		for (uint32_t i = 0; i < RING / 2 + 100; i++)
+			ev_add(i, i % XS, i / XS % YS);
+		if (dvs_events(dst, 16, &c) != 16 || atomic_load(&S.act_lost) - lost != 100 ||
+		    c != (uint64_t)nev() - RING / 2 + 16)
+			return fprintf(stderr, "lapped reader: lost %llu, cursor %llu\n",
+				       (unsigned long long)(atomic_load(&S.act_lost) - lost), (unsigned long long)c), 1;
+	}
 	puts("selftest ok");
 
 	/* capture files, consecutive VC0 buffers: decode speed, timestamp coverage, the box filter on that scene */
 	reset();
 	B.warm = 0;				/* learn this scene's background, not the synthetic one */
+	memset(&S.lk, 0, sizeof(S.lk));
+	S.lk_have_fe = 0;
 	for (int f = 1; f < argc; f++) {
 		FILE *fp = fopen(argv[f], "rb");
 		static uint8_t buf[8192 * 127];
@@ -1181,6 +1699,7 @@ int main(int argc, char **argv)
 			return perror(argv[f]), 1;
 		fclose(fp);
 		t0 = now_us();
+		S.lk_first_ts = S.lk_first_fe = 1;
 		n = decode_lines(buf, len);
 		printf("%s: %zu B, %zu B of packets, %llu events, decode %.2f ms\n", argv[f], len, n,
 		       (unsigned long long)(nev() - w0), (now_us() - t0) / 1e3);
@@ -1188,8 +1707,12 @@ int main(int argc, char **argv)
 	if (argc > 1) {
 		int windows = 0, boxes = 0, most = 0;
 
+		char js[1024] = "{";
+
 		printf("sensor time %.1f ms, %.1f%% of it with scans back to back\n", S.tot / 1e3,
 		       S.tot ? 100.0 * S.cov / S.tot : 0.0);
+		link_stats(js, sizeof(js));
+		printf("%s\n", js);
 		for (uint64_t i = 0, j = 0; j < (uint64_t)nev(); i = j) {
 			int n, c;
 
@@ -1204,28 +1727,47 @@ int main(int argc, char **argv)
 		       MIN_CELLS, boxes, most);
 	}
 	for (int ms = 2; argc > 1 && ms <= 8; ms *= 2) {	/* the display filter on the same data */
-		uint64_t kept = 0;
-		int64_t t0, t;
+		uint64_t kept = 0, w0;
+		int64_t t0, t = 0, tf = 0;
 
-		dvs_set("filter_ms", ms);
 		reset();
 		S.slot_us = 0;			/* clear the bitmaps */
-		t = 0;
 		for (int f = 1; f < argc; f++) {
 			FILE *fp = fopen(argv[f], "rb");
 			static uint8_t buf[8192 * 127];
 			size_t len = fread(buf, 1, sizeof(buf), fp);
 
 			fclose(fp);
+			w0 = nev();
 			t0 = now_us();
 			decode_lines(buf, len);
 			t += now_us() - t0;
+			t0 = now_us();
+			filter(w0, nev(), ms * 1000);	/* as the filter thread does after each buffer */
+			tf += now_us() - t0;
 		}
 		for (uint64_t i = 0; i < (uint64_t)nev(); i++)
 			kept += !!(S.ring[i].y & EV_SUP);
-		printf("filter_ms %d: %.1f%% of %d events kept, decode %.2f ms per buffer\n", ms, 100.0 * kept / nev(),
-		       nev(), t / 1e3 / (argc - 1));
+		printf("filter_ms %d: %.1f%% of %d events kept (%llu), decode %.2f + filter %.2f ms per buffer\n", ms,
+		       100.0 * kept / nev(), nev(), (unsigned long long)kept, t / 1e3 / (argc - 1), tf / 1e3 / (argc - 1));
+	}
+	{					/* the filter thread, last (it stays): woken per buffer, it catches up */
+		int64_t t0 = now_us();
+
+		dvs_set("filter_ms", 5);
+		reset();
+		S.slot_us = 0;
+		if (start_filter())
+			return fprintf(stderr, "filter thread: not started\n"), 1;
+		feed((const uint32_t[]){ 0x04000005, 0x80080003, 0x0400012c, 0x80000000 | 50 << 18 | 1 }, 4);
+		wake_filter();
+		while (atomic_load(&S.fw) != (uint64_t)nev() && now_us() - t0 < 1000000)
+			usleep(1000);
 		dvs_set("filter_ms", 0);
+		if (atomic_load(&S.fw) != 3 || S.ring[0].y & EV_SUP || !(S.ring[1].y & EV_SUP) || S.ring[2].y & EV_SUP)
+			return fprintf(stderr, "filter thread: %llu of 3 events passed\n",
+				       (unsigned long long)atomic_load(&S.fw)), 1;
+		puts("filter thread ok");
 	}
 	return 0;
 }

@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-07)
+# E850-96 bring-up 현재 상태 (2026-11-14 08:45 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -12,12 +12,12 @@
 | C2 cpuidle | **보류.** 코어가 C2에서 깨어나지 않는다. 펌웨어 문제로 본다. `cpuidle.off=1` 유지 | 11.12 |
 | 코어 배치 | 장치 IRQ는 모두 CPU0. live: 그리기 약 0.75코어, 캡처·디코드 0.13~0.19. **CPU7은 웹 페이지 전용**(`dvs-web` 스레드, uclamp.min 1024로 돌 때만 최고 클럭). systemd 전체는 CPU0~6(`e850-cpu7.conf`). 측정: `tools/board/cpumap-cap.sh` + `tools/host/cpumap.py` | 11.30 |
 | 카메라 OV5647 | 55~63 fps(VTS 수정, 캡처 중 printk 끔). **2026-11-06 사용자가 떼어 내고 DVS 센서로 교체했다** | 11.10 |
-| DVS 센서 S5KRC1S | I2C 확인: `i2c-7`(HSI2C2) 주소 0x10, 0x303B 쓰기/읽기 OK. 전원은 `modules/dvs-power`(LDO32 + RSTN GPC0[2]). 매뉴얼에 칩 ID 레지스터 없음, 0x36도 응답(정체 모름). Pablo CIS 드라이버 `modules/s5krc1s-pablo`(OV5647과 같은 ISP 우회) 빌드, boot-dvs로 부팅. 드라이버로 전원·I2C·stream on까지 동작. Delta_10_2000FPS setfile로 **CSIS가 MIPI 프레임을 받는다**(F38/3 s). 하지만 DMA done이 없어 VC0 프레임은 사용자 공간에 0개, stop 시 VRESOL_MISMATCH·OVERFLOW. overflow 패닉은 껐다. 스트림 도중 I2C 쓰기나 insmod를 한 시험에서 soft lockup이 두 번 났다(전원 재투입 필요). 1000 FPS 시도(`to_scnt1`=1999)는 아직 효과를 측정하지 못했다. IRQ 폭주 원인은 CSIS v1.2가 VRESOL 오류 상태를 지우지 않은 것이었다(패치로 수정). devfreq를 최대로 하면 **DVS 이벤트가 사용자 공간에 온다**(`tools/host/dvsdecode.py`로 AER 패킷 확인). 남은 문제: CRC 오류(1499 Mbps 수신 설정에서 줄지만 남음), 매뉴얼에 없는 패킷 type 000000/000101(손상인지 미확정). 캡처는 `dvscap.sh`. 타임스탬프로 잰 실제 프레임 간격은 494 µs(약 2024 fps)라서 1000 FPS 설정은 효과가 없다. 오류 10프레임이면 CSIS를 끄는 vendor 동작을 `fimc_is.e850_csi_err_stop=0`으로 풀었고, **`ov5647-cap.py --live --raw8`로 HDMI에 이벤트 영상(ON 초록/OFF 빨강)을 계속 띄운다**(`is_cis_s5krc1s.flush_us=250`이면 초당 약 11번 갱신, 11.25. to_scnt1은 프레임 주기가 아니라 MIPI flush 타임아웃이라 999로 되돌림) 32줄 모드(mode1)는 System MMU fault 패닉으로 보류(11.26). 디코딩·렌더를 C(`libdvsview.so`)로 옮겨 HDMI **30 fps**, 디코딩 5.2 ms/MB(numpy의 약 45배). 하지만 버퍼에 센서 시간의 약 14%만 들어온다(CRC 시 DMA abort로 추정, 11.27). **11.28: 화면 깜빡임의 세 원인을 고쳤다.** ① CRC 비트가 `error_id`에 쌓여 프레임마다 오류 flush(fimc-is 패치) ② 링크가 워드의 종류 비트 31~26을 지워 SUB 타임스탬프가 256 ms씩 사라짐(디코더가 복구) ③ 커널 볼륨에 남아 있던 EMERG 디버그 printk가 5초마다 CPU0 인터럽트 안에서 UART로 나가 프레임 손실(지움). 지금 live는 초당 68버퍼, 2초 커버리지 93~100%, 지연 21~24 ms, 어두운 프레임 0장(3분). 화면 조정 앱 `http://192.168.0.236:8080/`(인증 없음). CRC 오류는 초당 약 8700개로 그대로다(링크 문제로 추정). **11.29: CRC 원인은 센서 D-PHY PLL M(0x30A6)이었다.** vendor 0x8D는 줄마다 CRC였고, 0x72~0x78에서는 CRC 0, 깨진 워드 0이다. setfile을 0x75로 바꾸고 재부팅한 뒤 3분 동안 CRC 0개였다(0x70·0x7C·0x80은 데이터 없음, 0x7A는 CRC, 좁은 구간이라 장시간 안정성은 미측정). scan 속도는 `is_cis_s5krc1s.margin`(DTAG_FRM_MARGIN)으로 정한다. 주기는 430 + 32.4 × margin µs이고, 기본 17은 985 µs(1015 fps)다. 디코더가 scan 주기를 직접 잰다. **웹 서비스 `dvslive.service`(부팅 때 시작): `http://192.168.0.236:8080/`**, 미리보기 기본 10 fps(PNG는 C로 만들어 보드 안에서 34 ms), 센서 scan 속도·MIPI flush를 바꾸면 스트림을 다시 시작, 인증 없음. **11.30: 웹을 CPU7 전용으로 하고 keep-alive·TCP_NODELAY를 켜서 Wi-Fi 응답이 104~113 → 28~40 ms**(링크 상태에 따라), 미리보기 20/30 fps 추가 | 11.17~11.30 |
-| DVS 사람 행동 분류 | **spec 검토 대기(3장 1번).** 나타남·움직임·넘어짐을 DVS 이벤트로 분류해 JSONL에 기록한다. 방법은 60 ms 프레임 → MobileNetV3-small(ImageNet) → GRU, 16 Hz. A55 한 코어에서 무작위 가중치 모델 27.2 ms(실측). 코드는 아직 없다 | 11.36 |
+| DVS 센서 S5KRC1S | I2C 확인: `i2c-7`(HSI2C2) 주소 0x10, 0x303B 쓰기/읽기 OK. 전원은 `modules/dvs-power`(LDO32 + RSTN GPC0[2]). 매뉴얼에 칩 ID 레지스터 없음, 0x36도 응답(정체 모름). Pablo CIS 드라이버 `modules/s5krc1s-pablo`(OV5647과 같은 ISP 우회) 빌드, boot-dvs로 부팅. 드라이버로 전원·I2C·stream on까지 동작. Delta_10_2000FPS setfile로 **CSIS가 MIPI 프레임을 받는다**(F38/3 s). 하지만 DMA done이 없어 VC0 프레임은 사용자 공간에 0개, stop 시 VRESOL_MISMATCH·OVERFLOW. overflow 패닉은 껐다. 스트림 도중 I2C 쓰기나 insmod를 한 시험에서 soft lockup이 두 번 났다(전원 재투입 필요). 1000 FPS 시도(`to_scnt1`=1999)는 아직 효과를 측정하지 못했다. IRQ 폭주 원인은 CSIS v1.2가 VRESOL 오류 상태를 지우지 않은 것이었다(패치로 수정). devfreq를 최대로 하면 **DVS 이벤트가 사용자 공간에 온다**(`tools/host/dvsdecode.py`로 AER 패킷 확인). 남은 문제: CRC 오류(1499 Mbps 수신 설정에서 줄지만 남음), 매뉴얼에 없는 패킷 type 000000/000101(손상인지 미확정). 캡처는 `dvscap.sh`. 타임스탬프로 잰 실제 프레임 간격은 494 µs(약 2024 fps)라서 1000 FPS 설정은 효과가 없다. 오류 10프레임이면 CSIS를 끄는 vendor 동작을 `fimc_is.e850_csi_err_stop=0`으로 풀었고, **`ov5647-cap.py --live --raw8`로 HDMI에 이벤트 영상(ON 초록/OFF 빨강)을 계속 띄운다**(`is_cis_s5krc1s.flush_us=250`이면 초당 약 11번 갱신, 11.25. to_scnt1은 프레임 주기가 아니라 MIPI flush 타임아웃이라 999로 되돌림) 32줄 모드(mode1)는 System MMU fault 패닉으로 보류(11.26). 디코딩·렌더를 C(`libdvsview.so`)로 옮겨 HDMI **30 fps**, 디코딩 5.2 ms/MB(numpy의 약 45배). 하지만 버퍼에 센서 시간의 약 14%만 들어온다(CRC 시 DMA abort로 추정, 11.27). **11.28: 화면 깜빡임의 세 원인을 고쳤다.** ① CRC 비트가 `error_id`에 쌓여 프레임마다 오류 flush(fimc-is 패치) ② 링크가 워드의 종류 비트 31~26을 지워 SUB 타임스탬프가 256 ms씩 사라짐(디코더가 복구) ③ 커널 볼륨에 남아 있던 EMERG 디버그 printk가 5초마다 CPU0 인터럽트 안에서 UART로 나가 프레임 손실(지움). 지금 live는 초당 68버퍼, 2초 커버리지 93~100%, 지연 21~24 ms, 어두운 프레임 0장(3분). 화면 조정 앱 `http://192.168.0.236:8080/`(인증 없음). CRC 오류는 초당 약 8700개로 그대로다(링크 문제로 추정). **11.29: 0x30A6을 0x8D에서 0x75로 바꾸자 CRC가 없어졌다.** (**11.46 정정:** 0x30A5~A7은 19비트 PLL 단어이고 0x30A6은 M만이 아니라 P에도 들어간다. 0x75는 공식값 5376 Mbps로 VCO 범위 밖이다. 실제 속도를 모르는 **실험값**이다. 0x75 녹화 42개에서 CRC 없이 scan 1.62%가 빠졌다. 2026-11-12 A/B 10분씩: 0x75, 00/8B/B0, 00/8B/F8 모두 CRC 0. **버퍼 사이 scan 누락(1~1.6%)은 PLL이 아니라 디코더가 128번째 줄을 버린 탓이었다**(센서 128줄, DT 127줄). `W × (H + 1)`로 고친 뒤 00/8B/B0 10분 모든 판정 통과. 수신 설정을 맞춰도 같다. 시험 계획과 결과: [DVS-PLL-TESTS.md](DVS-PLL-TESTS.md))  vendor 0x8D는 줄마다 CRC였고, 0x72~0x78에서는 CRC 0, 깨진 워드 0이다. setfile을 0x75로 바꾸고 재부팅한 뒤 3분 동안 CRC 0개였다(0x70·0x7C·0x80은 데이터 없음, 0x7A는 CRC, 좁은 구간이라 장시간 안정성은 미측정). scan 속도는 `is_cis_s5krc1s.margin`(DTAG_FRM_MARGIN)으로 정한다. 주기는 430 + 32.4 × margin µs이고, 기본 17은 985 µs(1015 fps)다. 디코더가 scan 주기를 직접 잰다. **웹 서비스 `dvslive.service`(부팅 때 시작): `http://192.168.0.236:8080/`**, 미리보기 기본 10 fps(PNG는 C로 만들어 보드 안에서 34 ms), 센서 scan 속도·MIPI flush를 바꾸면 스트림을 다시 시작, 인증 없음. **11.30: 웹을 CPU7 전용으로 하고 keep-alive·TCP_NODELAY를 켜서 Wi-Fi 응답이 104~113 → 28~40 ms**(링크 상태에 따라), 미리보기 20/30 fps 추가 | 11.17~11.30 |
+| DVS 사람 행동 분류 | **구현 중(3장 1번). 과제 1~5 끝, 6~8은 도구까지(11.40):** 보드 분류 스레드(무작위 모델로 16 Hz, live·웹 영향 없음, 11.38), 페이지에서 동작 녹화(11.39), 녹화 확인·데이터·학습·평가 도구(11.40). 공개 데이터 PAF 411개, DailyDVS-200 1,021개를 학습 입력으로 만들었다(11.41). 공개 데이터로 10에폭 학습(69분, loss 1.73 → 0.72). DailyDVS 미사용 323개 참고 평가 67%, 넘어짐 82%. 다만 앉기의 21%가 넘어짐으로 나왔다(정면 데이터, 미세조정 전 기준선, 11.43). 보드 live 첫 시험에서 공개 모델은 앉기를 한 번도 맞히지 못했고, 빈 화면 2분에 오경보 14번을 냈다. 보드 빈 화면 21개를 배경으로 섞어 다시 학습한 `mix` 모델은 빈 화면 5분에 0번이다(11.44). 옆에서 녹화한 앉기 13·일어서기 10(동작마다 자름)을 더해 학습한 `sitstand` 모델은 평가용 앉기·일어서기 4/4를 맞혔다. 다만 빈 화면 0/2다. 보드는 앉음·서 있음만 판정하도록 바꿨고, 상태는 웹 페이지 맨 위에 나온다(`http://<보드>/`, 11.45). **남은 것: 넘어짐 녹화, 빈 화면 오경보 확인.** 나타남·움직임·넘어짐을 DVS 이벤트로 분류해 JSONL에 기록한다. 방법은 60 ms 프레임 → MobileNetV3-small(ImageNet) → GRU, 16 Hz. A55 한 코어에서 무작위 가중치 모델 27.2 ms(실측) | 11.36~11.45 |
 | 상자 크기 측정 | **사람 행동 분류와 별개 과제(3장 2번).** 목표는 컨베이어 위 상자를 1.5 m에서 보고 가로·세로·높이를 재는 것이다. 1차 시험에서 손에 든 상자는 재지 못했다. hull이 손과 팔까지 묶었다. 기록 80개는 제각각이었다. 다음 방향은 사용자 결정 대기다 | 11.35 |
 | HDMI 콘솔 색 | 흰 글씨. dpu.ko 패치로 근본 수정했다(`e850-fbpal`과 rebind는 쓰지 않음). 전원을 껐다 켠 뒤에도 사용자가 화면에서 확인했다 | 11.14~11.16 |
 | HDMI 출력 꺼짐 | 해결. `decon_release()`가 fb0를 닫을 때마다 DECON을 끄던 것을 open 수 세기로 고쳤다(dpu.ko 재빌드) | 11.15 |
-| 네트워크 | Wi-Fi 192.168.0.236(ssh), USB NCM 192.168.7.1. **Wi-Fi 펌웨어 패닉 2번**(2026-11-07, 부팅 후 2.6시간과 6분, `WLBT FW PANIC: 0x04`, 원인 모름·재현 못 함). **11.31부터 자동 복구를 켰다**(`e850-wifi.sh`가 `disable_recovery_handling=0`). 강제 패닉 4번(런타임 설정)과 1번(부팅 설정) 모두 복구, `wlan0` 재연결 5.6~6.5초, 8080 응답 5.6~7.3초. 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`. **11.32: journal을 초당 130줄 → 분당 38줄로 줄였다**(카메라 bypass 경고, 워치독 keepalive). journal은 약 2주 남는다(추정). 11.33: vendor 버그 2개 수정(`mx_panic` 0600, system error log WARN) | 11.5, 11.30, 11.31, 11.32, 11.33 |
+| 네트워크 | Wi-Fi 192.168.0.236(ssh), USB NCM 192.168.7.1. **Wi-Fi 펌웨어 패닉 2번**(2026-11-07, 부팅 후 2.6시간과 6분, `WLBT FW PANIC: 0x04`, 원인 모름·재현 못 함). **11.31부터 자동 복구를 켰다**(`e850-wifi.sh`가 `disable_recovery_handling=0`). 강제 패닉 4번(런타임 설정)과 1번(부팅 설정) 모두 복구, `wlan0` 재연결 5.6~6.5초, 8080 응답 5.6~7.3초. 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`. **11.32: journal을 초당 130줄 → 분당 38줄로 줄였다**(카메라 bypass 경고, 워치독 keepalive). journal은 약 2주 남는다(추정). 11.33: vendor 버그 2개 수정(`mx_panic` 0600, system error log WARN). **11.47: 저절로 나는 0x04 패닉(약 3.8시간에 1번)은 펌웨어 Data Abort다. 2026-11-13 00:47 KST에 펌웨어를 Linaro Android 13 판 `S612_E3830_R4-1_Y23W13A`(2023-03)로 바꿨다**(옛 판 2019-12). 다시 붙는 데 8초 걸렸다. **24시간 시험(11-13 00:47~11-14 00:47 KST)에서 패닉 0번**(11.48) | 11.5, 11.30, 11.31, 11.32, 11.33, 11.47, 11.48 |
 | 서비스 | nginx(80), ssh, e850-hdmi, e850-wifi, systemd-timesyncd, 워치독 데몬 | |
 | 사용자 계획 | MySQL + Apache로 출입 기록, YOLO nano 영상 처리 | |
 
@@ -69,7 +69,7 @@
 | 경로 | 변경 |
 |---|---|
 | `boot` 파티션 | **2026-11-07 08:27 KST부터 `~/e850-logs/boot-dvs3/boot.img`**(boot-dvs2 + 조용한 `s3c2410_wdt.ko`, gadget을 기다리는 `e850-vbus.ko`, 11.32). 그 전 판은 `boot-dvs2`(DT mode1 8192×32, 11.26), `boot-dvs`. 복구용 정상 이미지는 `boot-nokvm` |
-| `/lib/modules/.../is-cis-s5krc1s.ko` | **2026-11-07 margin·regs param + D-PHY PLL M 0x75(0b35f571…, 11.29)**. 이전: `/root/is-cis-s5krc1s.ko.prev-margin`(1b5c7d77), `.prev-11.28`(01dd3c98, 모드별 줄 수 127/32 판, 11.26), `.mode0only` |
+| `/lib/modules/.../is-cis-s5krc1s.ko` | **2026-11-07 margin·regs param + 0x30A6 0x75(실험값, 11.46)(0b35f571…, 11.29)**. 이전: `/root/is-cis-s5krc1s.ko.prev-margin`(1b5c7d77), `.prev-11.28`(01dd3c98, 모드별 줄 수 127/32 판, 11.26), `.mode0only` |
 | `/lib/modules/$(uname -r)/e850-cpuhp.ko` | 추가. `/etc/modules-load.d/e850-cpuhp.conf`로 자동 적재 |
 | `/lib/modules/$(uname -r)/e850-fbpal.ko` | 추가. 11.16부터는 올리지 않는다(파일만 남음) |
 | `/lib/modules/$(uname -r)/is-cis-ov5647.ko` | VTS 수정판으로 교체. 원본은 `/root/is-cis-ov5647.ko.orig` |
@@ -101,6 +101,14 @@
 | `/lib/modules/.../s3c2410_wdt.ko`, `e850-vbus.ko` | 2026-11-07 boot-dvs3와 같은 판(dfd6bae7…, 0990ffa3…, 11.32). 이전: `/root/*.ko.prev-11.32` |
 | `/lib/modules/.../scsc_mx.ko`, `scsc_wlan.ko` | 2026-11-07 `mx_panic` 0600, system error log 크기 버그 수정(ee2b5944…, a02d408e…, 11.33). 이전: `/root/scsc_*.ko.prev-11.33` |
 | `/var/tmp/boxbench/boxes.jsonl` | 추가(11.35). 상자 측정 1차 시험 기록. 지워도 된다 |
+| `/lib/modules/.../is-cis-s5krc1s.ko`, `/usr/local/lib/libdvsview.so`, `/usr/local/share/dvsview/dvsctl.py` | **2026-11-12 11.46판**: CIS `pll` 파라미터와 `pll_live` 다시 읽기(182f06f0…), `/stats`의 `link` 계수기(db2b51bd…), `pll`(5ec64db2…). 이전: `/root/is-cis-s5krc1s.ko.prev-11.46`, `/usr/local/lib/libdvsview.so.prev-11.46`, `/root/dvsctl.py.prev-11.46` |
+| `/usr/local/bin/ov5647-cap.py` | **2026-11-12 23:43 KST**: 이상 상태가 되면 스트림을 다시 켠다(`--stuck`, md5 bcfde139, 11.46). 이전 판은 `/root/ov5647-cap.py.prev-stuck`(md5 03fdbff4)이다 |
+| `/usr/local/lib/libdvsview.so` | **2026-11-12 23:04 KST**: 22비트 기준값 한 바퀴를 처리한다(md5 c10b0382, 11.46). 이전 판은 `.prev-wrap`(md5 db798ea1, 11.46판)이다. `/var/tmp`에 `wifistuck.sh`, `stuckscan.py`, `stuck2/`(이상 상태 dmesg·녹화)를 추가했다 |
+| `/var/tmp/plltest.py`, `dvslink.py`, `pll-ab.sh`, `plltest/` | 추가(11.46). PLL 시험 실행기, 기록 검사기, A/B 묶음, 결과(Mac `~/e850-logs/plltest/`에 사본) |
+| `/usr/local/bin/ov5647-cap.py` | **2026-11-12 128줄 디코딩**(`dvs_ingest(buf, W × (H + 1))`, md5 `03fdbff4…`, 11.46). 이전: `/root/ov5647-cap.py.prev-11.46`(7d82fa17) |
+| `/lib/modules/.../is-cis-s5krc1s.ko`, `/var/tmp/plltest.py` | **2026-11-14 08:20 KST 11.49판: 기본 setfile PLL 00/8B/B0**(모듈 md5 f96703b7, plltest 6787f7a4). 이전: `/root/is-cis-s5krc1s.ko.prev-11.49`(0x75, 0fe3ba23), `/var/tmp/plltest.py.prev-11.49` |
+| `/vendor/etc/wifi` | **2026-11-13 00:47 KST**: Linaro A13 WLBT 펌웨어(`mx140.bin` md5 792565d8, `S612_E3830_R4-1_Y23W13A`, 규제 DB `regulatory_db_2_7`, 11.47). 이전(Android 10) 판은 `/var/tmp/wifi-a10-vendor`에 있다. 되돌리기는 root `sh /var/tmp/wifi-fwswap.sh a10`이다. 받기는 `tools/linux510/wifi-fw-linaro.py`다. 01:15 KST부터는 `build-rootfs.sh`가 `out/wifi-a13.tgz`를 넣고, Wi-Fi 패키지와 `e850-wifi`도 넣는다(11.47) |
+| `/usr/local/bin/e850-wifi.sh` | 2026-11-13 펌웨어 출처 주석만 고침(22c43270, 11.47). 이전: `/root/e850-wifi.sh.prev-11.47`(47489536) |
 | `/etc/sysctl.d/90-e850-autoreboot.conf` | 추가(11.22). `softlockup_panic=1`, `panic=5` |
 | `/root/csis-irqstat.ko` | 추가(11.22). kretprobe IRQ 계수기, 캡처 전에 insmod하고 끝나면 rmmod |
 | `/usr/local/bin/dvscap.sh` | 추가(11.23). devfreq 최대 + 캡처 + IRQ 계수 |
@@ -110,13 +118,13 @@
 
 ## 3. 다음에 할 실험
 
-1. **DVS 사람 행동 분류: 나타남 / 움직임 / 넘어짐 (spec 검토 대기)**
+1. **DVS 사람 행동 분류: 나타남 / 움직임 / 넘어짐 (구현 중)**
    - 설계: `docs/superpowers/specs/2026-11-07-dvs-person-action-design.md`. 조사와 실측: 11.36.
    - 방법(A′): 60 ms 이벤트 수 프레임(2×120×160) → ImageNet 사전 학습 MobileNetV3-small → GRU, 16 Hz, CPU4~6, 상태가 바뀔 때 JSONL 한 줄. Sony·Intel 2025 넘어짐 연구를 따른다. 공개 데이터 PAF·DailyDVS-200으로 학습하고 우리 센서 녹화(동작당 5~10번)로 미세 조정한다.
    - 실측: 무작위 가중치 모델이 A55 한 코어에서 27.2 ms, 프레임 만들기 5.6~7.8 ms. 16 Hz면 코어 하나의 55~60%다.
    - 할 일:
-     1. 사용자가 spec을 검토한다. 승인을 받으면 구현 계획을 쓴다(`docs/superpowers/plans/`). 승인 전에는 구현 코드를 쓰지 않는다.
-     2. 계획의 첫 단계는 공개 데이터 받기 확인이다. DailyDVS-200 라벨은 Baidu에, PAF는 SharePoint에 있다.
+     1. 구현 계획 `docs/superpowers/plans/2026-11-07-dvs-person-action.md`(과제 9개)를 `dvs-person-action` 브랜치에서 실행 중이다. 과제 1(데이터 읽기, 11.37)과 2~4(녹화·이벤트 읽기 C 함수, 프레임·판정, 보드 분류 스레드와 설치, 11.38)는 끝났다. 분류는 `/var/lib/dvsact/enable`이 있을 때만 돈다(지금 꺼짐, 모델 없음). 과제 5(페이지 "행동 녹화", `POST /rec`, 11.39)도 끝났다. 녹화는 `/var/tmp/dvsrec`에 쌓이니 묶음마다 Mac `~/e850-logs/dvsrec/`로 옮기고 지운다. 파일 전송은 USB NCM(192.168.7.1, 13 MB/s), root 설치는 ACM 콘솔로 한다.
+     2. 공개 데이터는 사용자가 브라우저로 받는다. PAF는 Tongji SharePoint, DailyDVS-200은 Google Drive(`action_<번호>` 폴더)에 있다. 받을 곳은 `~/e850-act-data/paf`, `~/e850-act-data/dailydvs`다.
 2. **상자 크기 측정 (사람 행동 분류와 별개 과제, 다음 방향 사용자 결정 대기)**
    - 요구 사항, 높이 설계 구상, 1차 시험 결과는 11.35에 있다. 요구 사항은 1.5 m, 위에서 수직, ±1~2 cm, 파일 + HDMI + 웹, 시험 상자 19×15×5 cm다.
    - 1차 시험: 손에 든 상자를 사람 앞에서 옮겼다. 기존 `dvs_boxes()`가 상자와 손·팔을 한 덩어리로 묶었다. 상자를 옮기기 전에도 사람의 움직임을 상자로 기록했다.
@@ -135,6 +143,19 @@
    - 판정: 매번 배경 0x000000, 글자 0xffffff인지 본다.
    - 2.2의 가설 1·2를 확인하는 실험이다.
 4. **Wi-Fi 펌웨어 패닉 원인 (자동 복구는 11.31에서 켰다)**
+   - **11.47(2026-11-13):** 저절로 나는 0x04 패닉 6번은 모두 펌웨어 `Data Abort`였다(vendor의 `mx140.sym`·`log-strings.bin`으로 R4 기록 [2]를 풀었다). abort 자리는 늘 힙 할당·수신 버퍼 풀 함수였다(`pfree…`, `pmalloc_debug_validate_free_list`, `dplane_dpif_resource_topup_all_rx_pools` 등). 펌웨어 힙 손상으로 본다(가설). 해석기는 `tools/host/wlbt-panic.py`다.
+   - **끝남: 새 펌웨어 24시간 시험(2026-11-13 00:47 KST ~ 11-14 00:47 KST), 패닉 0번(11.48).**
+     - [확인] 지금 부팅(06:13 KST부터 18.6시간): `mx_recovery_count` 0. 커널 로그에 `WLBT FW PANIC`이 없고, 감시가 읽은 454번이 모두 0이었다.
+     - [확인, 근거 약함] 그 전 5.4시간(교체 뒤 44분 + 01:31 부팅): Mac 감시가 5분마다 0을 읽었다. 그 부팅의 커널 journal은 01:32에서 끊겨 있어(전원 차단) 로그로는 확인하지 못했다.
+     - 판정: 정한 기준(값이 늘지 않음)을 넘었다. 옛 빈도(3.8시간에 1번)라면 24시간 동안 약 6번 났어야 하고, 0번일 확률은 약 0.2%다(지금 부팅 18.6시간만 쳐도 약 0.8%).
+     - 남은 변수: 지금 부팅은 확인할 때마다 2.4 GHz(2437 MHz)였다. 앞의 5.4시간은 5 GHz(5745 MHz)였다. 옛 펌웨어 때는 두 대역을 오갔다(11.30). 대역의 영향은 따로 가르지 않았다.
+     - `/vendor/etc/wifi`를 Linaro Android 13 BSP 판으로 바꿨다(`S612_E3830_R4-1_Y23W13A`, 2023-03-27, 드라이버와 같은 세대). 출처는 GitLab `Linaro/96boards/e850-96/platform/vendor/samsung_slsi` 커밋 11e9c19a다.
+     - [확인] 강제 패닉 한 번으로 올렸고, 8초 뒤 다시 연결됐다. 처리량은 61.9 Mbit/s였다.
+     - 절전은 기본값(on)이다. 절전 끄기 시험(`wifi-pskeep`)은 바꾸기 전에 멈췄다.
+     - 판정: 이 동안 강제 패닉을 내지 않는다. 01:31 KST에 재부팅해서 `mx_recovery_count`는 0부터 센다(그 전 44분은 0번). 이 값이 늘지 않으면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `wlbt-panic.py`로 푼다. 기호는 `~/e850-logs/wifi/fw-a13/mx140/debug/common/`에 있다.
+     - 또 재부팅하면 `journalctl -k -b -1`도 본다.
+     - 06:13 KST에 전원을 껐다 켰다(사용자). 콜드 부팅에서도 새 펌웨어가 올라왔다. 지금까지 새 펌웨어로 모두 약 5.4시간 돌았고 패닉은 0번이다(아직 판정 전). HDMI는 HPD가 없다(케이블이나 모니터 확인 필요, 11.47).
+     - [확인] 재부팅(01:31 KST)해 보니 부팅 때도 새 펌웨어가 올라와 다시 붙었다. 규제 DB를 읽게 됐다(`Regulatory Version: 2.7`, 예전에는 `Failed to read regdb`). `Type mismatch`는 그대로인데, HE·TWT·WPA3 MIB가 없다는 뜻이고 Android 기능 문자열에만 쓰여 해가 없다(11.47).
    - 11.31에서 한 것: 자동 복구 켬(강제 패닉 4번 모두 복구, 5.6~6.5초). 큰 송수신 약 1.1 GB, 재결합, roaming 11분 동안 재현 0번. 0x04는 펌웨어 내부 번호라 호스트 소스에 뜻이 없다.
    - 할 일:
      - 패닉이 났는지는 `mx_recovery_count`로 본다. 났으면 `journalctl -g 'WLBT FW PANIC|panic_record'`로 기록을 꺼낸다. 11.32부터 journal이 약 2주 남는다(추정).
@@ -149,9 +170,31 @@
 
 선택 실험: C2 idle에서 GICC_CTLR를 끄는 시험. 보드가 멈출 수 있어서 사용자가 있을 때만 한다.
 
+6. **DVS D-PHY PLL 시험 (11.46~11.49, 24시간 통과, 기본 setfile을 00/8B/B0으로 바꿈)**
+   - 계획, 판정 기준, 지금까지의 결과는 [DVS-PLL-TESTS.md](DVS-PLL-TESTS.md)에 있다. 배경은 main의 `DVS_PLL_MINSU_KARIM_REVIEW_2026-11-10.md`이다.
+   - 0x75는 검증된 설정이 아니다. 2026-11-14에 E850 측정(A/B/A/B, 24시간)을 근거로 기본 setfile을 00/8B/B0으로 바꿨다(11.49). 0x75는 `pll=experimental_00_75_00`으로만 쓴다.
+   - 할 일:
+     1. (끝남, 11.46) 빌드·설치, PHY 설정 확인, 첫 A/B(각 10분). 버퍼 경계 누락의 원인은 디코더가 128번째 줄을 버린 것이었다(고침).
+     2. (끝남, 2026-11-12 07:51~17:51 KST) 00/8B/B0, 수신 1600, 10시간: CRC 0. Wi-Fi 패닉 직후 이상 구간 382초를 빼면 짧은 버퍼·scan 누락·frame_end 누락 0이었다. 타임스탬프 오류는 22비트 기준값 한 바퀴(약 4208초마다) 8번 × 64뿐이었다. `pass: false`는 이 두 가지 때문이다.
+     3. (보드에 넣음, 23:04 KST) 기준값 한 바퀴를 처리하는 `libdvsview.so`(c10b0382). 이전 판은 `/usr/local/lib/libdvsview.so.prev-wrap`(db798ea1)이다. [확인] **보드 live에서 한 바퀴를 넘겼다(2026-11-13).** 재부팅 뒤 dvslive가 01:31:58 KST부터 같은 프로세스로 78분 돌았다. 22비트 ms 기준값의 주기는 69.9분이라 이 구간에 한 바퀴가 적어도 한 번 있다. 02:50:17 KST 계수기는 버퍼 158241, ts_bad 4, ts_restarts 1, ts_fixed 0, ts_back 0이다. 모두 스트림 시작 때 값 그대로다. 옛 판이었다면 한 바퀴마다 ts_bad +64, ts_restarts +1이 늘었을 것이다.
+     4. **(끝남) Wi-Fi 패닉 재현 시험.** 강제 Wi-Fi 패닉 6번(프로파일마다 3번) 가운데 2번이 패닉 2초 안에 이상 상태가 됐다. 00/8B/B0에서 1/3(2회째, 23:12:49부터 시험이 끝날 때까지 120초), setfile(0x75)에서 1/3(1회째, 23:08:23부터 끝날 때까지 120초)이다. setfile 2회째는 패닉 직후 10초 표본 하나에 짧은 버퍼 1, 오류 4, 재시작 1만 있었다(이상 상태 아님). 패닉 전에는 6번 모두 이상이 없었다. 6번 모두 CRC 0이었다. **그래서 Wi-Fi 패닉이 이상 상태를 일으킨다(재현됨, 6번 중 2번). 0x75에서도 난다. PLL 설정 탓이 아니다.** 앞의 "00/8B/B0 2/2, 0x75 0/3"은 우연으로 본다. 원 자료: 보드 `/var/tmp/plltest/8-wifi-*`, Mac `~/e850-logs/plltest/8-wifi-*`. `mx_recovery_count` 6 → 12. 시험 방법: 2026-11-12 23:04 KST 시작, 약 23:35 끝. root `systemd-run --unit=wifistuck sh /var/tmp/wifistuck.sh 3`. 00/8B/B0과 setfile을 번갈아 4분씩 3회 돌리고, 매번 140초째에 Wi-Fi 패닉을 낸다. 지금까지 패닉 5번 가운데 00/8B/B0에서는 2/2가 이상 상태가 됐고, 0x75에서는 0/3이었다(11.46).
+     4a. (끝남, 2026-11-12 23:56 KST) live가 이상 상태를 알아채 스트림을 다시 켠다(`ov5647-cap.py --stuck 10`, 보드 설치). 강제 패닉 10번 중 2번이 이상 상태가 됐고, 둘 다 10~14초 만에 정상으로 돌아왔다. 첫 재시작의 종료는 SIGABRT였다(원인 모름, 11.46).
+     5. (끝남) 이상 상태 자동 재시작(`ov5647-cap.py --stuck`)과 22비트 한 바퀴 수정을 보드에서 확인했다(위 0장, 2026-11-13).
+     6. **(끝남, 2026-11-13 07:25~08:09 KST) A/B/A/B 비교:** 0x75(`experimental_00_75_00`)와 00/8B/B0을 번갈아 10분씩 2회씩 돌렸다(수신 1600, 128줄 디코딩, `tools/board/pll-abab.sh`).
+        - **4회 모두 통과했다.** CRC 0, 짧은 버퍼·scan·frame_end 누락 0, 타임스탬프 오류 0, raw 표본 깨끗, readback 일치.
+        - 차이는 버퍼 속도뿐이다(0x75 35.2/s, 00/8B/B0 37.8/s, 두 번 모두 같음). 센서 scan 주기는 둘 다 985 µs다.
+        - 결과 디렉터리: `/var/tmp/plltest/10-abab-*`.
+     7. **(끝남, 통과) 00/8B/B0 24시간 시험**(`/var/tmp/plltest/11-8bb0-24h`, 2026-11-13 08:10 ~ 11-14 08:10 KST, 11.48).
+        - `pass: true`, 9개 기준 모두 통과. CRC 0, 재시작 0, 버퍼 3,272,178개(37.87/s, 모두 128줄).
+        - 짧은 버퍼, scan 누락, frame_end 누락, 타임스탬프 오류, 모르는 워드가 모두 0이다. raw 표본도 깨끗했다.
+        - 같은 시간 Wi-Fi 패닉 0번이라 이상 구간이 없었다(`stuckscan.py`는 쓸 일이 없었다).
+     8. **사용자 결정(2026-11-13):** 24시간 시험으로 안정성이 확인되면 다음 두 가지를 승인했다.
+        - (끝남, 11.49) 기본 setfile을 00/8B/B0으로 바꾼다. `is-cis-s5krc1s-setA.h`의 0x30A5~A7을 바꾸고 모듈을 다시 빌드해 보드에 넣었다(이전 모듈 `/root/is-cis-s5krc1s.ko.prev-11.49`). `plltest.py setfile` 10분 확인도 통과했다(readback `00 8b b0`).
+        - `dvs-pll-diag`를 main에 병합한다.
+
 ## 4. 사용자 결정 대기
 
 - Apache 포트: nginx를 끄고 Apache를 80번에 올릴지, Apache를 8080에서 따로 띄울지. **DVS 웹 서비스(`dvslive.service`, 11.29)가 부팅 때부터 8080을 쓴다(인증 없음).** Apache를 8080에 올리면 앱은 페이지 없이 live만 돈다. `dvslive.sh`의 `CTL_PORT`로 앱 포트를 바꿀 수 있다
-- 사람 행동 분류: spec 검토(3장 1번)
+- 사람 행동 분류(3장 1번): 공개 데이터(PAF, DailyDVS-200) 브라우저 내려받기, 그리고 보드 앞 동작 녹화 일정(배치: DVS를 옆에 고정, 전신과 매트리스가 화면에 들어오게)
 - 상자 측정: 11.35 "다음 방향" 1~3 중 선택(3장 2번). MySQL 저장은 계속 보류다
 - YOLO 모델 종류와 입력 크기

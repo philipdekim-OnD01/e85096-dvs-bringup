@@ -23,5 +23,9 @@ echo "${MARGIN:-$m}" > /sys/module/is_cis_s5krc1s/parameters/margin
 echo "${FLUSH_US:-$f}" > /sys/module/is_cis_s5krc1s/parameters/flush_us
 # a second open of /dev/video102 fails while the old process still holds it
 while pkill -TERM -f 'ov5647-cap.py --live'; do sleep 2; done
+# the person action classifier (11.38) while this file is there; /var/lib/dvsact is philip's, no root needed
+if [ -e /var/lib/dvsact/enable ]; then
+    set -- --act /var/lib/dvsact/act.jsonl --act-model /var/lib/dvsact/model.onnx "$@"
+fi
 exec ov5647-cap.py --live --raw8 -W 8192 -H 127 -n 0 -b 8 -B 16 -t 3 --ctl "${CTL_PORT:-8080}" "$@" \
     > /tmp/dvslive.log 2>&1 < /dev/null

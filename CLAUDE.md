@@ -24,7 +24,7 @@ WinLink E850-96(Samsung Exynos850 = s5e3830, Cortex-A55 8코어)에 vendor Linux
 | 지금 구워진 boot | `~/e850-logs/boot-dvs3/boot.img` = 저장소 빌드, CN4 카메라 DT를 S5KRC1S로, mode0 8192×127 + mode1 8192×32(11.18/11.26). boot-dvs2에 조용한 워치독, gadget을 기다리는 `e850-vbus`를 넣은 판(2026-11-07, 11.32). 그 전 판 `boot-dvs2`, `boot-dvs`. 알려진 정상 이미지는 `~/e850-logs/boot-nokvm/boot.img`(OV5647 DT, 1시간 부하 시험 통과) |
 | 자동 적재 모듈 | `e850-cpuhp`(hotplug, `/etc/modules-load.d`), HDMI 콘솔 색은 dpu.ko 패치(`modules/e850-hdmi/apply.sh`, 11.16). `e850-fbpal`은 더 이상 올리지 않는다 |
 | 수동 적재 | 카메라 `modprobe fimc-is && modprobe is-cis-ov5647`. `fimc_is`는 내리면 다시 올릴 수 없어 재부팅해야 한다 |
-| CPU 배치 | 장치 IRQ는 모두 CPU0. CPU7은 DVS 웹 페이지(`dvs-web` 스레드) 전용이다. systemd가 띄우는 것은 모두 CPU0~6(`/etc/systemd/system.conf.d/e850-cpu7.conf`, 11.30) |
+| CPU 배치 | 장치 IRQ는 모두 CPU0. DVS 디코더(캡처 주 스레드) CPU1, 렌더러 `dvs-render` CPU2, 배경 필터 `dvs-filter` CPU3(11.45), 행동 분류 `dvs-act` CPU4~6, 웹 `dvs-web` CPU7 전용. systemd가 띄우는 것은 모두 CPU0~6(`/etc/systemd/system.conf.d/e850-cpu7.conf`, 11.30) |
 
 ### 접속
 
@@ -33,7 +33,7 @@ WinLink E850-96(Samsung Exynos850 = s5e3830, Cortex-A55 8코어)에 vendor Linux
 | USB ACM 콘솔 | `/dev/cu.usbmodeme850_961`, root 자동 로그인 | `python3 tools/host/acm.py "<cmd>" <timeout>` |
 | UART 디버그 | `/dev/cu.usbserial-AK0O198I`, 115200 | 커널 로그 전용. `tools/host/uartlog.py`가 `~/e850-logs/uart.log`에 계속 기록 |
 | USB 네트워크(NCM) | 보드 192.168.7.1, Mac은 DHCP | `EmitRouter=no`라 Mac 인터넷은 Wi-Fi로 유지 |
-| Wi-Fi | 192.168.0.236 | `ssh philip@192.168.0.236` 또는 `e850@`. 평소 작업은 이걸로 충분하다 |
+| Wi-Fi | 192.168.0.236 | `ssh philip@192.168.0.236` 또는 `e850@`. 평소 작업은 이걸로 충분하다. 핸드폰 핫스팟 `An`이 켜져 있으면 그쪽에 먼저 붙는다(주소는 DHCP, 11.45). 그때는 `ssh -o HostKeyAlias=192.168.0.236 philip@<주소>` |
 | HDMI | LT8912B 브리지, tty1 텍스트 콘솔(16x32 글꼴) | `e850-hdmi.service` |
 
 ## 빌드
@@ -56,7 +56,8 @@ docker run --rm -v ~/e850-a13-build:/work -v e850-out:/work/out -v ~/e850-logs:/
 docker run --rm -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v <out>:/out \
     -v ~/Desktop/E850_Android10_backup_20261031:/b:ro ubuntu:22.04 sh /t/build-bootimg.sh root=PARTLABEL=userdata
 
-# rootfs (출력: out/rootfs.simg → fastboot flash userdata)
+# rootfs (출력: out/rootfs.simg → fastboot flash userdata). Wi-Fi 펌웨어(Linaro A13 판, 11.47)를 먼저 받아 둔다:
+python3 tools/linux510/wifi-fw-linaro.py out/wifi-a13.tgz
 docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v "$PWD/out:/out" \
     ubuntu:22.04 sh /t/build-rootfs.sh
 ```
@@ -87,7 +88,7 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
 - **카메라:** `ov5647-cap.py`는 실행하는 동안 콘솔 printk를 끈다. 프레임마다 나오는 커널 메시지가 UART로 나가면 CSIS 인터럽트를 놓치기 때문이다.
 - **USB 호스트:** 꺼져 있어서 키보드·마우스가 없다. 데스크톱 환경은 보류했다(GPU 사용자 공간 드라이버 없음).
 - **포트:** nginx가 80번 포트를 쓴다. Apache를 올리기 전에 사용자와 포트를 정한다.
-- **Wi-Fi:** 펌웨어가 패닉하면(`WLBT FW PANIC`) 드라이버가 펌웨어를 다시 올리고 약 6초 뒤 다시 연결한다(11.31, `e850-wifi.sh`의 `disable_recovery_handling=0`). 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`로 본다. `mx_panic`은 읽기만 해도 펌웨어가 패닉하니 `cat`하지 않는다(11.33부터 root만 읽고 쓸 수 있다, 0600). 강제 패닉 반복 시험은 `tools/board/wifi-panicloop.sh N`(root, 보드 `/var/tmp/wifi-panicloop.sh`).
+- **Wi-Fi:** 펌웨어가 패닉하면(`WLBT FW PANIC`) 드라이버가 펌웨어를 다시 올리고 약 6초 뒤 다시 연결한다(11.31, `e850-wifi.sh`의 `disable_recovery_handling=0`). 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`로 본다. `mx_panic`은 읽기만 해도 펌웨어가 패닉하니 `cat`하지 않는다(11.33부터 root만 읽고 쓸 수 있다, 0600). 강제 패닉 반복 시험은 `tools/board/wifi-panicloop.sh N`(root, 보드 `/var/tmp/wifi-panicloop.sh`). 2026-11-13부터 펌웨어는 Linaro Android 13 판(`R4-1_Y23W13A`, 11.47)이다. 옛 2019년 판은 3.8시간마다 Data Abort가 났다. 되돌리기는 root로 `sh /var/tmp/wifi-fwswap.sh a10`.
 - **재부팅 뒤 ACM이 안 보일 때:** UDC가 `not attached`이고 UART에 `dwc3_otg_start_gadget does not have any gadget`이 있으면 `e850-vbus` 경합이다(11.31). 11.32부터 `e850-vbus`가 gadget을 기다린다(`dmesg`에 `VBUS on … after N ms`). 그래도 안 보이면 ssh에서 `sudo sh -c "rmmod e850_vbus; modprobe e850-vbus"`를 한다(비밀번호는 사용자에게 묻는다). 정상 상태에서는 ACM이 3초 안에 돌아왔다(11.32). 경합 상태에서는 시험하지 못했다. 안 되면 재부팅한다.
 - **ACM 셸에서 USB를 끊는 명령:** ACM 셸은 `serial-getty@ttyGS0.service` cgroup 안에 있다. ACM이 끊기면 systemd가 `setsid`로 띄운 자식까지 죽인다(11.32). 그런 명령은 ssh에서 하거나 `systemd-run`으로 띄운다.
 - **보드 `/tmp`:** 부팅 때 비워진다. 남길 파일은 `/var/tmp`에 둔다.
