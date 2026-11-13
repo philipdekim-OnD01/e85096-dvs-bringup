@@ -16,7 +16,7 @@ OV5647(`modules/ov5647-pablo`)과 같은 경로로 DVS를 받는다. ISP를 거�
 | 등록 | `late_initcall_sync`, exit 없음 | `module_i2c_driver` | rmmod 가능 |
 | init | 로그만 | `SEL_MODE`(0x3000) 읽어 응답 확인(실패해도 init은 성공) | 매뉴얼에 칩 ID 레지스터 없음 |
 
-레지스터 표(`setA.h`)는 vendor setfile에서 두 가지만 다르다. 0x0100을 뺐고, D-PHY PLL M(0x30A6)을 0x8D에서 0x75로 바꿨다(0x8D에서는 줄마다 CRC 오류가 났다. 0x72~0x78에서는 0이었다. 11.29). 2-lane 설정(0x3915)과 모드(RAW8 8192×127, DT 1600 Mbps/lane)는 그대로다. 실제 레인 속도는 측정하지 않았다. 런타임 param은 `margin`(scan 주기, 11.29), `regs`(시험용 레지스터 쓰기), `flush_us`, `packets`다(`/sys/module/is_cis_s5krc1s/parameters`, 다음 stream on부터 적용).
+레지스터 표(`setA.h`)는 vendor setfile에서 두 가지만 다르다. 0x0100을 뺐고, D-PHY PLL(0x30A5~A7)을 00/8D/00에서 00/8B/B0으로 바꿨다(11.49). 00/8D/00에서는 줄마다 CRC 오류가 났다(11.28). 11.29~11.48에는 00/75/00(0x30A6만 0x75)이었는데, 공식으로 VCO 범위 밖이라 실험값으로 남겼다(`pll=experimental_00_75_00`). 00/8B/B0은 0x75와의 A/B/A/B 비교와 24시간 시험에서 CRC 0, 누락 0이었다(11.48). 2-lane 설정(0x3915)과 모드(RAW8 8192×127, DT 1600 Mbps/lane)는 그대로다. 실제 레인 속도는 측정하지 않았다. 런타임 param은 `margin`(scan 주기, 11.29), `regs`(시험용 레지스터 쓰기), `flush_us`, `packets`다(`/sys/module/is_cis_s5krc1s/parameters`, 다음 stream on부터 적용).
 
 ## 적용과 빌드
 

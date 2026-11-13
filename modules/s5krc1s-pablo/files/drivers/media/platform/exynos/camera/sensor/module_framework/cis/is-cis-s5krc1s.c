@@ -54,7 +54,7 @@ MODULE_PARM_DESC(regs, "extra writes at each mode change, \"addr=val,...\" in he
 /*
  * D-PHY PLL 0x30A5-0x30A7 for the link tests (docs/DVS-PLL-TESTS.md), written at each mode change (sensor in
  * standby, before the CSIS stream on) after the setfile, before regs. Empty or "setfile" keeps the setfile's
- * 00/75/00, which is experimental (11.29: CRC 0 for 3 min), not a validated setting (11.46).
+ * 00/8B/B0 (11.49; 24 h CRC 0, 11.48). 00/75/00 was the setfile word before 11.49 and is experimental.
  */
 struct s5krc1s_pll {
 	const char *name;
@@ -68,7 +68,7 @@ static const struct s5krc1s_pll sensor_s5krc1s_pll[] = {
 };
 static char *pll;
 module_param(pll, charp, 0644);
-MODULE_PARM_DESC(pll, "D-PHY PLL at each mode change: setfile (default, 00/75/00 experimental), experimental_00_75_00, "
+MODULE_PARM_DESC(pll, "D-PHY PLL at each mode change: setfile (default, 00/8B/B0 since 11.49), experimental_00_75_00, "
 		 "recommended_00_8b_b0, alternative_00_8b_f8, default_00_8d_00 (11.46)");
 static char pll_live[128];
 module_param_string(pll_live, pll_live, sizeof(pll_live), 0444);

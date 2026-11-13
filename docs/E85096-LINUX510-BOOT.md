@@ -3150,7 +3150,7 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - [미확인] 이 이미지로 부팅해 보지는 않았다. `userdata`에 구우면 지금 보드의 rootfs가 지워지므로 굽지 않았다.
 
 **다음.**
-1. 2026-11-14 00:47 KST에 `mx_recovery_count`와 커널 로그를 본다(위 명령).
+1. (끝남, 11.48) 2026-11-14 00:47 KST에 `mx_recovery_count`와 커널 로그를 봤다. 24시간 패닉 0번이다.
 2. (끝남) 다음 부팅 때 regdb와 `Type mismatch` 줄을 본다. regdb는 고쳐졌다. `Type mismatch`는 해가 없다(위).
 3. 새 펌웨어에서도 패닉이 나면: 그 기록을 풀고, 절전 끄기를 다시 시험한다(`wifi-pskeep`). 그다음 대역 고정(2.4/5 GHz)을 시험한다.
 
@@ -3162,17 +3162,66 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - [확인] 새 펌웨어로 모두 약 6.6시간 돌았고 패닉은 0번이다(전원을 다시 넣은 뒤로 1시간 10분, 복구 횟수 0).
 - 판정은 11-14 00:47 KST에 한다(11.47). 이때 연결은 2.4 GHz(2437 MHz, −57 dBm)였다. 전에는 5745 MHz였다.
 
+**Wi-Fi 24시간 판정(2026-11-14 00:48 KST).**
+- [확인] Mac 감시(5분마다 `mx_recovery_count`)는 00:47에 `recovery_count still 0`으로 끝났다. 00:48에 직접 읽은 값도 0이었다(가동 18시간 34분, 2437 MHz, −57 dBm).
+- [확인] 지금 부팅의 커널 journal: `WLBT FW PANIC`, `r4_panic_record`, `Data Abort`가 없다. 걸린 454줄은 모두 감시가 읽을 때 남긴 `mx_procfs_mx_recovery_count_read: recovery_count: 0`이다.
+- [확인, 근거 약함] 그 전 부팅(01:31~06:13 KST)의 커널 journal은 부팅 12초(01:32:03)까지만 있다. 전원 차단으로 잃은 것으로 보인다(같은 부팅의 다른 journal은 05:59까지 있다). 그래서 이 4.7시간은 감시가 0을 읽었다는 것만 근거다. 그 전 44분은 23에서 그대로였다.
+- 판정: 새 펌웨어로 약 24.0시간(5.4 + 18.6) 동안 저절로 난 패닉이 0번이다. 11.47에서 정한 기준을 넘었다. 옛 빈도(3.8시간에 1번)라면 기대값 약 6.3번, 0번일 확률 e^−6.3 ≈ 0.2%다. 로그로 확인되는 지금 부팅 18.6시간만 쳐도 약 0.8%다.
+- 남은 변수: 지금 부팅은 확인할 때마다(07:24, 20:34, 00:48) 2.4 GHz였고, 앞의 5.4시간은 5745 MHz였다. 옛 펌웨어 때는 두 대역을 오갔다(11.30). 대역이 패닉에 영향을 주는지는 따로 가르지 않았다. 강제 패닉 복구는 새 펌웨어에서도 된다(11.47, 8초).
+- 보드에 바꾼 것: 없다. 감시만 했다.
+
 **A/B/A/B(07:25~08:09 KST).**
 - 실행: `tools/board/pll-abab.sh`(보드 `/var/tmp/pll-abab.sh`, root `systemd-run --unit=pllabab`).
 - 조건: A = 0x75(`experimental_00_75_00`), B = 00/8B/B0. 수신 1600(DT), 각 10분, 앞뒤 raw 표본 20버퍼, 128줄 디코딩.
 - [확인] 4회 모두 `pass: true`였다. 결과 표와 세부는 DVS-PLL-TESTS.md 0장과 8장에 있다.
 - [관찰] 버퍼 속도는 A가 35.2/s, B가 37.8/s로 매번 같았다. 센서 scan 주기는 둘 다 985 µs였다. 가설은 DVS-PLL-TESTS.md 0장에 있다.
 
-**24시간 시험(08:10 KST~).**
+**24시간 시험(2026-11-13 08:10 ~ 11-14 08:10 KST, 통과).**
 - root `systemd-run --unit=plltest python3 -I /var/tmp/plltest.py recommended_00_8b_b0 0 1440 --sample 20 --out /var/tmp/plltest/11-8bb0-24h`
-- 시작할 때 readback은 `00 8b b0 word 0x08bb0 P=4 M=374 S=0 rate=2244`였다.
+- 시작할 때와 끝날 때 readback은 `00 8b b0 word 0x08bb0 P=4 M=374 S=0 rate=2244`였다.
+- [확인] `summary.json`: **`pass: true`, 9개 기준 모두 통과.** 86,400초, 표본 8,608개(10초 간격).
+  - CRC 0, 재시작 0(캡처 프로세스 pid 2842 그대로).
+  - 버퍼 3,272,178개(37.87/s), 짧은 버퍼 0, 데이터 줄 418,838,784 = 버퍼 × 128.
+  - frame_end 87,762,320개 = 타임스탬프 87,762,320개. frame_end 누락 0, scan 누락 0, 모르는 워드 0, 비트 고침 0.
+  - 타임스탬프 오류·역행·고침·재시작 0. 22비트 ms 기준값은 이 동안 약 20바퀴 돌았다. wrap 처리(11.47)가 그대로 맞았다.
+  - 앞뒤 raw 표본 20버퍼씩: 짧은 버퍼, 모르는 워드, 타임스탬프 누락·오류, frame_end 누락 모두 0.
+- [확인] 같은 시간의 커널 로그(root `journalctl -k`, 보드 시계는 UTC).
+  - `start/end overlapped` 255번: 몇 분마다 나는 경고다(DVS-PLL-TESTS 0장). 위 계수는 하나도 늘지 않았다.
+  - DMA off, `There's no frame` 41줄은 모두 08:10:19~43, 시험이 스트림을 다시 켠 순간이다. 측정을 시작하기 전(20초 대기)이다.
+  - 그 밖에는 `perf: interrupt took too long` 1줄뿐이다.
+- [확인] 같은 시간 Wi-Fi 패닉 0번(`mx_recovery_count` 0, 위 판정).
+- 끝나자 `plltest.py`가 setfile(그때는 0x75)로 되돌렸다(`00 75 00`).
+- 판정: 사용자가 정한 조건(A/B/A/B 정상 → 24시간 안정)을 채웠다. 기본 setfile을 바꾼다(11.49).
 
 **보드에 바꾼 것.**
 - `/var/tmp/pll-abab.sh` 추가, `/var/tmp/plltest/10-abab-*`와 `11-8bb0-24h` 결과 디렉터리.
-- 시험하는 동안에는 live가 00/8B/B0으로 돈다. 끝나면 setfile(0x75)로 돌아간다.
+- 시험하는 동안에는 live가 00/8B/B0으로 돌았다. 끝나자 setfile(0x75)로 돌아갔다. 11.49에서 setfile 자체를 00/8B/B0으로 바꿨다.
 
+### 11.49 기본 setfile을 00/8B/B0으로 (2026-11-14)
+
+사용자 결정(2026-11-13): A/B/A/B가 정상이고 24시간 시험으로 안정성이 확인되면 기본 setfile을 바꾸고 `dvs-pll-diag`를 main에 병합한다. 조건은 11.48에서 채웠다(A/B/A/B 4회 통과, 24시간 `pass: true`).
+
+**바꾼 것(소스).**
+- `is-cis-s5krc1s-setA.h`: 0x30A5~A7을 00/75/00에서 **00/8B/B0**으로 바꿨다(P=4 M=374 S=0, 공식으로 2244 Mbps/lane, VCO 범위 1250~2500 안). 머리 주석에 근거(11.48)를 적었다.
+- `is-cis-s5krc1s.c`: `pll` 파라미터 설명과 주석만 고쳤다. 프로파일 표는 그대로다. 0x75는 `pll=experimental_00_75_00`으로 계속 시험할 수 있다.
+- `tools/board/plltest.py`: `setfile`의 기대 readback을 `00 8b b0`으로 바꿨다. 자기 시험의 readback 실패 예는 `experimental_00_75_00`으로 바꿨다(통과).
+- `modules/s5krc1s-pablo/README.md`: vendor setfile과 다른 점을 고쳐 적었다.
+- 실제 레인 속도는 여전히 재지 않았다. 공식값은 협력자가 알려 준 비트 배치에 따른 계산이다.
+
+**빌드와 설치(08:16~08:20 KST).**
+- [확인] 바꾸기 전, 마지막 빌드(e850-out, 11.46)를 strip한 것은 보드 모듈과 md5가 같았다(0fe3ba23). 그래서 빌드가 보드 판을 그대로 재현한다.
+- 새 빌드(strip): md5 f96703b7, sha256 28c2025b…, 38,984바이트(전과 같음). 보드 판과 비교하면 setfile 표의 두 값(0x30A6 0x75→0x8B, 0x30A7 0x00→0xB0)과 modinfo 문자열, srcversion만 다르다. 코드는 같다.
+- 보드: 이전 모듈을 `/root/is-cis-s5krc1s.ko.prev-11.49`(md5 0fe3ba23)로 백업했다. 새 모듈을 넣고 `systemctl stop dvslive` → `rmmod is_cis_s5krc1s` → `systemctl start dvslive`(dvslive.sh가 modprobe)로 바꿨다. 재부팅하지 않았다.
+- [확인] 다시 올린 뒤 `pll` 파라미터는 비어 있고(setfile), readback은 `00 8b b0 word 0x08bb0 P=4 M=374 S=0 rate=2244`다.
+- `/var/tmp/plltest.py`도 새 판(md5 6787f7a4)으로 바꿨다. 이전 판은 `/var/tmp/plltest.py.prev-11.49`다.
+
+**확인 시험(08:20~08:32 KST).**
+- root `systemd-run --unit=plltest python3 -I /var/tmp/plltest.py setfile 0 10 --sample 20 --out /var/tmp/plltest/12-setfile-8bb0-default`
+- [확인] **`pass: true`, 9개 기준 모두 통과.** 600초, 표본 61개, CRC 0, 재시작 0, 버퍼 22,666개(37.78/s, 128줄), 짧은 버퍼·모르는 워드·frame_end 누락·scan 누락·타임스탬프 오류 0. 앞뒤 raw 표본 20버퍼씩 깨끗했다. 61개 표본의 readback이 모두 `00 8b b0`이다.
+- 끝난 뒤에도 live는 setfile(`00 8b b0`)로 돈다.
+
+**되돌리기.** dvslive를 멈추고 `/root/is-cis-s5krc1s.ko.prev-11.49`를 `/lib/modules/$(uname -r)/is-cis-s5krc1s.ko`로 되돌린 뒤 rmmod/modprobe(또는 dvslive 시작)한다. 모듈을 바꾸지 않고 잠깐 0x75로 돌리려면 `echo experimental_00_75_00 > /sys/module/is_cis_s5krc1s/parameters/pll` 뒤 dvslive를 다시 시작한다.
+
+**보드에 바꾼 것.**
+- `/lib/modules/.../is-cis-s5krc1s.ko`: 11.49판(md5 f96703b7, setfile 00/8B/B0). 이전 판은 `/root/is-cis-s5krc1s.ko.prev-11.49`다.
+- `/var/tmp/plltest.py`: 6787f7a4. 이전 판은 `.prev-11.49`다. 결과 디렉터리 `/var/tmp/plltest/12-setfile-8bb0-default`가 늘었다.

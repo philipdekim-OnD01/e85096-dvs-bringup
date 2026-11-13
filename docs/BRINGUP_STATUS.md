@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-13 08:20 KST)
+# E850-96 bring-up 현재 상태 (2026-11-14 08:45 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -17,7 +17,7 @@
 | 상자 크기 측정 | **사람 행동 분류와 별개 과제(3장 2번).** 목표는 컨베이어 위 상자를 1.5 m에서 보고 가로·세로·높이를 재는 것이다. 1차 시험에서 손에 든 상자는 재지 못했다. hull이 손과 팔까지 묶었다. 기록 80개는 제각각이었다. 다음 방향은 사용자 결정 대기다 | 11.35 |
 | HDMI 콘솔 색 | 흰 글씨. dpu.ko 패치로 근본 수정했다(`e850-fbpal`과 rebind는 쓰지 않음). 전원을 껐다 켠 뒤에도 사용자가 화면에서 확인했다 | 11.14~11.16 |
 | HDMI 출력 꺼짐 | 해결. `decon_release()`가 fb0를 닫을 때마다 DECON을 끄던 것을 open 수 세기로 고쳤다(dpu.ko 재빌드) | 11.15 |
-| 네트워크 | Wi-Fi 192.168.0.236(ssh), USB NCM 192.168.7.1. **Wi-Fi 펌웨어 패닉 2번**(2026-11-07, 부팅 후 2.6시간과 6분, `WLBT FW PANIC: 0x04`, 원인 모름·재현 못 함). **11.31부터 자동 복구를 켰다**(`e850-wifi.sh`가 `disable_recovery_handling=0`). 강제 패닉 4번(런타임 설정)과 1번(부팅 설정) 모두 복구, `wlan0` 재연결 5.6~6.5초, 8080 응답 5.6~7.3초. 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`. **11.32: journal을 초당 130줄 → 분당 38줄로 줄였다**(카메라 bypass 경고, 워치독 keepalive). journal은 약 2주 남는다(추정). 11.33: vendor 버그 2개 수정(`mx_panic` 0600, system error log WARN). **11.47: 저절로 나는 0x04 패닉(약 3.8시간에 1번)은 펌웨어 Data Abort다. 2026-11-13 00:47 KST에 펌웨어를 Linaro Android 13 판 `S612_E3830_R4-1_Y23W13A`(2023-03)로 바꿨다**(옛 판 2019-12). 다시 붙는 데 8초 걸렸고, 효과는 24시간 시험 중이다 | 11.5, 11.30, 11.31, 11.32, 11.33, 11.47 |
+| 네트워크 | Wi-Fi 192.168.0.236(ssh), USB NCM 192.168.7.1. **Wi-Fi 펌웨어 패닉 2번**(2026-11-07, 부팅 후 2.6시간과 6분, `WLBT FW PANIC: 0x04`, 원인 모름·재현 못 함). **11.31부터 자동 복구를 켰다**(`e850-wifi.sh`가 `disable_recovery_handling=0`). 강제 패닉 4번(런타임 설정)과 1번(부팅 설정) 모두 복구, `wlan0` 재연결 5.6~6.5초, 8080 응답 5.6~7.3초. 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`. **11.32: journal을 초당 130줄 → 분당 38줄로 줄였다**(카메라 bypass 경고, 워치독 keepalive). journal은 약 2주 남는다(추정). 11.33: vendor 버그 2개 수정(`mx_panic` 0600, system error log WARN). **11.47: 저절로 나는 0x04 패닉(약 3.8시간에 1번)은 펌웨어 Data Abort다. 2026-11-13 00:47 KST에 펌웨어를 Linaro Android 13 판 `S612_E3830_R4-1_Y23W13A`(2023-03)로 바꿨다**(옛 판 2019-12). 다시 붙는 데 8초 걸렸다. **24시간 시험(11-13 00:47~11-14 00:47 KST)에서 패닉 0번**(11.48) | 11.5, 11.30, 11.31, 11.32, 11.33, 11.47, 11.48 |
 | 서비스 | nginx(80), ssh, e850-hdmi, e850-wifi, systemd-timesyncd, 워치독 데몬 | |
 | 사용자 계획 | MySQL + Apache로 출입 기록, YOLO nano 영상 처리 | |
 
@@ -106,6 +106,7 @@
 | `/usr/local/lib/libdvsview.so` | **2026-11-12 23:04 KST**: 22비트 기준값 한 바퀴를 처리한다(md5 c10b0382, 11.46). 이전 판은 `.prev-wrap`(md5 db798ea1, 11.46판)이다. `/var/tmp`에 `wifistuck.sh`, `stuckscan.py`, `stuck2/`(이상 상태 dmesg·녹화)를 추가했다 |
 | `/var/tmp/plltest.py`, `dvslink.py`, `pll-ab.sh`, `plltest/` | 추가(11.46). PLL 시험 실행기, 기록 검사기, A/B 묶음, 결과(Mac `~/e850-logs/plltest/`에 사본) |
 | `/usr/local/bin/ov5647-cap.py` | **2026-11-12 128줄 디코딩**(`dvs_ingest(buf, W × (H + 1))`, md5 `03fdbff4…`, 11.46). 이전: `/root/ov5647-cap.py.prev-11.46`(7d82fa17) |
+| `/lib/modules/.../is-cis-s5krc1s.ko`, `/var/tmp/plltest.py` | **2026-11-14 08:20 KST 11.49판: 기본 setfile PLL 00/8B/B0**(모듈 md5 f96703b7, plltest 6787f7a4). 이전: `/root/is-cis-s5krc1s.ko.prev-11.49`(0x75, 0fe3ba23), `/var/tmp/plltest.py.prev-11.49` |
 | `/vendor/etc/wifi` | **2026-11-13 00:47 KST**: Linaro A13 WLBT 펌웨어(`mx140.bin` md5 792565d8, `S612_E3830_R4-1_Y23W13A`, 규제 DB `regulatory_db_2_7`, 11.47). 이전(Android 10) 판은 `/var/tmp/wifi-a10-vendor`에 있다. 되돌리기는 root `sh /var/tmp/wifi-fwswap.sh a10`이다. 받기는 `tools/linux510/wifi-fw-linaro.py`다. 01:15 KST부터는 `build-rootfs.sh`가 `out/wifi-a13.tgz`를 넣고, Wi-Fi 패키지와 `e850-wifi`도 넣는다(11.47) |
 | `/usr/local/bin/e850-wifi.sh` | 2026-11-13 펌웨어 출처 주석만 고침(22c43270, 11.47). 이전: `/root/e850-wifi.sh.prev-11.47`(47489536) |
 | `/etc/sysctl.d/90-e850-autoreboot.conf` | 추가(11.22). `softlockup_panic=1`, `panic=5` |
@@ -143,7 +144,11 @@
    - 2.2의 가설 1·2를 확인하는 실험이다.
 4. **Wi-Fi 펌웨어 패닉 원인 (자동 복구는 11.31에서 켰다)**
    - **11.47(2026-11-13):** 저절로 나는 0x04 패닉 6번은 모두 펌웨어 `Data Abort`였다(vendor의 `mx140.sym`·`log-strings.bin`으로 R4 기록 [2]를 풀었다). abort 자리는 늘 힙 할당·수신 버퍼 풀 함수였다(`pfree…`, `pmalloc_debug_validate_free_list`, `dplane_dpif_resource_topup_all_rx_pools` 등). 펌웨어 힙 손상으로 본다(가설). 해석기는 `tools/host/wlbt-panic.py`다.
-   - **진행 중: 새 펌웨어 24시간 시험(2026-11-13 00:47 KST ~ 11-14 00:47 KST).**
+   - **끝남: 새 펌웨어 24시간 시험(2026-11-13 00:47 KST ~ 11-14 00:47 KST), 패닉 0번(11.48).**
+     - [확인] 지금 부팅(06:13 KST부터 18.6시간): `mx_recovery_count` 0. 커널 로그에 `WLBT FW PANIC`이 없고, 감시가 읽은 454번이 모두 0이었다.
+     - [확인, 근거 약함] 그 전 5.4시간(교체 뒤 44분 + 01:31 부팅): Mac 감시가 5분마다 0을 읽었다. 그 부팅의 커널 journal은 01:32에서 끊겨 있어(전원 차단) 로그로는 확인하지 못했다.
+     - 판정: 정한 기준(값이 늘지 않음)을 넘었다. 옛 빈도(3.8시간에 1번)라면 24시간 동안 약 6번 났어야 하고, 0번일 확률은 약 0.2%다(지금 부팅 18.6시간만 쳐도 약 0.8%).
+     - 남은 변수: 지금 부팅은 확인할 때마다 2.4 GHz(2437 MHz)였다. 앞의 5.4시간은 5 GHz(5745 MHz)였다. 옛 펌웨어 때는 두 대역을 오갔다(11.30). 대역의 영향은 따로 가르지 않았다.
      - `/vendor/etc/wifi`를 Linaro Android 13 BSP 판으로 바꿨다(`S612_E3830_R4-1_Y23W13A`, 2023-03-27, 드라이버와 같은 세대). 출처는 GitLab `Linaro/96boards/e850-96/platform/vendor/samsung_slsi` 커밋 11e9c19a다.
      - [확인] 강제 패닉 한 번으로 올렸고, 8초 뒤 다시 연결됐다. 처리량은 61.9 Mbit/s였다.
      - 절전은 기본값(on)이다. 절전 끄기 시험(`wifi-pskeep`)은 바꾸기 전에 멈췄다.
@@ -165,9 +170,9 @@
 
 선택 실험: C2 idle에서 GICC_CTLR를 끄는 시험. 보드가 멈출 수 있어서 사용자가 있을 때만 한다.
 
-6. **DVS D-PHY PLL 시험 (11.46~11.48, A/B/A/B 통과, 00/8B/B0 24시간 진행 중)**
+6. **DVS D-PHY PLL 시험 (11.46~11.49, 24시간 통과, 기본 setfile을 00/8B/B0으로 바꿈)**
    - 계획, 판정 기준, 지금까지의 결과는 [DVS-PLL-TESTS.md](DVS-PLL-TESTS.md)에 있다. 배경은 main의 `DVS_PLL_MINSU_KARIM_REVIEW_2026-11-10.md`이다.
-   - 0x75를 검증된 설정으로 다루지 않는다. 기본 setfile과 README는 E850 측정 결과가 나온 뒤에만 바꾼다.
+   - 0x75는 검증된 설정이 아니다. 2026-11-14에 E850 측정(A/B/A/B, 24시간)을 근거로 기본 setfile을 00/8B/B0으로 바꿨다(11.49). 0x75는 `pll=experimental_00_75_00`으로만 쓴다.
    - 할 일:
      1. (끝남, 11.46) 빌드·설치, PHY 설정 확인, 첫 A/B(각 10분). 버퍼 경계 누락의 원인은 디코더가 128번째 줄을 버린 것이었다(고침).
      2. (끝남, 2026-11-12 07:51~17:51 KST) 00/8B/B0, 수신 1600, 10시간: CRC 0. Wi-Fi 패닉 직후 이상 구간 382초를 빼면 짧은 버퍼·scan 누락·frame_end 누락 0이었다. 타임스탬프 오류는 22비트 기준값 한 바퀴(약 4208초마다) 8번 × 64뿐이었다. `pass: false`는 이 두 가지 때문이다.
@@ -179,12 +184,12 @@
         - **4회 모두 통과했다.** CRC 0, 짧은 버퍼·scan·frame_end 누락 0, 타임스탬프 오류 0, raw 표본 깨끗, readback 일치.
         - 차이는 버퍼 속도뿐이다(0x75 35.2/s, 00/8B/B0 37.8/s, 두 번 모두 같음). 센서 scan 주기는 둘 다 985 µs다.
         - 결과 디렉터리: `/var/tmp/plltest/10-abab-*`.
-     7. **진행 중: 00/8B/B0 24시간 시험**(`/var/tmp/plltest/11-8bb0-24h`, 2026-11-13 08:10 KST ~ 11-14 08:10 KST 무렵, unit `plltest`). 끝나면 setfile로 돌아간다.
-        - 끝났는지: `ssh philip@192.168.0.236 'systemctl is-active plltest'`
-        - 결과: `ssh philip@192.168.0.236 'cat /var/tmp/plltest/11-8bb0-24h/summary.json; python3 /var/tmp/stuckscan.py /var/tmp/plltest/11-8bb0-24h/stats.jsonl'`
-        - Wi-Fi 패닉 때문에 이상 상태가 되면 그 구간은 따로 센다(`stuckscan.py`).
+     7. **(끝남, 통과) 00/8B/B0 24시간 시험**(`/var/tmp/plltest/11-8bb0-24h`, 2026-11-13 08:10 ~ 11-14 08:10 KST, 11.48).
+        - `pass: true`, 9개 기준 모두 통과. CRC 0, 재시작 0, 버퍼 3,272,178개(37.87/s, 모두 128줄).
+        - 짧은 버퍼, scan 누락, frame_end 누락, 타임스탬프 오류, 모르는 워드가 모두 0이다. raw 표본도 깨끗했다.
+        - 같은 시간 Wi-Fi 패닉 0번이라 이상 구간이 없었다(`stuckscan.py`는 쓸 일이 없었다).
      8. **사용자 결정(2026-11-13):** 24시간 시험으로 안정성이 확인되면 다음 두 가지를 승인했다.
-        - 기본 setfile을 00/8B/B0으로 바꾼다(`is-cis-s5krc1s-setA.h`의 0x30A5~A7, 모듈 재빌드와 보드 설치, 이전 모듈 백업).
+        - (끝남, 11.49) 기본 setfile을 00/8B/B0으로 바꾼다. `is-cis-s5krc1s-setA.h`의 0x30A5~A7을 바꾸고 모듈을 다시 빌드해 보드에 넣었다(이전 모듈 `/root/is-cis-s5krc1s.ko.prev-11.49`). `plltest.py setfile` 10분 확인도 통과했다(readback `00 8b b0`).
         - `dvs-pll-diag`를 main에 병합한다.
 
 ## 4. 사용자 결정 대기

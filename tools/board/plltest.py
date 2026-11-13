@@ -3,9 +3,9 @@
 
   plltest.py PROFILE RX_MBPS MINUTES [--settle N] [--sample N] [--keep] [--out DIR]
 
-PROFILE is the CIS pll parameter (setfile = the setfile's 00/75/00, experimental_00_75_00, recommended_00_8b_b0,
-alternative_00_8b_f8, default_00_8d_00); RX_MBPS is fimc_is.e850_csi_speed, the CSIS lane rate setting (0 = the
-DT's 1600; settle follows it unless --settle). Order: the parameters, then dvslive restarted: its stream off puts
+PROFILE is the CIS pll parameter (setfile = the setfile's word: 00/8B/B0 since 11.49, 00/75/00 before;
+experimental_00_75_00, recommended_00_8b_b0, alternative_00_8b_f8, default_00_8d_00); RX_MBPS is
+fimc_is.e850_csi_speed, the CSIS lane rate setting (0 = the DT's 1600; settle follows it unless --settle). Order: the parameters, then dvslive restarted: its stream off puts
 the sensor in standby, the next stream's mode change writes the PLL word (sensor still in standby), CSIS starts at
 RX_MBPS, then the sensor streams. After WARM s the /stats JSON (CRC count, link counters, PLL readback) goes to
 OUT/stats.jsonl every STEP s for MINUTES; OUT/summary.json has the counter deltas and the
@@ -28,7 +28,7 @@ FIMC = '/sys/module/fimc_is/parameters/'
 STATS = 'http://127.0.0.1:8080/stats'      # dvslive.sh --ctl 8080
 WARM, STEP = 20, 10
 # expected readback: 0x30A5 0x30A6 0x30A7 (setfile: is-cis-s5krc1s-setA.h)
-WORDS = {'setfile': '00 75 00', 'experimental_00_75_00': '00 75 00', 'recommended_00_8b_b0': '00 8b b0',
+WORDS = {'setfile': '00 8b b0', 'experimental_00_75_00': '00 75 00', 'recommended_00_8b_b0': '00 8b b0',
          'alternative_00_8b_f8': '00 8b f8', 'default_00_8d_00': '00 8d 00'}
 # summed over the run (restarts of dvslive split it into segments); kernel CRC count and the process's counters
 LINK = ('bufs', 'short_bufs', 'data_lines', 'unknown', 'sub_fixed', 'fe', 'fe_skips', 'fe_skips_first', 'fe_missed',
@@ -131,7 +131,7 @@ def selftest():
     assert s['crc'] == 2 and s['restarts'] == 1 and s['bufs'] == 1 and s['ts'] == 1000 and s['seconds'] == 30, s
     c = s['criteria']
     assert c['readback'] and not c['crc'] and not c['stream'] and c['no_buffer_loss'] and not c['no_scan_loss'], c
-    assert not s['pass'] and summarize(rows[:2], 'setfile', 0)['criteria']['readback'] is False
+    assert not s['pass'] and summarize(rows[:2], 'experimental_00_75_00', 0)['criteria']['readback'] is False
 
 
 def main():

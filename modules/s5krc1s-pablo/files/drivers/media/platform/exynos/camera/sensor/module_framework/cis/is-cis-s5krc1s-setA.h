@@ -12,10 +12,12 @@
 
 /*
  * Delta_10_2000FPS (vendor setfile, setfile/Delta_10_2000FPS.txt; verified on RPi5 4-lane)
- * without its last line 0x0100 (read-only on this sensor) and with 0x30A6 = 0x75 for 0x8D (11.29).
- * 0x75 is experimental, not a validated setting (11.46): 0x30A5-0x30A7 are one 19-bit word, P [18:13] M [12:3]
- * S [2:0] (collaborator-reported), so 00/75/00 is P=3 M=672 S=0, 5376 Mbps by 24 x M / P, outside the datasheet's
- * 1250-2500 MHz VCO range (REV0.01); the real lane rate is unknown. The pll module parameter selects other words.
+ * without its last line 0x0100 (read-only on this sensor) and with the D-PHY PLL 0x30A5-0x30A7 = 00/8B/B0 for
+ * 00/8D/00 (11.49). The three bytes are one 19-bit word, P [18:13] M [12:3] S [2:0] (collaborator-reported):
+ * 00/8B/B0 is P=4 M=374 S=0, 2244 Mbps/lane by 24 x M / P, inside the 1250-2500 MHz VCO range (REV0.01).
+ * Measured here: A/B/A/B vs 0x75 and 24 h at the DT speed (1600) with CRC 0 and no buffer, scan or timestamp
+ * loss (11.48); the real lane rate is not measured. The old 00/75/00 (11.29, 5376 by formula, outside the VCO
+ * range) is still the pll profile experimental_00_75_00. The pll module parameter selects other words.
  * Lanes are set in mode change.
  */
 const u32 sensor_s5krc1s_setfile_A_Global[] = {
@@ -33,9 +35,8 @@ const u32 sensor_s5krc1s_setfile_A_Global[] = {
 	0x30A2, 0x11, 0x1, /* DPHY_ENABLE */
 	0x30A3, 0x1F, 0x1, /* DPHY_ENABLE */
 	0x30A5, 0x00, 0x1, /* DPHY_PLL_PMS */
-	0x30A6, 0x75, 0x1, /* DPHY_PLL_PMS, experimental: vendor 0x8D = a CRC error on every line here; 0x72-0x78
-			    * none, 0x7A CRC, 0x70/0x7C/0x80 no data (11.29: CRC 0 for 3 min; no controlled long run) */
-	0x30A7, 0x00, 0x1, /* DPHY_PLL_PMS */
+	0x30A6, 0x8B, 0x1, /* DPHY_PLL_PMS: vendor 00/8D/00 = a CRC error on every line here (11.28) */
+	0x30A7, 0xB0, 0x1, /* DPHY_PLL_PMS: 00/8B/B0, 24 h CRC 0 (11.48, 11.49) */
 	0x303B, 0x40, 0x1, /* TEST PAD_CONTROL */
 	0x3080, 0x3F, 0x1, /* CLOCK_ENABLE ([0] : MULTICLK_ENABLE) */
 	0x3081, 0x06, 0x1, /* CLOCK_ENABLE ([3] : DTPDTAG_ENABLE) */
