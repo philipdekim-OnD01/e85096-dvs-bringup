@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-14 08:45 KST)
+# E850-96 bring-up 현재 상태 (2026-11-14 17:30 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -120,6 +120,16 @@
 | 계정 / Wi-Fi | `philip` 계정. Wi-Fi는 PSK 해시만 보드에 있음(저장소에는 없음) |
 
 ## 3. 다음에 할 실험
+
+0. **웹 서비스(dvsctl) 이어서 할 일 (2026-11-14, 브랜치 `dvs-web-tools`, PR #7 병합 전)**
+   - 지금 상태: 웹 페이지 `tools/linux510/dvsctl.html`과 서버 `dvsctl.py`. 서버는 캡처 프로세스(dvslive) 안에서 CPU7로 돈다. 페이지는 요청마다 파일에서 읽으므로 HTML만 바꿀 때는 dvslive를 다시 시작하지 않는다. 기능과 경과는 11.50(크롭, 레지스터 읽기, 그래프, HDMI 주소 배너), 11.51(MIPI·DRAM 그래프), 11.52(배너 fb0), 11.54(90° 회전)에 있다.
+   - 보드: 보드1 http://192.168.0.236:8080/ 은 **회전 버튼이 아직 없다**(`dvsctl.html` 0133cdc9). 새 파일은 `/var/tmp/dvsctl.html.new`(6df1e198)에 있다. 보드2 http://192.168.0.168:8080/ 은 설치됐다(6df1e198).
+   - 보드1 설치 방법: root가 필요하다. 사용자가 보드1 ssh에서 `sudo sh -c 'cp /usr/local/share/dvsview/dvsctl.html /root/dvsctl.html.prev-11.54; install -m 644 /var/tmp/dvsctl.html.new /usr/local/share/dvsview/dvsctl.html'`을 실행한다(Claude는 sudo 비밀번호를 입력하지 않는다). 또는 USB-C를 보드1에 꽂고 ACM root 콘솔로 설치한다.
+   - 확인하지 못한 것: 실제 브라우저에서 회전 버튼을 누르는 동작, 돌린 화면에서 마우스로 크롭하는 동작, 실제 모니터의 HDMI 주소 배너.
+   - 보드에 배포하는 순서: Mac에서 고친다 → `python3 -m unittest discover -s tools/linux510 -p test_dvsctl.py`를 돌린다 → 페이지를 확인한다(headless Chrome에 `--disable-web-security`를 주고, 로컬 사본에 `<base href="http://<보드>:8080/">`를 넣어 연다. 11.54) → `scp`로 `/var/tmp`에 올린다 → root로 `install`한다. `dvsctl.py`를 바꿨으면 root로 `systemctl restart dvslive`를 한다.
+   - 두 보드를 USB로 동시에 Mac에 꽂지 않는다(같은 192.168.7.1, 같은 ACM 이름). ACM에 붙은 보드는 `cat /etc/machine-id`로 구별한다(보드1 `4aeede4c…`, 보드2 `6f31c0bd…`).
+   - 같이 볼 것: 보드1 dvslive가 2026-11-14에 저절로 3번 재시작했다(`NRestarts=3`). 한 번은 rootfs 전송 중이었다. 원인은 root journal로 확인해야 한다.
+
 
 1. **DVS 사람 행동 분류: 나타남 / 움직임 / 넘어짐 (구현 중)**
    - 설계: `docs/superpowers/specs/2026-11-07-dvs-person-action-design.md`. 조사와 실측: 11.36.
