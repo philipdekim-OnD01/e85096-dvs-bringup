@@ -7,7 +7,9 @@ import time
 import unittest
 
 import dvsctl
-from dvsctl import HIST_COLS, History, Recorder, banner_rows, rec_check, reg_args
+import zlib
+
+from dvsctl import HIST_COLS, History, Recorder, banner_rows, evframe, evframe_args, rec_check, reg_args
 
 
 class FakeLib:
@@ -117,6 +119,48 @@ class TestPage(unittest.TestCase):
         self.assertEqual((r['mipi_fe'], r['vc0_free'], r['vc0_wait']), (9, 6, None))
         h.add(5, {'fps': 30}, None)                             # no link counters yet
         self.assertIsNone(dict(zip(HIST_COLS, h.since(4)[0]))['ts_bad'])
+
+
+class FakeSurface:
+    """dvs_surface: writes 7 at the first pixel, info newest 5000, disp2mono 123 + 2^32, cost 40; returns ret"""
+
+    def __init__(self, ret=1):
+        self.ret, self.calls = ret, []
+
+    def dvs_surface(self, t_end, win, dst, info):
+        self.calls.append((t_end, win, dst is not None))
+        info[0], info[1], info[2], info[3] = 5000, 123, 1, 40
+        if dst is not None and self.ret >= 0:
+            dst[0] = 7
+        return self.ret if dst is not None else -3
+
+
+class TestEvframe(unittest.TestCase):
+    def test_args(self):
+        self.assertEqual(evframe_args('t_end=123&win=5000'), (123, 5000))
+        self.assertEqual(evframe_args(''), (None, 20000))
+        self.assertEqual(evframe_args('t_end=4294967295'), (4294967295, 20000))
+        for q in ('win=999', 'win=200001', 't_end=x', 't_end=-1', 't_end=4294967296', 'win=1e4'):
+            self.assertRaises(ValueError, evframe_args, q)
+
+    def test_frame(self):
+        code, hdr, body = evframe(FakeSurface(1), 5000, 20000)
+        img = zlib.decompress(body)
+        self.assertEqual((code, len(img), img[0], img[1]), (200, 172800, 7, 0))
+        self.assertEqual((hdr['X-Dvs-Events'], hdr['X-Dvs-Newest'], hdr['X-Dvs-Disp2Mono']),
+                         ('1', '5000', str(123 + (1 << 32))))
+        self.assertGreaterEqual(int(hdr['X-Dvs-Cost-Us']), 40)
+        self.assertAlmostEqual(int(hdr['X-Dvs-Mono']), time.monotonic_ns() // 1000, delta=1e6)
+
+    def test_errors(self):
+        self.assertEqual(evframe(FakeSurface(-1), 5000, 20000)[0], 425)
+        self.assertEqual(evframe(FakeSurface(-2), 5000, 20000)[0], 410)
+
+    def test_probe(self):   # no t_end: the clocks only, no image
+        lib = FakeSurface(1)
+        code, hdr, body = evframe(lib, None, 20000)
+        self.assertEqual((code, body, hdr['X-Dvs-Newest'], lib.calls[0][2]), (200, b'', '5000', False))
+        self.assertIn('X-Dvs-Mono', hdr)
 
 
 if __name__ == '__main__':

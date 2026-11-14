@@ -20,6 +20,10 @@ threads, all on CPU7 at the top clock (pin(), 11.30):
   GET  /rec        the recorder: {"state": idle|countdown|recording, "left_s", "last"}
   POST /rec        {"label": one of dvsact.CLASSES, "s": 1-30}: after a 3 s countdown, the packets of s seconds to
                    REC_DIR/<UTC>-<label>.gz (dvs_record) and a .json beside it, for the action classifier (11.39)
+  GET  /evframe    ?t_end=<display us>&win=<us>: the events of that display-clock window as a 480x360 time surface
+                   (dvs_surface), zlib level 1; X-Dvs-Newest, X-Dvs-Disp2Mono (CLOCK_MONOTONIC - display clock),
+                   X-Dvs-Mono (now), X-Dvs-Events, X-Dvs-Cost-Us. No t_end: the headers only. 425 not yet, 410 gone
+                   from the ring, 400 bad arguments. The source of the stereo 3D page on the Mac (dvs3d.py, 11.56)
 No login: it only changes how the view is drawn and the sensor's scan timing, on the board's own network.
 /reg only reads: no sensor register is written from the page.
 HDMI: the page's addresses (Wi-Fi, USB) in Korean at the bottom left of the screen, every 5 s (Banner, 11.50).
@@ -43,6 +47,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import zlib
 
 SAVED = '/var/lib/dvsview/display.json'
 SENSOR = '/var/lib/dvsview/sensor.json'
@@ -117,6 +122,39 @@ def mipi():
                 'mipi_err': sum(int(b) for b in bits)}
     except (OSError, ValueError):
         return {}
+
+
+EV_W, EV_H = 480, 360                       # dvs_surface: 2 x 2 px each (11.56)
+EV_CODES = {-1: 425, -2: 410, -3: 400}      # not yet, gone from the ring, bad window
+
+
+def evframe_args(query):
+    """(t_end display us or None, win us) of /evframe?t_end=&win=; ValueError when out of range"""
+    q = urllib.parse.parse_qs(query)
+    t_end = int(q['t_end'][0]) if 't_end' in q else None
+    win = int(q.get('win', ['20000'])[0])
+    if t_end is not None and not 0 <= t_end < 1 << 32 or not 1000 <= win <= 200000:
+        raise ValueError(query)
+    return t_end, win
+
+
+def evframe(lib, t_end, win):
+    """/evframe: (HTTP code, headers, body); t_end None probes the clocks only"""
+    info = (ctypes.c_uint32 * 4)()
+    dst = None if t_end is None else (ctypes.c_uint8 * (EV_W * EV_H))()
+    n = lib.dvs_surface(0 if t_end is None else t_end, win if dst is not None else 0, dst, info)
+    d2m = info[1] | info[2] << 32
+    hdr = {'X-Dvs-Newest': str(info[0]), 'X-Dvs-Disp2Mono': str(d2m - (1 << 64) if d2m >> 63 else d2m)}
+    body = b''
+    if dst is not None:
+        if n < 0:
+            return EV_CODES.get(n, 500), hdr, b''
+        t0 = time.monotonic_ns()
+        body = zlib.compress(bytes(dst), 1)
+        hdr['X-Dvs-Events'] = str(n)
+        hdr['X-Dvs-Cost-Us'] = str(info[3] + (time.monotonic_ns() - t0) // 1000)     # the C window + deflate
+    hdr['X-Dvs-Mono'] = str(time.monotonic_ns() // 1000)
+    return 200, hdr, body
 
 
 class History:
@@ -352,6 +390,7 @@ def start(lib, port):
     lib.dvs_params.restype = lib.dvs_stats.restype = ctypes.c_char_p
     lib.dvs_png.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
     lib.dvs_record.argtypes = [ctypes.c_char_p]
+    lib.dvs_surface.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
     rec = Recorder(lib)
     hist, reg_lock = History(), threading.Lock()
     atexit.register(rec.close, False)          # SIGTERM is a KeyboardInterrupt in ov5647-cap.py, then sys.exit
@@ -424,6 +463,22 @@ def start(lib, port):
                 except OSError as e:            # sensor powered off, no device
                     return self.send(json.dumps({'error': str(e)}).encode(), code=502)
                 self.send(json.dumps({'a': a, 'n': n, 'bus': bus, 'v': v}).encode())
+            elif path == '/evframe':
+                try:
+                    t_end, win = evframe_args(self.path.partition('?')[2])
+                except ValueError:
+                    return self.send(b'{"error": "want ?t_end=0..2^32-1&win=1000..200000"}', code=400)
+                code, hdr, body = evframe(lib, t_end, win)
+                self.send_response(code)
+                for k, v in hdr.items():
+                    self.send_header(k, v)
+                self.send_header('Content-Type', 'application/octet-stream')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                if code >= 400:
+                    self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(body)
             elif path == '/frame.png':
                 with lock:
                     n = lib.dvs_png(ctypes.addressof(ctypes.c_char.from_buffer(pngbuf)), len(pngbuf))

@@ -1185,7 +1185,7 @@ int64_t dvs_disp2mono(void)
  * The stereo 3D source (11.56): the events of display-clock window (t_end - win_us, t_end] into dst[SY][SX] (2 x 2 px
  * each), the latest event of a pixel giving 1 + 254 * (win - age) / win, 0 where none fired; polarity left out.
  * Walks back from the newest event; times compare as int32 differences (the 32-bit clock wraps every 71.6 min).
- * info: newest (display us), disp2mono low and high 32 bits, cost us. Returns the events used, -1 when t_end is
+ * info: newest (display us), disp2mono low and high 32 bits, cost us; dst NULL fills only the first three. Returns the events used, -1 when t_end is
  * after the newest buffer, -2 when the window reaches past the RING / 2 a reader may use (dvs_events()) or the
  * decoder overwrote it meanwhile, -3 for a bad window. The caller's thread (the page's, CPU7) does the work.
  */
@@ -1196,11 +1196,11 @@ int dvs_surface(uint32_t t_end, int win_us, uint8_t *dst, uint32_t *info)
 	uint64_t wr = atomic_load_explicit(&S.wr, memory_order_acquire), lo = wr > RING / 2 ? wr - RING / 2 : 0, i;
 	int n = 0, r;
 
-	if (win_us < 1000 || win_us > 200000 || !dst)
-		return -3;
 	info[0] = newest;
 	info[1] = (uint32_t)d2m;
 	info[2] = (uint32_t)((uint64_t)d2m >> 32);
+	if (win_us < 1000 || win_us > 200000 || !dst)	/* dst NULL: a probe of the clocks (info) */
+		return -3;
 	if ((int32_t)(t_end - newest) > 0)
 		return -1;
 	memset(dst, 0, SX * SY);
@@ -1666,6 +1666,9 @@ int main(int argc, char **argv)
 		if (dvs_surface(20001, 20000, img, info) != -1 || dvs_surface(20000, 999, img, info) != -3 ||
 		    dvs_surface(20000, 200001, img, info) != -3)
 			return fprintf(stderr, "dvs_surface: not yet / bad window\n"), 1;
+		info[0] = 0;					/* no dst: a probe, the clocks in info only */
+		if (dvs_surface(0, 0, NULL, info) != -3 || info[0] != 20000)
+			return fprintf(stderr, "dvs_surface probe: newest %u\n", info[0]), 1;
 		reset();					/* the 32-bit display clock wraps inside the window */
 		S.ring[0] = (struct ev){ 0xfffff000u, 2, 2 };
 		S.ring[1] = (struct ev){ 0x800, 4, 4 };
