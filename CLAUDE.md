@@ -71,7 +71,7 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
   python3 tools/host/acm.py "echo $b | base64 -d | gunzip > /lib/modules/\$(uname -r)/X.ko && depmod" 30
   ```
   큰 파일은 `tools/linux510/acmpush.py`를 쓴다.
-- **userdata(768 MB 넘는 sparse) 굽기:** `fastboot flash userdata`는 쓰지 않는다. 먼저 `getvar:is-userspace`를 보내는데, LK가 거기서 멈춘다(11.53). `python3 tools/linux510/resparse.py --split-mib 700 rootfs.simg part.simg` 다음 `fbmini flash userdata part.simg.N`을 차례로 한다. `fbmini`는 `tools/linux510/fbmini.c`이고 빌드법은 7.7절에 있다. 보드를 통째로 복제하는 방법은 11.53절(`rootfs-send.py`, `rootfs-recv.py`, `build-clone.sh`)에 있다.
+- **userdata(768 MB 넘는 sparse) 굽기:** `fastboot flash userdata`는 쓰지 않는다. 먼저 `getvar:is-userspace`를 보내는데, LK가 거기서 멈춘다(11.53). `python3 tools/linux510/resparse.py --split-mib 700 rootfs.simg part.simg` 다음 `fbmini flash userdata part.simg.N`을 차례로 한다. `fbmini`는 `tools/linux510/fbmini.c`이고 빌드법은 7.7절에 있다. 보드를 통째로 복제하는 절차는 [docs/BOARD-CLONE.md](docs/BOARD-CLONE.md)에 있다.
 - **부트 이미지 굽기(허락받은 뒤):**
   1. 보드에서 `(setsid nohup /usr/local/sbin/to-fastboot >/dev/null 2>&1 </dev/null &)`를 실행한다. 워치독 데몬을 죽이면 약 20초 뒤 리셋되고, LK가 `Abnormal RST_STAT`로 보고 fastboot에 들어간다.
   2. `fastboot devices`로 보드가 보이는지 확인한다.

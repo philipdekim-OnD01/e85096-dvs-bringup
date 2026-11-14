@@ -2,9 +2,11 @@
 # Rebuild a board's userdata image from its rootfs tar, to put the same system on another E850-96 (docs 11.53).
 #   docker run --rm --privileged -v "$PWD/tools/linux510:/t:ro" -v <dir>:/x ubuntu:22.04 sh /t/build-clone.sh
 # In : /x/rootfs.tar from tools/board/rootfs-send.py (tools/host/rootfs-recv.py on the Mac).
-# Out: /x/rootfs.simg; then on the Mac `python3 tools/linux510/resparse.py rootfs.simg rootfs-split.simg` (7.12: the
-#      LK hangs on big FILL chunks) and `fastboot flash userdata rootfs-split.simg` (fastboot splits it at 768 MB).
+# Out: /x/rootfs.simg; then on the Mac `python3 tools/linux510/resparse.py --split-mib 700 rootfs.simg part.simg`
+#      (FILL chunks <= 32 MiB, 7.12; pieces under the LK's 768 MB download limit) and `fbmini flash userdata
+#      part.simg.N` in order. Not `fastboot flash userdata`: its getvar:is-userspace hangs the LK (11.53).
 #      /x/manifest.md5: md5 of every file under the static trees, to compare with the new board after it boots.
+# Whole procedure: docs/BOARD-CLONE.md.
 # Same size, label and UUID as the source filesystem (tune2fs -l).
 # Changed: a new machine-id (so the clone gets its own DHCP lease; the Wi-Fi MAC comes from the SoC id anyway)
 # and no systemd random seed. Kept: everything else, ssh host keys and the Wi-Fi settings included.
