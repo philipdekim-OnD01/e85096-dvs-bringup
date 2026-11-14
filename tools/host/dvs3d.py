@@ -4,12 +4,13 @@ docs/superpowers/specs/2026-11-14-dvs-stereo-3d-design.md).
 
 Each board's /evframe gives the time surface (480 x 360) of a display-clock window. This takes, every 100 ms, the
 window ending at one Mac time T (now - 80 ms) from both boards (left = board 1), rectifies them with calib.npz
-(dvs3d-calib.py), runs OpenCV StereoSGBM, keeps the pixels that fired on the left and turns them into 3D points
+(dvs3d.py calib, a blinking board from dvs3d-checker.html), runs OpenCV StereoSGBM, keeps the pixels that fired on the left and turns them into 3D points
 for the page (dvs3d.html, http://localhost:8090/). Every stage is timed: the bench replays recorded pairs through
 the same code to measure the compute on the Mac and, later, on the board (the lightening plan of stage 2).
 
   dvs3d.py live --left 192.168.0.236 --right 192.168.0.168 [--rec DIR] [--calib F] [--png] [--port 8090]
   dvs3d.py bench DIR [--threads N] [--calib F]
+  dvs3d.py calib [--left H --right H] [--square M] [--n 20] [--png] [--from DIR]   (writes calib.npz)
 
 --png: a board without /evframe (no root to install it) serves its HDMI frame instead (/frame.png: the fade of
 the renderer for a time surface, no timestamp, paired by request time). Enough for timing and a look, not for
@@ -193,6 +194,85 @@ class Pipeline:
         return xyz, val, t
 
 
+def grab(boards, win, png=False):
+    """both surfaces of one Mac time T (or both HDMI frames with png), each board in its own thread; None if either
+    failed"""
+    out = [None, None]
+    if png:
+        def get(i):
+            out[i] = boards[i].png()
+    else:
+        for b in boards:
+            if b.clock.offset() is None:
+                b.probe()
+        if any(b.clock.offset() is None for b in boards):
+            return None
+        T = now_us() - T_DELAY_US
+
+        def get(i):
+            f = boards[i].frame(boards[i].clock.to_disp(T), win)
+            out[i] = f and f[0]
+    th = [threading.Thread(target=get, args=(i,)) for i in (0, 1)]
+    for x in th:
+        x.start()
+    for x in th:
+        x.join()
+    return None if out[0] is None or out[1] is None else out
+
+
+PATTERN = (9, 6)                    # inner corners of dvs3d-checker.html's 10 x 7 squares
+
+
+def find_corners(img, pattern=PATTERN):
+    """the corners of the blinking board in one surface: only its white squares fire, so what fired is white;
+    a median drops the scattered noise events. (n, 1, 2) float32 or None"""
+    b = cv2.medianBlur(np.where(img > 0, 255, 0).astype(np.uint8), 5)
+    ok, c = cv2.findChessboardCornersSB(b, pattern)
+    return c.astype(np.float32) if ok else None
+
+
+def calibrate(views, square_m, pattern=PATTERN, size=(W, H)):
+    """[(left corners, right corners), ...] of the same board poses -> both lenses, the rig, the rectification
+    (the keys Pipeline reads) + rms (stereo, px) and f_ratio (the longer focal length / the shorter)"""
+    g = np.mgrid[0:pattern[0], 0:pattern[1]].T.reshape(-1, 2) * square_m
+    obj = [np.hstack([g, np.zeros((len(g), 1))]).astype(np.float32)] * len(views)
+    left, right = [v[0] for v in views], [v[1] for v in views]
+    _, K1, D1, _, _ = cv2.calibrateCamera(obj, left, size, None, None)
+    _, K2, D2, _, _ = cv2.calibrateCamera(obj, right, size, None, None)
+    rms, K1, D1, K2, D2, R, T, _, _ = cv2.stereoCalibrate(obj, left, right, K1, D1, K2, D2, size,
+                                                          flags=cv2.CALIB_FIX_INTRINSIC)
+    R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(K1, D1, K2, D2, size, R, T)
+    return {'K1': K1, 'D1': D1, 'K2': K2, 'D2': D2, 'R': R, 'T': T, 'R1': R1, 'R2': R2, 'P1': P1, 'P2': P2,
+            'Q': Q, 'rms': rms, 'f_ratio': max(K1[0, 0] / K2[0, 0], K2[0, 0] / K1[0, 0])}
+
+
+def calib_cmd(a):
+    """capture board poses from both boards (or reuse a capture with --from), then solve and save calib.npz"""
+    d = a.from_dir or os.path.expanduser(time.strftime('~/e850-logs/dvs3d/calib-%Y%m%d-%H%M%S'))
+    if not a.from_dir:
+        os.makedirs(d)
+        boards = (Board(a.left), Board(a.right))
+        print('dvs3d-checker.html (/checker)를 전체 화면으로 띄우고, 두 센서가 함께 보는 곳에서 화면을 움직이세요.')
+        n = 0
+        while n < a.n:
+            pair = grab(boards, a.win, a.png)
+            cs = pair and [find_corners(x) for x in pair]
+            if cs and cs[0] is not None and cs[1] is not None:
+                np.savez(os.path.join(d, '%02d.npz' % n), left=pair[0], right=pair[1], cl=cs[0], cr=cs[1])
+                n += 1
+                print('%d/%d 저장. 화면을 다른 위치·기울기로 옮기세요.' % (n, a.n), flush=True)
+                time.sleep(1.5)
+            else:
+                time.sleep(0.3)
+    views = [(z['cl'], z['cr']) for z in map(np.load, sorted(glob.glob(os.path.join(d, '*.npz'))))]
+    c = calibrate(views, a.square)
+    np.savez(a.out, **c)
+    ok = c['rms'] < 1 and c['f_ratio'] <= 2
+    print('%d poses, rms %.3f px, baseline %.1f cm, f %.0f / %.0f px (ratio %.2f): %s -> %s' % (
+        len(views), c['rms'], 100 * np.linalg.norm(c['T']), c['K1'][0, 0], c['K2'][0, 0], c['f_ratio'],
+        'pass' if ok else 'FAIL (rms < 1 px, ratio <= 2)', a.out))
+
+
 class Live:
     """the 10 Hz loop: one Mac time T for both boards, the pipeline, the page's state, the recording"""
 
@@ -204,32 +284,8 @@ class Live:
         if rec:
             os.makedirs(rec, exist_ok=True)
 
-    def grab(self):
-        """both images (or None), each board in its own thread; with --png at the same request time"""
-        out = [None, None]
-        if self.png:
-            def get(i):
-                out[i] = self.boards[i].png()
-        else:
-            for b in self.boards:
-                if b.clock.offset() is None:
-                    b.probe()
-            if any(b.clock.offset() is None for b in self.boards):
-                return None
-            T = now_us() - T_DELAY_US
-
-            def get(i):
-                f = self.boards[i].frame(self.boards[i].clock.to_disp(T), self.win)
-                out[i] = f and f[0]
-        th = [threading.Thread(target=get, args=(i,)) for i in (0, 1)]
-        for x in th:
-            x.start()
-        for x in th:
-            x.join()
-        return None if out[0] is None or out[1] is None else out
-
     def step(self):
-        pair = self.grab()
+        pair = grab(self.boards, self.win, self.png)
         if pair is None:
             self.dropped += 1
             return
@@ -285,11 +341,22 @@ def main():
     lv.add_argument('--win', type=int, default=20000)
     lv.add_argument('--port', type=int, default=8090)
     lv.add_argument('--seconds', type=float, default=0, help='stop after this long (0: run until killed)')
+    cb = sub.add_parser('calib')
+    cb.add_argument('--left', default='192.168.0.236')
+    cb.add_argument('--right', default='192.168.0.168')
+    cb.add_argument('--png', action='store_true')
+    cb.add_argument('--n', type=int, default=20, help='board poses')
+    cb.add_argument('--square', type=float, default=0.03, help='a square on the screen, measured with a ruler (m)')
+    cb.add_argument('--win', type=int, default=150000, help='longer than the 100 ms blink')
+    cb.add_argument('--out', default=CALIB)
+    cb.add_argument('--from', dest='from_dir', help='solve again from a capture directory')
     bn = sub.add_parser('bench')
     bn.add_argument('rec')
     bn.add_argument('--threads', type=int, default=1)
     bn.add_argument('--calib', default=CALIB)
     a = ap.parse_args()
+    if a.cmd == 'calib':
+        return calib_cmd(a)
     calib = load_calib(a.calib)
     if a.cmd == 'bench':
         return bench(a.rec, a.threads, calib)
@@ -306,8 +373,9 @@ def main():
 
 def serve(live, port):
     """the page on localhost:port in a thread (port 0: any free one); returns the server.
-    GET / dvs3d.html (read per request), /points (pack_points), /views.png (both surfaces), /stats (JSON)"""
-    page = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvs3d.html')
+    GET / dvs3d.html (read per request), /checker (the calibration board), /points (pack_points), /views.png (both surfaces), /stats (JSON)"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    page, checker = os.path.join(here, 'dvs3d.html'), os.path.join(here, 'dvs3d-checker.html')
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def send(self, body, ctype, code=200):
@@ -324,6 +392,8 @@ def serve(live, port):
             path = self.path.split('?')[0]
             if path == '/':
                 self.send(open(page, 'rb').read(), 'text/html; charset=utf-8')
+            elif path == '/checker':
+                self.send(open(checker, 'rb').read(), 'text/html; charset=utf-8')
             elif path == '/points':
                 self.send(st['points'], 'application/octet-stream')
             elif path == '/views.png':

@@ -100,7 +100,7 @@ async function stats() {
   const t = document.getElementById('stats');
   t.replaceChildren(...rows.map(([k, v]) => { const r = t.insertRow(); r.insertCell().textContent = k; r.insertCell().textContent = v; return r; }));
   document.getElementById('note').textContent = s.calib ? (s.points ? '' : '이번 쌍에서 짝을 찾은 점이 없습니다.')
-    : '보정 파일(~/e850-logs/dvs3d/calib.npz)이 없어 3D 점을 만들지 않습니다. dvs3d-calib.py로 보정하세요.';
+    : '보정 파일(~/e850-logs/dvs3d/calib.npz)이 없어 3D 점을 만들지 않습니다. dvs3d.py calib으로 보정하세요(바둑판: /checker).';
 }
 
 const img = document.getElementById('views');

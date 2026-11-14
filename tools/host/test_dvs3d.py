@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 import dvs3d
-from dvs3d import Board, BoardClock, Pipeline, pack_points, thin
+from dvs3d import Board, BoardClock, Pipeline, calibrate, find_corners, pack_points, thin
 
 F, B = 600.0, 0.15                         # synthetic rig: two equal cameras 15 cm apart along x
 
@@ -159,6 +159,7 @@ class TestServe(unittest.TestCase):
         r = self.get('/')
         self.assertEqual(r.status, 200)
         self.assertIn(b'<canvas', r.read())
+        self.assertIn(b'<canvas', self.get('/checker').read())
 
     def test_points_and_stats(self):
         self.assertEqual(len(self.get('/points').read()), 4 + 13 * 2)
@@ -170,6 +171,42 @@ class TestServe(unittest.TestCase):
         self.assertEqual(e.exception.code, 503)
         self.live.state['views'] = b'\x89PNG'
         self.assertEqual(self.get('/views.png').headers['Content-Type'], 'image/png')
+
+
+PATTERN, SQUARE = (9, 6), 0.03
+
+
+def board_points():
+    g = np.mgrid[0:PATTERN[0], 0:PATTERN[1]].T.reshape(-1, 2)
+    return np.hstack([g * SQUARE, np.zeros((len(g), 1))]).astype(np.float32)
+
+
+class TestCalib(unittest.TestCase):
+    def test_find_corners_in_a_blinking_board(self):   # only the white squares fire: they are the pattern
+        img = np.zeros((360, 480), np.uint8)
+        for r in range(PATTERN[1] + 1):
+            for c in range(PATTERN[0] + 1):
+                if (r + c) % 2:
+                    img[60 + 30 * r:90 + 30 * r, 90 + 30 * c:120 + 30 * c] = 200
+        found = find_corners(img, PATTERN)
+        self.assertIsNotNone(found)
+        self.assertEqual(found.shape, (54, 1, 2))
+        self.assertIsNone(find_corners(np.zeros((360, 480), np.uint8), PATTERN))
+
+    def test_calibrate_a_synthetic_rig(self):
+        K = np.array([[F, 0, 240], [0, F, 180], [0, 0, 1]])
+        obj, rng, views = board_points(), np.random.default_rng(1), []
+        for _ in range(15):
+            rvec = rng.uniform(-0.4, 0.4, 3)
+            tvec = np.array([rng.uniform(-0.15, 0.05), rng.uniform(-0.1, 0.05), rng.uniform(0.6, 1.0)])
+            l = cv2.projectPoints(obj, rvec, tvec, K, None)[0]
+            r = cv2.projectPoints(obj, rvec, tvec - np.array([B, 0, 0]), K, None)[0]
+            views.append((l.astype(np.float32), r.astype(np.float32)))
+        c = calibrate(views, SQUARE, PATTERN)
+        self.assertLess(c['rms'], 0.5)
+        self.assertAlmostEqual(float(np.linalg.norm(c['T'])), B, delta=0.01)
+        self.assertAlmostEqual(float(c['f_ratio']), 1.0, delta=0.05)
+        self.assertEqual({'K1', 'D1', 'K2', 'D2', 'R1', 'R2', 'P1', 'P2', 'Q'} - set(c), set())
 
 
 if __name__ == '__main__':
