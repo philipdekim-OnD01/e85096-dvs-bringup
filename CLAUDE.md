@@ -32,8 +32,9 @@ WinLink E850-96(Samsung Exynos850 = s5e3830, Cortex-A55 8코어)에 vendor Linux
 |---|---|---|
 | USB ACM 콘솔 | `/dev/cu.usbmodeme850_961`, root 자동 로그인 | `python3 tools/host/acm.py "<cmd>" <timeout>` |
 | UART 디버그 | `/dev/cu.usbserial-AK0O198I`, 115200 | 커널 로그 전용. `tools/host/uartlog.py`가 `~/e850-logs/uart.log`에 계속 기록 |
-| USB 네트워크(NCM) | 보드 192.168.7.1, Mac은 DHCP | `EmitRouter=no`라 Mac 인터넷은 Wi-Fi로 유지 |
+| USB 네트워크(ECM) | 보드 192.168.7.1, Mac은 DHCP | `EmitRouter=no`라 Mac 인터넷은 Wi-Fi로 유지. 보드→Mac 방향이 멈출 때가 있다(11.52): UDC `soft_connect`를 끊었다 붙이면 복구된다 |
 | Wi-Fi | 192.168.0.236 | `ssh philip@192.168.0.236` 또는 `e850@`. 평소 작업은 이걸로 충분하다. 핸드폰 핫스팟 `An`이 켜져 있으면 그쪽에 먼저 붙는다(주소는 DHCP, 11.45). 그때는 `ssh -o HostKeyAlias=192.168.0.236 philip@<주소>` |
+| 보드2 (2026-11-14, 11.53) | Wi-Fi 192.168.0.168 (DHCP), UART `/dev/cu.usbserial-A5069RR4`, fastboot `000009f72c9c23e0` | 보드1의 복제본이다(machine-id만 다름, 같은 ssh 호스트 키라 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.168`). 두 보드 모두 USB 주소 192.168.7.1과 ACM 이름 `e850_96`를 쓴다. 그래서 Mac에는 한 번에 한 보드만 USB로 꽂는다. 지금 ACM에 붙은 보드는 `cat /etc/machine-id`로 구별한다(보드1 `4aeede4c…`, 보드2 `6f31c0bd…`) |
 | HDMI | LT8912B 브리지, tty1 텍스트 콘솔(16x32 글꼴) | `e850-hdmi.service` |
 
 ## 빌드
@@ -70,6 +71,7 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
   python3 tools/host/acm.py "echo $b | base64 -d | gunzip > /lib/modules/\$(uname -r)/X.ko && depmod" 30
   ```
   큰 파일은 `tools/linux510/acmpush.py`를 쓴다.
+- **userdata(768 MB 넘는 sparse) 굽기:** `fastboot flash userdata`는 쓰지 않는다. 먼저 `getvar:is-userspace`를 보내는데, LK가 거기서 멈춘다(11.53). `python3 tools/linux510/resparse.py --split-mib 700 rootfs.simg part.simg` 다음 `fbmini flash userdata part.simg.N`을 차례로 한다. `fbmini`는 `tools/linux510/fbmini.c`이고 빌드법은 7.7절에 있다. 보드를 통째로 복제하는 방법은 11.53절(`rootfs-send.py`, `rootfs-recv.py`, `build-clone.sh`)에 있다.
 - **부트 이미지 굽기(허락받은 뒤):**
   1. 보드에서 `(setsid nohup /usr/local/sbin/to-fastboot >/dev/null 2>&1 </dev/null &)`를 실행한다. 워치독 데몬을 죽이면 약 20초 뒤 리셋되고, LK가 `Abnormal RST_STAT`로 보고 fastboot에 들어간다.
   2. `fastboot devices`로 보드가 보이는지 확인한다.
@@ -89,6 +91,8 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
 - **USB 호스트:** 꺼져 있어서 키보드·마우스가 없다. 데스크톱 환경은 보류했다(GPU 사용자 공간 드라이버 없음).
 - **포트:** nginx가 80번 포트를 쓴다. Apache를 올리기 전에 사용자와 포트를 정한다.
 - **Wi-Fi:** 펌웨어가 패닉하면(`WLBT FW PANIC`) 드라이버가 펌웨어를 다시 올리고 약 6초 뒤 다시 연결한다(11.31, `e850-wifi.sh`의 `disable_recovery_handling=0`). 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`로 본다. `mx_panic`은 읽기만 해도 펌웨어가 패닉하니 `cat`하지 않는다(11.33부터 root만 읽고 쓸 수 있다, 0600). 강제 패닉 반복 시험은 `tools/board/wifi-panicloop.sh N`(root, 보드 `/var/tmp/wifi-panicloop.sh`). 2026-11-13부터 펌웨어는 Linaro Android 13 판(`R4-1_Y23W13A`, 11.47)이다. 옛 2019년 판은 3.8시간마다 Data Abort가 났다. 되돌리기는 root로 `sh /var/tmp/wifi-fwswap.sh a10`.
+- **Android 10 보드를 fastboot에 넣기:** Mac의 Homebrew adb 37.0.1은 서버가 시작하다 죽는다. VOL_UP 키도 LK가 읽지 못한다. 대신 UART(Android `console` 셸)에 `reboot bootloader`를 보낸다(11.53). Linux에서는 `rebootarg bootloader`가 통하지 않으니 `to-fastboot`을 쓴다.
+- **MIPI CRC가 모든 줄에 날 때:** 먼저 CN4 카메라 케이블을 다시 꽂는다. 보드2는 그것으로 CRC 0이 됐다(11.53). CRC가 계속 나는 상태로 두면 dvslive가 재시작을 되풀이하다 정지 경로에서 보드가 멈춘다.
 - **재부팅 뒤 ACM이 안 보일 때:** UDC가 `not attached`이고 UART에 `dwc3_otg_start_gadget does not have any gadget`이 있으면 `e850-vbus` 경합이다(11.31). 11.32부터 `e850-vbus`가 gadget을 기다린다(`dmesg`에 `VBUS on … after N ms`). 그래도 안 보이면 ssh에서 `sudo sh -c "rmmod e850_vbus; modprobe e850-vbus"`를 한다(비밀번호는 사용자에게 묻는다). 정상 상태에서는 ACM이 3초 안에 돌아왔다(11.32). 경합 상태에서는 시험하지 못했다. 안 되면 재부팅한다.
 - **ACM 셸에서 USB를 끊는 명령:** ACM 셸은 `serial-getty@ttyGS0.service` cgroup 안에 있다. ACM이 끊기면 systemd가 `setsid`로 띄운 자식까지 죽인다(11.32). 그런 명령은 ssh에서 하거나 `systemd-run`으로 띄운다.
 - **보드 `/tmp`:** 부팅 때 비워진다. 남길 파일은 `/var/tmp`에 둔다.
