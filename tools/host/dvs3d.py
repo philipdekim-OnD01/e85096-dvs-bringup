@@ -112,7 +112,9 @@ class Board:
         return r, body
 
     def probe(self):
-        self._get('/evframe')
+        got = self._get('/evframe')
+        if got and got[0].status != 200:            # e.g. 404: this board's dvsctl has no /evframe yet
+            self.errors[got[0].status] += 1
 
     def frame(self, t_end, win):
         got = self._get('/evframe?t_end=%d&win=%d' % (t_end, win))
@@ -159,14 +161,22 @@ def load_calib(path):
 
 
 class Pipeline:
-    """left, right surfaces (H x W uint8) -> 3D points of the left pixels that fired; stage times in ms"""
+    """left, right surfaces (H x W uint8) -> 3D points of the left pixels that fired; stage times in ms.
+    The disparity search covers zrange (m): d = f * baseline / z from the rig's Q (15 cm at f 600: 0.3-3 m is
+    30-300 px; a fixed 0-64 would see nothing nearer than 1.4 m). Uncalibrated: 0-64."""
 
-    def __init__(self, calib=None, num_disp=64, block=5):
+    def __init__(self, calib=None, block=5, zrange=(0.3, 3.0)):
         self.calib = calib
+        if calib:
+            fb = calib['Q'][2, 3] / abs(calib['Q'][3, 2])          # f (px) * baseline (m); Q[3,2] = -1 / Tx
+            self.min_disp = int(fb / zrange[1])
+            self.num_disp = -(-(int(np.ceil(fb / zrange[0])) - self.min_disp) // 16) * 16
+        else:
+            self.min_disp, self.num_disp = 0, 64
         if calib:
             self.maps = [cv2.initUndistortRectifyMap(calib['K%d' % i], calib['D%d' % i], calib['R%d' % i],
                                                      calib['P%d' % i], (W, H), cv2.CV_16SC2) for i in (1, 2)]
-        self.sgbm = cv2.StereoSGBM_create(minDisparity=0, numDisparities=num_disp, blockSize=block,
+        self.sgbm = cv2.StereoSGBM_create(minDisparity=self.min_disp, numDisparities=self.num_disp, blockSize=block,
                                           P1=8 * block * block, P2=32 * block * block, disp12MaxDiff=1,
                                           uniquenessRatio=10, speckleWindowSize=50, speckleRange=2)
         self.last = None
@@ -181,7 +191,7 @@ class Pipeline:
         disp = self.sgbm.compute(left, right)           # int16, 1/16 px
         a, t['rectify'] = c(), (b - a) * 1e3
         t['sgbm'] = (a - b) * 1e3
-        m = (left > 0) & (disp > 0)
+        m = (left > 0) & (disp >= max(16 * self.min_disp, 1))     # invalid: (min_disp - 1) * 16
         b = c()
         t['mask'] = (b - a) * 1e3
         if self.calib:
@@ -276,8 +286,8 @@ def calib_cmd(a):
 class Live:
     """the 10 Hz loop: one Mac time T for both boards, the pipeline, the page's state, the recording"""
 
-    def __init__(self, left, right, calib, rec=None, png=False, win=20000):
-        self.boards, self.pipe, self.rec, self.png, self.win = (left, right), Pipeline(calib), rec, png, win
+    def __init__(self, left, right, calib, rec=None, png=False, win=20000, zrange=(0.3, 3.0)):
+        self.boards, self.pipe, self.rec, self.png, self.win = (left, right), Pipeline(calib, zrange=zrange), rec, png, win
         self.lock, self.n, self.dropped = threading.Lock(), 0, 0
         self.state = {'points': pack_points(np.zeros((0, 3)), []), 'views': b'', 'stats': {}}
         self.timing = collections.deque(maxlen=50)
@@ -307,21 +317,21 @@ class Live:
             self.state = {'points': pack_points(xyz, val), 'views': views, 'stats': stats}
 
 
-def bench(rec, threads, calib):
+def bench(rec, threads, calib, zrange=(0.3, 3.0)):
     """the recorded pairs through the pipeline: median and p90 ms per stage, the points"""
     cv2.setNumThreads(threads)
     files = sorted(glob.glob(os.path.join(rec, '*.npz')))
     if not files:
         sys.exit('bench: no pairs in %s' % rec)
-    pipe, rows, pts = Pipeline(calib), [], []
+    pipe, rows, pts = Pipeline(calib, zrange=zrange), [], []
     for f in files:
         z = np.load(f)
         xyz, _, t = pipe.run(z['left'], z['right'])
         t['total'] = sum(t.values())
         rows.append(t)
         pts.append(len(xyz))
-    print('%d pairs, %s threads, calib %s, OpenCV %s, %s' % (len(rows), threads, bool(calib), cv2.__version__,
-                                                          os.uname().machine))
+    print('%d pairs, %s threads, calib %s, disparity %d+%d, OpenCV %s, %s' % (
+        len(rows), threads, bool(calib), pipe.min_disp, pipe.num_disp, cv2.__version__, os.uname().machine))
     for k in rows[0]:
         v = np.array([r[k] for r in rows])
         print('  %-9s median %7.2f ms  p90 %7.2f ms' % (k, np.median(v), np.percentile(v, 90)))
@@ -340,6 +350,9 @@ def main():
     lv.add_argument('--png', action='store_true')
     lv.add_argument('--win', type=int, default=20000)
     lv.add_argument('--port', type=int, default=8090)
+    zr = dict(type=lambda v: tuple(float(x) for x in v.split(',')), default=(0.3, 3.0),
+              help='nearest,farthest depth to search (m), sets the disparity range')
+    lv.add_argument('--zrange', **zr)
     lv.add_argument('--seconds', type=float, default=0, help='stop after this long (0: run until killed)')
     cb = sub.add_parser('calib')
     cb.add_argument('--left', default='192.168.0.236')
@@ -354,13 +367,14 @@ def main():
     bn.add_argument('rec')
     bn.add_argument('--threads', type=int, default=1)
     bn.add_argument('--calib', default=CALIB)
+    bn.add_argument('--zrange', **zr)
     a = ap.parse_args()
     if a.cmd == 'calib':
         return calib_cmd(a)
     calib = load_calib(a.calib)
     if a.cmd == 'bench':
-        return bench(a.rec, a.threads, calib)
-    live = Live(Board(a.left), Board(a.right), calib, a.rec, a.png, a.win)
+        return bench(a.rec, a.threads, calib, a.zrange)
+    live = Live(Board(a.left), Board(a.right), calib, a.rec, a.png, a.win, a.zrange)
     if a.port:
         serve(live, a.port)
     end = time.monotonic() + a.seconds

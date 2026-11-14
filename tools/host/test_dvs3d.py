@@ -68,10 +68,25 @@ class TestPipeline(unittest.TestCase):
         left, right = np.zeros((360, 480), np.uint8), np.zeros((360, 480), np.uint8)
         left[150:210, 200:260] = pat
         right[150:210, 180:240] = pat                 # 20 px to the left: z = F * B / 20 = 4.5 m
-        xyz, val, t = Pipeline(synth_calib()).run(left, right)
+        xyz, val, t = Pipeline(synth_calib(), zrange=(1.0, 10.0)).run(left, right)
         self.assertGreater(len(xyz), 500)
         self.assertAlmostEqual(float(np.median(xyz[:, 2])), F * B / 20, delta=0.45)
         self.assertEqual(len(val), len(xyz))
+
+    def test_disparity_range_from_the_rig(self):    # 15 cm at f 600: 0.3-3 m is 30-300 px, not 0-64
+        p = Pipeline(synth_calib())
+        self.assertEqual((p.min_disp, p.num_disp), (30, 272))
+        self.assertEqual((Pipeline(None).min_disp, Pipeline(None).num_disp), (0, 64))
+
+    def test_depth_of_a_near_pattern(self):          # 200 px: 0.45 m, the fan's range
+        rng = np.random.default_rng(0)
+        pat = rng.integers(1, 256, (60, 60), dtype=np.uint8)
+        left, right = np.zeros((360, 480), np.uint8), np.zeros((360, 480), np.uint8)
+        left[150:210, 300:360] = pat
+        right[150:210, 100:160] = pat
+        xyz = Pipeline(synth_calib()).run(left, right)[0]
+        self.assertGreater(len(xyz), 500)
+        self.assertAlmostEqual(float(np.median(xyz[:, 2])), F * B / 200, delta=0.045)
 
     def test_no_calibration_no_points(self):         # without calib.npz: views and times only
         left = np.full((360, 480), 9, np.uint8)
@@ -121,6 +136,9 @@ class TestBoard(unittest.TestCase):
         self.assertIsNone(b.frame(5, 20000))
         self.assertEqual((b.errors[425], b.errors[410]), (1, 1))
         self.assertIsNotNone(b.clock.offset())        # the refused replies still carry the clock
+        Reply.codes = {}                              # a board without /evframe (not installed yet): 404, counted
+        b.probe()
+        self.assertEqual(b.errors[404], 1)
         srv.shutdown()
 
     def test_no_board(self):
