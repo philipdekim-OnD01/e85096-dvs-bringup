@@ -6,7 +6,8 @@ import tempfile
 import time
 import unittest
 
-from dvsctl import Recorder, rec_check
+import dvsctl
+from dvsctl import HIST_COLS, History, Recorder, banner_rows, rec_check, reg_args
 
 
 class FakeLib:
@@ -78,6 +79,44 @@ class TestRecorder(unittest.TestCase):
         wait_state(r, 'idle')
         time.sleep(0.05)
         self.assertEqual((self.fake.calls, glob.glob(os.path.join(self.dir, '*'))), ([], []))
+
+
+class TestPage(unittest.TestCase):
+    def test_reg_args(self):
+        self.assertEqual(reg_args('a=30A5&n=3'), (0x30A5, 3))
+        self.assertEqual(reg_args('a=3000'), (0x3000, 1))
+        self.assertEqual(reg_args('a=FFC0&n=64'), (0xFFC0, 64))
+        for q in ('a=30A5&n=0', 'a=30A5&n=65', 'a=FFFF&n=2', 'a=-1', 'a=zz', 'a=1&n=x'):
+            self.assertRaises(ValueError, reg_args, q)
+        self.assertRaises(KeyError, reg_args, 'n=3')
+
+    def test_banner_rows(self):
+        font = {'h': 2, 'glyphs': {'a': (2, bytes([255, 0, 0, 255])), '?': (1, bytes([255, 255]))}}
+        rows = banner_rows(font, [('ab', 255), ('a', 128)], 3)
+        self.assertEqual(len(rows), 4)                         # two lines of h rows
+        self.assertEqual(rows[0], bytearray([255, 0, 255]))   # 'b' unknown -> '?', clipped at w 3
+        self.assertEqual(rows[1], bytearray([0, 255, 255]))
+        self.assertEqual(rows[2], bytearray([128, 0, 0]))      # level 128 scales the alpha
+
+    def test_buf_note(self):
+        dvsctl.BUFS.update(free=None, wait=None)
+        for free, wait in ((6, 0), (4, 2), (7, 1)):
+            dvsctl.buf_note(8, free, wait, 1 << 20)
+        self.assertEqual((dvsctl.BUFS['free'], dvsctl.BUFS['wait'], dvsctl.BUFS['n']), (4, 2, 8))
+
+    def test_history(self):
+        h = History(n=3)
+        for t in (1, 2, 3, 4):
+            h.add(t, {'fps': 30, 'link': {'short_bufs': t}}, 7)
+        rows = h.since(2)
+        self.assertEqual([r[0] for r in rows], [3, 4])          # oldest dropped, only after t
+        r = dict(zip(HIST_COLS, rows[-1]))
+        self.assertEqual((r['fps'], r['crc'], r['short_bufs'], r['scan_us'], r['mipi_fe']), (30, 7, 4, None, None))
+        h.add(6, {'fps': 30}, 0, {'mipi_fe': 9, 'vc0_free': 6})
+        r = dict(zip(HIST_COLS, h.since(5)[0]))
+        self.assertEqual((r['mipi_fe'], r['vc0_free'], r['vc0_wait']), (9, 6, None))
+        h.add(5, {'fps': 30}, None)                             # no link counters yet
+        self.assertIsNone(dict(zip(HIST_COLS, h.since(4)[0]))['ts_bad'])
 
 
 if __name__ == '__main__':

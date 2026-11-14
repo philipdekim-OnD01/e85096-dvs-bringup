@@ -6,8 +6,13 @@ threads, all on CPU7 at the top clock (pin(), 11.30):
   GET  /params     settings with default and range, JSON (dvs_params())
   POST /params     {"name": int, ...}: apply (dvs_set) and save to SAVED for the next start
   GET  /stats      the renderer's last 2 s of stats + the CSIS CRC error count, JSON; the link counters since
-                   the start (link) and the CIS D-PHY PLL readback (pll; 11.46)
+                   the start (link) and the CIS D-PHY PLL readback (pll; 11.46); the page's addresses (addrs, 11.50)
   GET  /frame.png  the frame on HDMI now, 960x720 (before zoom)
+  GET  /history    ?since=T: the samples after T (epoch s) of the last hour, one per 2 s, for the page's graphs:
+                   {"keys": HIST_COLS, "rows": [[t, ...], ...], "frame_bytes": a VC0 frame} (11.50); with the
+                   MIPI frame counts of csis-irqstat.ko and the VC0 buffer states of the capture loop (11.51)
+  GET  /reg        ?a=30A5&n=3: read n (1-64) sensor registers from a (hex), {"a", "n", "bus", "v": [...]};
+                   read only, one I2C_RDWR transfer (register address, then n bytes, auto-increment; 11.50)
   GET  /sensor     sensor settings: saved and in the CIS module now, with ranges (11.29)
   POST /sensor     {"margin": int, "flush_us": int}: save to SENSOR and restart (dvslive.service brings the
                    stream back in ~5 s with them; dvslive.sh writes them to the CIS module before stream on)
@@ -16,19 +21,28 @@ threads, all on CPU7 at the top clock (pin(), 11.30):
   POST /rec        {"label": one of dvsact.CLASSES, "s": 1-30}: after a 3 s countdown, the packets of s seconds to
                    REC_DIR/<UTC>-<label>.gz (dvs_record) and a .json beside it, for the action classifier (11.39)
 No login: it only changes how the view is drawn and the sensor's scan timing, on the board's own network.
+/reg only reads: no sensor register is written from the page.
+HDMI: the page's addresses (Wi-Fi, USB) in Korean at the bottom left of the screen, every 5 s (Banner, 11.50).
 """
 import atexit
+import base64
+import collections
 import ctypes
 import datetime
+import fcntl
+import glob
 import http.server
 import json
+import mmap
 import os
 import shutil
 import signal
+import socket
 import struct
 import sys
 import threading
 import time
+import urllib.parse
 
 SAVED = '/var/lib/dvsview/display.json'
 SENSOR = '/var/lib/dvsview/sensor.json'
@@ -41,6 +55,25 @@ CRC = '/sys/module/fimc_is/parameters/e850_csi_crc_count'
 PLL = CIS + 'pll_live'                      # the last 0x30A5-0x30A7 readback (11.46)
 # name: (min, max, default) as in dvslive.sh: margin 17 = a 985 us scan (0 = the setfile's 2, 495 us), flush 50 us
 SENSOR_RANGE = {'margin': (0, 140, 17), 'flush_us': (1, 1023, 50)}
+# /history: one row per renderer stats period (2 s) for an hour; counters are totals, the page takes the rates
+HIST_S, HIST_N = 2.0, 1800
+HIST_KEYS = ('fps', 'draw_ms', 'events', 'buffers', 'ingest_ms', 'kb', 'behind_ms', 'coverage', 'dips', 'scan_us')
+LINK_KEYS = ('bufs', 'short_bufs', 'ts_missed', 'fe_missed', 'ts_bad', 'unknown')    # since the stream start (11.46)
+# MIPI level (11.51): csis-irqstat.ko's totals of the CSIS link IRQ for VC0, frame start / end and the decoded
+# link error bits (INT_SRC0: CRC, ECC, overflow, lost FS/FE ...; bit 16 VRESOL is not among them, see the module)
+IRQSTAT = '/sys/module/csis_irqstat/parameters/'
+MIPI_KEYS = ('mipi_fs', 'mipi_fe', 'mipi_err')
+# DRAM (11.51): the VC0 buffers, n in all; at each DQBUF the capture loop counts the other buffers QUEUED (the
+# driver's, free for the DMA) and DONE (filled, waiting to be dequeued): the fewest free and the most waiting
+# since the last sample
+BUF_KEYS = ('vc0_n', 'vc0_free', 'vc0_wait')
+HIST_COLS = ('t',) + HIST_KEYS + ('crc',) + LINK_KEYS + MIPI_KEYS + BUF_KEYS
+BUFS = {'n': None, 'free': None, 'wait': None, 'frame_bytes': None}
+I2C_ADDR, I2C_DRIVER = 0x10, 'S5KRC1S'      # 7-0010 on the current DT (i2c-7, HSI2C2)
+# the address banner on HDMI (11.50): glyphs from tools/host/hangul-atlas.py (not in git: a Mac system font's)
+FONT = os.path.join(HERE, 'dvsfont.json')
+BANNER_IFS = (('wlan0', '무선 Wi-Fi'), ('usb0', '유선 USB'))
+BANNER_W, BANNER_X = 232, 4                 # inside the 240 px left of the 1.5x view: no zoom covers it
 # the page's own core (11.30): no device IRQ (they all land on CPU0), systemd keeps the rest on 0-6 (e850-cpu7.conf)
 WEB_CPU = 7
 
@@ -59,6 +92,160 @@ def pin(cpus, name='dvs-web'):
         os.sched_setaffinity(0, cpus)
     except OSError as e:                    # CPU offline (hotplug): stay on the shared cores
         print('dvsctl: CPU%s: %s' % (sorted(cpus), e), file=sys.stderr)
+
+
+def read_int(path):
+    try:
+        return int(open(path).read())
+    except (OSError, ValueError):
+        return None
+
+
+def buf_note(n, free, wait, frame_bytes):
+    """ov5647-cap.py at each VC0 DQBUF: free and wait among the other n - 1 buffers (see BUF_KEYS)"""
+    b = BUFS
+    b['n'], b['frame_bytes'] = n, frame_bytes
+    b['free'] = free if b['free'] is None else min(b['free'], free)
+    b['wait'] = wait if b['wait'] is None else max(b['wait'], wait)
+
+
+def mipi():
+    """{'mipi_fs', 'mipi_fe', 'mipi_err'} totals, None without csis-irqstat.ko"""
+    try:
+        bits = open(IRQSTAT + 'err_bits').read().split(',')
+        return {'mipi_fs': read_int(IRQSTAT + 'fs'), 'mipi_fe': read_int(IRQSTAT + 'fe'),
+                'mipi_err': sum(int(b) for b in bits)}
+    except (OSError, ValueError):
+        return {}
+
+
+class History:
+    """The last n rows (HIST_COLS), None where the stats lack one."""
+
+    def __init__(self, n=HIST_N):
+        self.rows, self.lock = collections.deque(maxlen=n), threading.Lock()
+
+    def add(self, t, st, crc, extra=None):
+        link, extra = st.get('link') or {}, extra or {}
+        row = ([round(t, 1)] + [st.get(k) for k in HIST_KEYS] + [crc] + [link.get(k) for k in LINK_KEYS] +
+               [extra.get(k) for k in MIPI_KEYS + BUF_KEYS])
+        with self.lock:
+            self.rows.append(row)
+
+    def since(self, t):
+        with self.lock:
+            return [r for r in self.rows if r[0] > t]
+
+
+def reg_args(query):
+    """?a=HEX&n=N -> (a, n); ValueError unless 0 <= a, 1 <= n <= 64 and a + n <= 0x10000"""
+    q = urllib.parse.parse_qs(query)
+    a, n = int(q['a'][0], 16), int(q.get('n', ['1'])[0])
+    if not (0 <= a and 1 <= n <= 64 and a + n <= 0x10000):
+        raise ValueError('range')
+    return a, n
+
+
+class I2cMsg(ctypes.Structure):
+    _fields_ = [('addr', ctypes.c_uint16), ('flags', ctypes.c_uint16), ('len', ctypes.c_uint16),
+                ('buf', ctypes.c_void_p)]
+
+
+class I2cData(ctypes.Structure):
+    _fields_ = [('msgs', ctypes.c_void_p), ('n', ctypes.c_uint32)]
+
+
+def reg_read(a, n):
+    """n sensor registers from a. I2C_RDWR passes the bound driver; the adapter lock keeps the CIS module's own
+    transfers apart. Burst reads auto-increment (0x30A5 x 3 = the three single reads, 11.50)."""
+    bus = next((int(os.path.basename(d).split('-')[0]) for d in glob.glob('/sys/bus/i2c/devices/*-%04x' % I2C_ADDR)
+                if os.path.basename(os.path.realpath(d + '/driver')) == I2C_DRIVER), None)
+    if bus is None:
+        raise OSError('no %s on I2C' % I2C_DRIVER)
+    w, r = ctypes.create_string_buffer(bytes([a >> 8, a & 0xff]), 2), ctypes.create_string_buffer(n)
+    msgs = (I2cMsg * 2)(I2cMsg(I2C_ADDR, 0, 2, ctypes.addressof(w)), I2cMsg(I2C_ADDR, 1, n, ctypes.addressof(r)))
+    fd = os.open('/dev/i2c-%d' % bus, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, 0x0707, I2cData(ctypes.addressof(msgs), 2))     # I2C_RDWR
+    finally:
+        os.close(fd)
+    return bus, list(r.raw)
+
+
+def ipv4(ifname):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        return socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x8915, struct.pack('256s', ifname.encode()))[20:24])
+    except OSError:                         # SIOCGIFADDR: down or no address
+        return None
+    finally:
+        s.close()
+
+
+def addrs(port):
+    """[(label, 'ip:port' or None)] for the page's interfaces"""
+    return [(name, '%s:%d' % (ip, port) if ip else None) for ifn, name in BANNER_IFS for ip in [ipv4(ifn)]]
+
+
+def banner_rows(font, lines, w):
+    """[(text, level)] -> rows of w gray bytes: each glyph's alpha x level / 255, clipped at w"""
+    h, rows = font['h'], []
+    for text, lvl in lines:
+        tab = bytes(a * lvl // 255 for a in range(256))
+        line, x = [bytearray(w) for _ in range(h)], 0
+        for ch in text:
+            gw, a = font['glyphs'].get(ch) or font['glyphs']['?']
+            n = min(gw, w - x)
+            if n <= 0:
+                break
+            for r in range(h):
+                line[r][x:x + n] = a[r * gw:r * gw + n].translate(tab)
+            x += gw
+        rows += line
+    return rows
+
+
+def fb_put(f, rows, x0, bottom):
+    """gray rows -> f = open /dev/fb0 (32 bpp) at x0, bottom px above the visible page's last row. mmap as dvsview
+    does: read() and write() on this fb return 0 bytes (11.50). The caller keeps f open: every close prints
+    decon_release to the kernel log (and UART)."""
+    xres, yres, _, yv, _, yoff, bpp = struct.unpack('7I', fcntl.ioctl(f, 0x4600, bytes(160))[:28])  # FBIOGET_VSCREENINFO
+    stride = int(open('/sys/class/graphics/fb0/stride').read())
+    if bpp != 32 or not rows or x0 + len(rows[0]) > xres:
+        return
+    y0 = yoff + yres - bottom - len(rows)
+    with mmap.mmap(f.fileno(), stride * yv) as m:
+        for i, g in enumerate(rows):
+            px = bytearray(len(g) * 4)
+            px[0::4] = px[1::4] = px[2::4] = g
+            px[3::4] = b'\xff' * len(g)
+            o = (y0 + i) * stride + x0 * 4
+            m[o:o + len(px)] = px
+
+
+def banner_loop(port):
+    pin({WEB_CPU}, 'dvs-banner')
+    try:
+        font = json.load(open(FONT))
+    except (OSError, ValueError):
+        print('dvsctl: no %s, no address banner on HDMI' % FONT, file=sys.stderr)
+        return
+    font['glyphs'] = {c: (w, base64.b64decode(a)) for c, (w, a) in font['glyphs'].items()}
+    try:
+        fb = open('/dev/fb0', 'r+b', buffering=0)
+    except OSError as e:
+        print('dvsctl: banner: %s' % e, file=sys.stderr)
+        return
+    while True:
+        lines = [('웹 접속 주소', 255)]
+        for name, url in addrs(port):
+            lines += [(name, 150), (url or '연결 안 됨', 255)]
+        try:
+            fb_put(fb, banner_rows(font, lines, BANNER_W), BANNER_X, 8)
+        except OSError as e:
+            print('dvsctl: banner: %s' % e, file=sys.stderr)
+            return
+        time.sleep(5)               # a zoom change clears the screen; a Wi-Fi address can change
 
 
 def save(path, obj):
@@ -166,6 +353,7 @@ def start(lib, port):
     lib.dvs_png.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
     lib.dvs_record.argtypes = [ctypes.c_char_p]
     rec = Recorder(lib)
+    hist, reg_lock = History(), threading.Lock()
     atexit.register(rec.close, False)          # SIGTERM is a KeyboardInterrupt in ov5647-cap.py, then sys.exit
     pngbuf = bytearray(W * H * 3 + H + 65536)   # level-1 deflate of the raw rows can come out a little larger
     lock = threading.Lock()                     # dvs_params() and dvs_png() are not reentrant
@@ -202,10 +390,10 @@ def start(lib, port):
                 self.send(json.dumps(params()).encode())
             elif path == '/stats':
                 st = json.loads(lib.dvs_stats())
-                try:
-                    st['crc'] = int(open(CRC).read())
-                except (OSError, ValueError):
-                    pass
+                crc = read_int(CRC)
+                if crc is not None:
+                    st['crc'] = crc
+                st['addrs'] = addrs(port)
                 try:
                     st['pll'] = open(PLL).read().strip()
                 except OSError:                 # a CIS module from before 11.46
@@ -218,6 +406,24 @@ def start(lib, port):
                 self.send(json.dumps(dvsact.STATUS).encode())
             elif path == '/rec':
                 self.send(json.dumps(rec.status()).encode())
+            elif path == '/history':
+                try:
+                    t = float(urllib.parse.parse_qs(self.path.partition('?')[2]).get('since', ['0'])[0])
+                except ValueError:
+                    return self.send(b'{"error": "since: epoch seconds"}', code=400)
+                self.send(json.dumps({'keys': HIST_COLS, 'rows': hist.since(t),
+                                      'frame_bytes': BUFS['frame_bytes']}).encode())
+            elif path == '/reg':
+                try:
+                    a, n = reg_args(self.path.partition('?')[2])
+                except (KeyError, ValueError):
+                    return self.send(b'{"error": "want ?a=HEX&n=1..64 inside 0000-FFFF"}', code=400)
+                try:
+                    with reg_lock:
+                        bus, v = reg_read(a, n)
+                except OSError as e:            # sensor powered off, no device
+                    return self.send(json.dumps({'error': str(e)}).encode(), code=502)
+                self.send(json.dumps({'a': a, 'n': n, 'bus': bus, 'v': v}).encode())
             elif path == '/frame.png':
                 with lock:
                     n = lib.dvs_png(ctypes.addressof(ctypes.c_char.from_buffer(pngbuf)), len(pngbuf))
@@ -265,7 +471,19 @@ def start(lib, port):
         pin({WEB_CPU})
         srv.serve_forever()
 
+    def sample():
+        pin({WEB_CPU}, 'dvs-hist')
+        while True:
+            st = json.loads(lib.dvs_stats())
+            if 'fps' in st:                     # "{}" before the first stats period
+                b = {'vc0_n': BUFS['n'], 'vc0_free': BUFS['free'], 'vc0_wait': BUFS['wait']}
+                BUFS['free'] = BUFS['wait'] = None      # a race with buf_note loses one DQBUF's count at most
+                hist.add(time.time(), st, read_int(CRC), dict(mipi(), **b))
+            time.sleep(HIST_S)
+
     srv = http.server.ThreadingHTTPServer(('', port), Handler)
     srv.daemon_threads = True
     threading.Thread(target=serve, daemon=True).start()
+    threading.Thread(target=sample, daemon=True).start()
+    threading.Thread(target=banner_loop, args=(port,), daemon=True).start()
     return srv

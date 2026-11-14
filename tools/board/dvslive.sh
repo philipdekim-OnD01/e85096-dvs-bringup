@@ -10,6 +10,8 @@ set -u
 for x in mif int cam; do f=$(ls -d /sys/class/devfreq/*_$x); cat $f/max_freq > $f/min_freq; done
 lsmod | grep -q '^fimc_is ' || modprobe fimc-is
 lsmod | grep -q '^is_cis_s5krc1s ' || modprobe is-cis-s5krc1s
+# MIPI frame and link error counts for the page's graphs (11.51); without it the page leaves them empty
+lsmod | grep -q '^csis_irqstat ' || modprobe csis-irqstat || true
 echo 0 > /sys/module/fimc_is/parameters/e850_csi_err_stop
 echo "${CRC_KEEP:-1}" > /sys/module/fimc_is/parameters/e850_csi_crc_keep
 eval "$(python3 -c 'import json
