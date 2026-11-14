@@ -184,6 +184,13 @@ class Node:
         fcntl.ioctl(self.fd, VIDIOC_DQBUF, b)
         return struct.unpack_from('I', b, 0)[0], struct.unpack_from('I', b, 12)[0], struct.unpack_from('I', pl, 0)[0]
 
+    def flags(self, i):
+        """V4L2 flags of buffer i (QUERYBUF): 0x2 QUEUED (the driver's), 0x4 DONE (filled, not dequeued)"""
+        pl = bytearray(64 * self.nplanes)
+        b = self.buffer(i, pl, self.nplanes)
+        fcntl.ioctl(self.fd, VIDIOC_QUERYBUF, b)
+        return struct.unpack_from('I', b, 12)[0]
+
     def stream(self, on):
         fcntl.ioctl(self.fd, VIDIOC_STREAMON if on else VIDIOC_STREAMOFF, struct.pack('I', self.type))
 
@@ -297,11 +304,13 @@ class DvsLive:
         r = self.lib.dvs_start(b'/dev/fb0', a.fps)
         if r < 0:
             raise OSError(-r, 'dvs_start: ' + os.strerror(-r))
+        self.ctl, self.q_us, self.q_n = None, 0.0, 0
         if a.ctl:
             sys.path.append('/usr/local/share/dvsview')
             import dvsctl
             try:
                 dvsctl.start(self.lib, a.ctl)
+                self.ctl = dvsctl
                 log('display settings: http://<board>:%d/' % a.ctl)
             except OSError as e:                # port taken: keep the live view without the page
                 log('display settings off: port %d: %s' % (a.ctl, e))
@@ -332,6 +341,19 @@ class DvsLive:
                 pass
             os.kill(os.getpid(), signal.SIGTERM)
         self.short = n
+
+    def note_bufs(self, node, idx):
+        """For the page's DRAM graph (11.51): the other VC0 buffers free for the DMA and waiting to be dequeued"""
+        if not self.ctl:
+            return
+        t = time.monotonic()
+        f = [node.flags(i) for i in range(len(node.bufs)) if i != idx]
+        self.ctl.buf_note(len(node.bufs), sum(x & 2 != 0 for x in f), sum(x & 4 != 0 for x in f), a.W * (a.H + 1))
+        if self.q_n < 1000:                     # its cost, once in the log
+            self.q_us += (time.monotonic() - t) * 1e6
+            self.q_n += 1
+            if self.q_n == 1000:
+                log('QUERYBUF x %d: %.0f us a DQBUF' % (len(node.bufs) - 1, self.q_us / 1000))
 
     def show(self, buf):
         p = ctypes.c_char.from_buffer(buf)      # the dma-buf mmap itself: C decodes and zeroes it in place
@@ -372,6 +394,8 @@ try:
                 live.show(vc0.bufs[idx][0][1])
                 saved += 1
                 last = time.time()
+                if a.raw8:
+                    live.note_bufs(vc0, idx)
                 vc0.qbuf(idx)
                 if a.raw8:
                     live.check()

@@ -3128,6 +3128,7 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
   - 직전 부팅의 journal은 05:59:28 KST에서 끝난다. 그 뒤 Mac 감시가 5분마다 ssh로 접속했는데 그 기록이 없다. 전원이 끊기면서 디스크에 쓰이지 않은 것일 수 있다. 다만 그 접속이 실제로 성공했는지 확인하지 못해서 판정하지 않는다.
   - Mac UART 기록기를 다시 켰다(`uartlog.py`, 06:13:30 KST부터 `~/e850-logs/uart.log`). LK부터 커널 32초까지 기록됐다. 그 뒤는 dvslive가 콘솔 printk를 꺼서(`printk` 1, `ignore_loglevel` N) UART가 조용하다. dmesg와 journal에는 그대로 남는다.
   - HDMI: 부팅 때도 그 뒤에도 `LT8912B … HDMI cable: not connected`(HPD low)였다. 케이블이나 모니터 상태는 사용자가 확인하기로 했다. DVS 데이터와 웹 화면(8080)은 정상이었다(CRC 0).
+  - [정정, 2026-11-14] HPD 값은 화면이 나올 때도 `not connected`였다(11.15 무렵, 1377행). 그래서 화면이 안 나온 원인의 근거가 되지 못한다. 11-14 09:2x 보드 쪽: `e850-hdmi` active, `LT8912B programmed for 1920x1080@60`, fb0 unblank(`fb-hold.py`), 렌더러 57 fps. 원인은 모른다. 모니터에 화면이 나오는지는 사용자 확인이 필요하다.
 - [가설] 저절로 나던 0x04 Data Abort(약 3.8시간에 1번)는 2019년 펌웨어와 A13 드라이버가 맞지 않거나 펌웨어 자체 버그 때문이다. 새 펌웨어가 그것을 없앤다고 본다. 측정하지 않았다.
 - 판정: 절전은 기본값(on)으로 두고 24시간(2026-11-14 00:47 KST까지) 강제 패닉 없이 둔다. 교체(00:47)부터 재부팅(01:31)까지 44분 동안은 패닉이 0번이었다(23 그대로). 재부팅 뒤에는 0부터 센다. 이 동안 `mx_recovery_count`가 늘지 않으면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `tools/host/wlbt-panic.py`로 R4 기록을 푼다. 이때 기호와 문자열은 새 펌웨어 것(`~/e850-logs/wifi/fw-a13/mx140/debug/common/`)을 쓴다. 확인 방법:
   `ssh philip@192.168.0.236 'cat /proc/driver/mxman_ctrl0/mx_recovery_count'`, root `journalctl -k --since "2026-11-12 15:48" | grep -E "WLBT FW PANIC|r4_panic_record\[2\]"`.
@@ -3225,3 +3226,174 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 **보드에 바꾼 것.**
 - `/lib/modules/.../is-cis-s5krc1s.ko`: 11.49판(md5 f96703b7, setfile 00/8B/B0). 이전 판은 `/root/is-cis-s5krc1s.ko.prev-11.49`다.
 - `/var/tmp/plltest.py`: 6787f7a4. 이전 판은 `.prev-11.49`다. 결과 디렉터리 `/var/tmp/plltest/12-setfile-8bb0-default`가 늘었다.
+
+### 11.50 웹 페이지: 크롭, 레지스터 읽기, 통계 그래프, 접속 주소 (2026-11-14)
+
+사용자 요청: 크롭 기능, 레지스터 읽기, 화면 아래 수치의 변화를 그래프로, 그 밖에 필요한 것. 이어서 DVS live 화면 아래에 접속 주소(쓰고 있는 IP와 USB IP)를 한글로 표시.
+
+**바꾼 것(`tools/linux510/dvsctl.py`, `dvsctl.html`).**
+- **크롭(웹 미리보기만):** 미리보기를 끌어 영역을 고르면 그 부분을 확대해 보여 준다(픽셀은 뭉개지 않음). "전체 보기"로 되돌리고, "이미지 저장"으로 지금 보이는 그림을 PNG로 받는다. 그 영역의 켜진 픽셀 수와 비율도 보여 주며, 색이 ON 초록/OFF 빨강이면 ON과 OFF를 나눠 센다. HDMI와 `/frame.png`는 그대로 전체 화면이다. 센서에도 크롭 레지스터(0x3300~0x330C, 지금 `CROP_BYPASS`=1)가 있지만 쓰지 않았다.
+- **센서 레지스터 읽기:** `GET /reg?a=30A5&n=3`. 레지스터를 1~64개, 읽기만 한다(쓰기는 없다). `I2C_RDWR` 한 번에 주소를 쓰고 n바이트를 읽는다. 센서 I2C 장치는 드라이버가 `S5KRC1S`인 `*-0010`에서 찾는다(지금 i2c-7).
+  - 페이지에는 빠른 단추 7개가 있다: D-PHY PLL, PLL, MIPI, scan margin, SEL_MODE, 센서 크롭, 타임스탬프.
+  - 결과는 주소, 이름(setA.h 주석), 16진, 10진, 2진 표로 보여 준다. 0x30A5~A7은 P/M/S와 공식 속도(계산값)로, 0x321D~E는 예상 scan 주기로, 0x3915는 레인 수로 풀어 준다.
+- **통계 그래프:** 캡처 프로세스가 2초마다 `/stats`와 CRC·링크 계수기를 1시간(1800줄) 동안 기억한다(`GET /history?since=T`). 페이지는 그래프 16개를 그린다.
+  - 그리는 값: fps, 그리기, 프레임당 이벤트, 버퍼/s, 복사, 버퍼 크기, 지연, 데이터 있는 시간, 어두운 프레임, scan 주기. 그리고 초당 CRC, 짧은 버퍼, scan 누락, frame_end 누락, 타임스탬프 오류, 모르는 워드.
+  - 기간은 2분, 10분, 30분, 1시간 중에서 고르고, CSV로 받을 수 있다. 그래프에 마우스를 올리면 모든 그래프가 같은 시각의 값을 보여 준다. 오류율이 0보다 크면 ⚠와 빨간 숫자로 표시한다. 선 색은 dataviz 검사를 통과했다(#3987e5, 어두운 면 대비 3:1 이상).
+  - dvslive가 다시 시작하면 보드의 기록은 처음부터 다시 쌓인다. 페이지를 열어 둔 동안 받은 기록은 페이지에 남는다.
+- **통계 줄:** PLL readback(`00 8b b0`, 공식 속도)과 스트림 시작 뒤의 링크 계수기를 덧붙였다.
+- **접속 주소:**
+  - HDMI 화면 왼쪽 아래에 "웹 접속 주소 / 무선 Wi-Fi / IP:8080 / 유선 USB / IP:8080"을 한글로 그리고, 5초마다 다시 그린다. 확대를 바꾸면 화면이 지워지고 Wi-Fi 주소가 바뀔 수 있기 때문이다.
+  - 자리는 x 4~236, 맨 아래에서 8 px 위다. 1.5배 화면의 왼쪽 여백(240 px) 안이고, 1배 화면에서는 영상 아래다. 어느 쪽이든 영상을 가리지 않는다.
+  - 웹 페이지 미리보기 아래에도 같은 주소를 링크로 보여 준다(`/stats`의 `addrs`). IP는 `SIOCGIFADDR`(wlan0, usb0)로 읽고, 주소가 없으면 "연결 안 됨"이라고 쓴다.
+- **글자:** 보드에는 한글 글꼴도 PIL도 없다. 그래서 Mac의 `tools/host/hangul-atlas.py`로 배너에 쓰는 107자(출력 가능한 ASCII + 웹접속주소무선유연결안됨, Apple SD Gothic Neo 22 px, 높이 27 px)를 비트맵으로 만들어 보드 `/usr/local/share/dvsview/dvsfont.json`에 넣었다. 시스템 글꼴의 글자 모양이라 저장소에는 넣지 않는다(`out/`). 이 파일이 없으면 배너만 빠진다.
+- 이 fb는 `read()`/`write()`가 0바이트를 돌려준다. 그래서 dvsview처럼 mmap으로 쓴다.
+
+**확인.**
+- [확인] `test_dvsctl.py` 7개 통과(레지스터 인자, 기록, 배너 글자 자르기·밝기 추가). 페이지 스크립트는 `node --check`를 통과했다.
+- [확인] 보드: `/reg?a=30A5&n=3` → `[0, 139, 176]`(00 8b b0). `a=3300&n=13`은 setfile 값과 같았다(01 00 FF 59 FF 00 00 03 BF 00 01 00 00). 범위 밖(`a=FFFF&n=2`)은 400이었다. 스트림이 도는 중에 읽어도 CRC와 짧은 버퍼는 0 그대로였다(3바이트를 하나씩 읽는 데 1.1 ms, 한 번에 읽어도 같은 값).
+- [확인] `/history`는 2초마다 한 줄이 쌓였다. headless Chrome으로 페이지를 찍어 보니 그래프 16개, 크롭 줄, 레지스터 단추, 주소 줄이 그려졌다.
+- [확인] HDMI: fb0를 mmap으로 덤프해 보니 왼쪽 아래에 한글 배너가 있었다(1.5배, 영상 밖). 모니터 화면으로는 확인하지 못했다(HDMI 출력 문제, 11.47).
+- [미확인] 실제 마우스로 크롭 영역을 끌어 보는 것과 레지스터 표가 그려지는 것은 브라우저에서 해 보지 못했다. Chrome 확장이 연결돼 있지 않았다.
+
+**보드에 바꾼 것.**
+- `/usr/local/share/dvsview/dvsctl.py`(md5 18d51af9), `dvsctl.html`(14a7f6f7), `dvsfont.json`(0e7f055a, 추가). 11.51에서 다시 바꿨다. 이전 판은 `/root/dvsctl.py.prev-11.50`과 `/usr/local/share/dvsview/dvsctl.html.prev-11.50`(11.46판)이다.
+- dvslive를 세 번 다시 시작했다(각 약 5초 끊김).
+
+### 11.51 그래프: MIPI 수준, DRAM 버퍼 상태, 변화 없는 값은 개수 타일로 (2026-11-14)
+
+사용자 요청: MIPI 수준의 데이터량, fps, DRAM 버퍼 상태를 그래프에 넣는다. 3·4번째 줄 그래프(어두운 프레임, scan 주기, 오류 6가지)는 변화가 없다.
+
+**MIPI 수준: `modules/csis-irqstat`.**
+- 그동안은 rmmod할 때 dmesg로 합계만 냈다. 이제 합계를 읽기 전용 파라미터로도 내보낸다(`/sys/module/csis_irqstat/parameters/{calls,fs,fe,line,err,err_bits}`).
+- `err_bits`는 `err_id[0..3]`의 비트별 개수다.
+- dvslive.sh가 `modprobe csis-irqstat`를 한다. 보드 `/lib/modules/.../csis-irqstat.ko`, md5 2913a827.
+- [확인] 10초 동안 FS 386, FE 386, line 386, 오류 플래그 386, 비트로 풀린 오류 0이었다. `/proc/interrupts`의 CSI IRQ는 약 116/s로, 프레임마다 3번이다.
+- [확인] 오류 플래그는 프레임마다 선다. `err_id`에는 비트가 없다. vendor `csi_hw_g_value_of_err()`는 `INT_SRC0`만 `err_id`로 풀고 `INT_SRC1`은 플래그만 세운다. 그래서 프레임마다 나는 것은 `INT_SRC1` 쪽(VC별 VRESOL 상태, 11.22)으로 본다. 그래프의 "CSIS 링크 오류"는 `err_bits`의 합(CRC, ECC, overflow, FS/FE 손실 등)만 센다.
+- 11.22 때 bit 16(VRESOL)이 `err_id[0]`에 세어진 것과는 다르다. 그 뒤 VRESOL 상태를 되써 지우는 패치가 들어간 것과 관계있을 수 있다(확인 안 함).
+
+**DRAM 버퍼 상태: `ov5647-cap.py`.**
+- DQBUF 때마다 나머지 VC0 버퍼 7개를 `VIDIOC_QUERYBUF`로 조회한다(vendor는 그대로 `vb2_querybuf`).
+- QUEUED는 드라이버가 가진 버퍼로, DMA가 쓸 수 있는 빈 버퍼다. DONE은 채워졌지만 아직 꺼내지 않은 버퍼다. 2초마다 빈 버퍼의 최소와 대기 버퍼의 최대를 `dvsctl.buf_note()`로 넘긴다.
+- [확인] 비용은 DQBUF마다 345 µs다(1000번 평균, 로그 `QUERYBUF x 7`). 초당 약 13 ms이고 CPU1의 1.3%다.
+- [확인] 스트림 시작 직후 한 표본만 빈 0, 대기 7이었다(모든 버퍼가 차 있었다). 그 뒤 약 4분 동안은 늘 빈 7, 대기 0이었다. 앱이 버퍼를 늦지 않게 가져간다.
+
+**그래프(`dvsctl.html`).**
+- 그래프 12개를 세 묶음으로 나눴다.
+  - MIPI(CSIS 수신): MIPI 프레임/s, MIPI 데이터량 MB/s, 이벤트 데이터 MB/s, 프레임 채움 %. 앞의 둘은 10초 평균이다. 2초 단위로는 프레임 수가 정수라 38.5와 39 사이를 오갔다.
+  - DRAM(VC0 버퍼): 도착 버퍼/s, 빈 버퍼(최소), 처리 대기 버퍼(최대), 버퍼 복사 ms.
+  - 화면: fps, 그리기, 프레임당 이벤트, 최신 이벤트보다 늦음.
+- MIPI 데이터량은 FE/s × 프레임 크기(8192 B × 128줄 = 1 MiB, 설정값)로 계산한다. 회선에서 잰 바이트가 아니다. 이벤트 데이터는 버퍼의 실제 패킷 바이트(kB/버퍼 × 버퍼/s)다.
+- 변화가 없던 값은 위쪽 개수 타일 11개로 옮겼다. 기간 동안 몇 개였는지를 보여 준다.
+  - 타일: 버퍼 안 된 MIPI 프레임, CSIS 링크 오류, CRC, 짧은 버퍼, scan 누락, frame_end 누락, 타임스탬프 오류, 모르는 워드, 어두운 프레임, 센서 scan, 데이터 있는 시간.
+  - 오류 개수가 0보다 크면 ⚠와 빨간 숫자로 표시한다.
+- `/history`에 `bufs`, `mipi_fs/fe/err`, `vc0_n/free/wait`, `frame_bytes`를 더했다. `test_dvsctl.py`는 8개가 통과했다.
+
+**관찰.**
+- [관찰] MIPI FE와 디코더에 들어간 버퍼의 차이가 약 30초에 1개씩 늘었다(약 110초 동안 8308 → 8312). 그동안 빈 버퍼는 늘 7이었고, scan 누락(타임스탬프 틈)도 늘지 않았다.
+- [가설] 데이터를 잃은 것이 아니라 줄이 없는 MIPI 프레임(FS/FE만 있는 프레임)이 버퍼가 되지 않은 것으로 본다. 그래서 이 타일은 경고로 표시하지 않는다. 확인하지 않았다.
+- [관찰] 프레임 채움은 약 30%, 이벤트 데이터는 약 12 MB/s다. MIPI로는 약 40 MB/s(약 320 Mbit/s)를 보낸다. 나머지는 줄마다 붙는 0 채움이다(11.28).
+
+**보드에 바꾼 것.**
+- `/usr/local/bin/ov5647-cap.py`(md5 5c0bb717): 이전 판 `/root/ov5647-cap.py.prev-11.51`.
+- `/usr/local/bin/dvslive.sh`(5e20af2c): 이전 판 `/root/dvslive.sh.prev-11.51`.
+- `/usr/local/share/dvsview/dvsctl.py`(149ffe21), `dvsctl.html`(0133cdc9).
+- `/lib/modules/.../csis-irqstat.ko`(2913a827): 새로 넣었고, depmod했고, 지금 적재돼 있다.
+- dvslive를 한 번 다시 시작했다.
+
+### 11.52 USB 네트워크(ECM)의 보드→Mac 방향 멈춤, 배너의 fb0 로그 (2026-11-14)
+
+**관찰.** 10:15 KST쯤(보드 시계로 01:15 UTC) Mac에서 `http://192.168.7.1:8080/`가 시간 초과됐다. Wi-Fi 주소(192.168.0.236:8080)는 그때도 정상이었다.
+- 보드 `usb0`는 UP이고 주소와 carrier도 있었다. Mac에 DHCP 임대(192.168.7.19)를 준 상태였고, 8080은 0.0.0.0에서 듣고 있었다.
+- Mac→보드 방향은 살아 있었다. 보드 `rx_packets`가 Mac의 송신 수와 같이 늘었다.
+- 보드→Mac 방향은 멈춰 있었다. 보드가 ping을 보내도 `tx_packets`가 93162에서 늘지 않았다. Mac `en12`의 수신 수는 93182였다. 즉 마지막 20개는 Mac에 도착했지만 보드 쪽에서는 전송 완료가 되지 않았다.
+- 같은 USB 장치의 ACM 콘솔(보드→Mac IN도 포함)은 정상이었다. dwc3 `link_state`는 `On`이었다.
+- `dmesg`에는 USB 관련 메시지가 남아 있지 않았다. 아래 `decon_release` 로그가 버퍼를 채우고 있었다. UART 로그(`uart.log`)는 11-13 07:35 이후 기록이 없어서 볼 수 없었다.
+
+**시도 1: `ip link set usb0 down; up`(ACM에서).** 실패했다.
+- `tx_packets`는 93182가 됐다. u_ether가 엔드포인트를 끄면서 걸려 있던 요청 20개를 정리했기 때문으로 보인다.
+- Mac은 링크가 끊긴 것을 보고 169.254 주소로 바꿨다. 이후 DHCP 요청은 보드에 도착했지만(rx 증가) 보드의 응답은 나가지 않았다(tx 그대로).
+
+**시도 2: `systemd-run`으로 UDC `soft_connect`를 `disconnect`, 3초 뒤 `connect`.** 성공했다.
+- Mac이 장치를 다시 인식했다. `en12`는 192.168.7.19, ACM `/dev/cu.usbmodeme850_961`가 돌아왔다.
+- `http://192.168.7.1:8080/`는 200, `/frame.png`는 25 ms였다.
+- 보드는 재부팅하지 않았다. 카메라와 dvslive도 그대로 돌았다.
+
+**다시 멈췄다.** 같은 날 14:53 KST에 rootfs 복제용 전송을 하려다 보니 USB가 또 멈춰 있었다(ping `Host is down`). 재연결(10:25 KST쯤) 뒤 몇 시간 안에 멈췄고, 정확한 시각은 모른다. 보드가 재연결 뒤 완료로 센 송신은 62212개(155449−93237), Mac `en12` 수신은 62267개였다. 이번에도 Mac이 보드보다 많이 받았다. 즉 보드가 마지막 몇십 개의 전송 완료를 받지 못한 채 멈췄다. 이번에는 재연결하지 않고 Wi-Fi ssh 터널로 전송했다(11.53).
+
+**원인은 모른다.** ECM bulk IN 엔드포인트의 완료가 보드에 오지 않는 것(dwc3 쪽)인지, Mac 드라이버가 IN을 더 읽지 않는 것인지 이번 자료로는 가를 수 없다. 언제 멈췄는지도 모른다.
+
+**다음에 또 멈추면.**
+1. ACM 셸이나 ssh에서 root로 `systemd-run --unit=usb-reconnect sh -c 'sleep 1; echo disconnect > /sys/class/udc/13600000.dwc3/soft_connect; sleep 3; echo connect > /sys/class/udc/13600000.dwc3/soft_connect'`를 실행한다. ACM도 몇 초 끊긴다.
+2. 그 전에 보드 `usb0`의 `tx_packets`와 Mac `netstat -I en12`의 수신 수를 적어 둔다.
+
+**보드에 바꾼 것: 배너의 fb0 로그.** 11.50의 HDMI 주소 배너가 5초마다 `/dev/fb0`를 열고 닫았다. 닫을 때마다 decon 드라이버가 `decon_release + : 0`을 커널 로그에 찍었다. loglevel=8이라 UART로도 나갔다.
+- `banner_loop`가 fb0를 한 번만 열고 계속 쓰도록 바꿨다. `fb_put(f, rows, x0, bottom)`가 열린 파일을 받는다.
+- `/usr/local/share/dvsview/dvsctl.py`(md5 40cc3f46). 이전 판은 `/root/dvsctl.py.prev-11.50`이다.
+- dvslive를 다시 시작했다. 20초 뒤 `dmesg` 마지막 40줄에 `decon_release`는 0개였다. 배너 영역(y 950~1071)의 81줄에 픽셀이 있었다. 두 주소 모두 200을 돌려줬다.
+
+### 11.53 두 번째 보드로 복제 (2026-11-14)
+
+따라 하는 절차는 [BOARD-CLONE.md](BOARD-CLONE.md)로 따로 정리했다. 이 절은 그날의 기록이다.
+
+**목표.** 지금 보드(이하 A, 192.168.0.236)와 같은 시스템을 두 번째 E850-96(이하 B, 출하 Android 10, fastboot 일련번호 `000009f72c9c23e0`)에 올린다. B에도 S5KRC1S 센서가 CN4에 따로 붙어 있다.
+
+**옮긴 것.**
+- boot 파티션: A의 boot 파티션 앞 64,933,888바이트의 md5가 `boot-dvs3/boot.img`와 같다(ad99e885). 이 파일을 그대로 구웠다. 다른 파티션(efs, persist, dtbo, bootloader 등)은 건드리지 않았다.
+- userdata: A의 루트 파일시스템을 tar로 받아 같은 크기(4 KiB × 786,432), 라벨, UUID의 ext4로 다시 만들었다.
+  - 받기: `tools/board/rootfs-send.py`(A, root, 127.0.0.1:9100)와 `tools/host/rootfs-recv.py`(Mac, Wi-Fi ssh 터널, 3.7 MB/s). USB 네트워크는 또 멈춰 있어서 쓰지 않았다(11.52).
+  - 결과: 2,589,050,880바이트, 양쪽 md5 `2c041854…` 일치. tar 경고는 `./sys`와 `system.journal` "file changed as we read it" 두 개다.
+  - 만들기: `tools/linux510/build-clone.sh`(Docker, loop 마운트에 풀기). tar는 ACL을 이름으로 기록하므로 A의 `/etc/passwd`, `/etc/group`을 먼저 컨테이너에 넣었다. 넣지 않았을 때는 user journal 파일의 ACL에서 `Cannot acl_from_text` 경고가 났다.
+  - 바꾼 것: machine-id는 새로 만들었고(`6f31c0bd…`, 공유기에서 따로 DHCP를 받게), `/var/lib/systemd/random-seed`는 지웠다.
+  - 그대로 둔 것: ssh 호스트 키, 사용자와 비밀번호, Wi-Fi 설정, 호스트 이름 `e850-96`, `/var/tmp`(녹화 1.1 GB 포함).
+- Wi-Fi MAC은 손댈 필요가 없다. 드라이버가 `00:00:0F` 뒤에 SoC `unique_id`를 붙인다(`drivers/net/wireless/scsc/mgt.c:540`). B는 `00:00:0f:09:f7:2c`다.
+
+**fastboot에 넣기.**
+- Mac의 Homebrew adb 37.0.1은 macOS 27에서 서버가 시작하다 죽는다(샌드박스 밖, `ADB_LIBUSB=0/1` 모두).
+- VOL_UP을 누른 채 전원을 넣어도 LK는 10번 모두 `Volume up key: 1`로 읽고 Android로 부팅했다(7.12의 A와 같다).
+- 된 방법: Android 10은 `ro.debuggable=1`이라 UART(ttySAC0)에 `console` 셸(uid shell)이 뜬다. UART로 `reboot bootloader`를 보내자 `Entering fastboot: reboot bootloader command`가 나왔다.
+- Linux로 바뀐 뒤에는 5.10의 `rebootarg bootloader`가 통하지 않았다(`retboot reason: 0xcafe`로 그냥 부팅). `to-fastboot`(워치독 데몬 kill -9)로는 34초 만에 `Abnormal RST_STAT`로 들어갔다.
+
+**굽기.**
+- `fastboot flash boot`는 됐다(1.4 s + 0.9 s).
+- `fastboot flash userdata`(2.5 GB sparse)는 `getvar:is-userspace`를 먼저 보냈다. LK가 거기서 응답을 멈췄다(7.2와 같은 종류). 전원을 다시 넣어야 했다.
+- 바꾼 방법: `resparse.py`에 `--split-mib`를 넣었다. 조각마다 파티션 전체를 덮는 sparse(앞뒤는 DONT_CARE)로 700 MB 이하 4개를 만들고, `fbmini flash userdata`로 차례로 구웠다.
+  - Mac에서 조각을 순서대로 덮어쓴 결과와 `simg2img`로 푼 원본의 sha256이 같았다(`06ebdf6b…`).
+  - LK는 DONT_CARE를 `CHUNK TYPE NONE`으로 찍고 건너뛰었다. 각 조각의 첫 RAW 위치는 계산과 같았다(10,858,512 / 12,382,224 / 13,914,064섹터, userdata 시작은 8,957,968).
+  - 첫 조각(18,465청크)은 5분 56초가 걸렸다. LK가 청크마다 UART에 한 줄을 찍기 때문으로 보인다.
+
+**결과(B).**
+- 부팅: `systemctl is-system-running` = running, 실패한 유닛 없음.
+- 네트워크: 같은 SSID에 붙었고 IP는 192.168.0.168이다. ssh는 `-o HostKeyAlias=192.168.0.236`으로 된다(같은 호스트 키).
+- 파일 비교: md5 목록 13,191개 중 13,188개가 이미지와 같았다. 다른 3개는 `root/.cache/…/onnxruntime.db`(-shm, -wal)로, 실행 중에 쓰이는 파일이다.
+- 서비스와 모듈: dvslive, nginx, ssh, e850-hdmi, e850-wifi, csis_irqstat, e850_cpuhp가 모두 떴다. `ping`의 `cap_net_raw`도 남아 있다.
+- 웹: `http://192.168.0.168:8080/`이 200을 돌려줬고, 주소 줄도 새 IP를 보였다.
+- I2C: `/reg`로 0x30A5~A7을 읽으면 A와 B 모두 `00 8B B0`(i2c-7)이다.
+
+**문제(B만): MIPI CRC가 모든 줄에 난다.**
+- 같은 PLL 00/8B/B0에서 A는 CRC 0이다. B는 약 5.5분 동안 CRC 1,624,669개였다(csis-irqstat err_bits[1], 줄 수와 같다). 이 밖에 err_bits[2] 3, [7] 10, [17] 7이 있었다.
+- "데이터 있는 시간"은 0~3%였다.
+- dvslive는 `stuck capture, 15 short buffers in 2 s: restarting the stream`으로 수십 초마다 다시 시작했다. 첫 부팅에서는 약 10번 재시작했다.
+- 그 상태에서 PLL 비교(`plltest.py` 4개 설정 × 2분)를 시작했다. 첫 설정의 스트림을 멈출 때 vendor 정지 경로가 `[G:SS1][WRN] subdev[114] stop waiting...`을 28 ms마다 찍었고, 보드가 멈췄다. 부팅 872초에 워치독이 리셋했고, B는 `Abnormal RST_STAT`로 fastboot에 들어갔다. PLL 비교 결과는 얻지 못했다.
+- 가설: B의 센서·케이블·보드 가운데 하나가 MIPI 고속 신호 여유가 달라서, A에서 맞은 PLL과 settle이 B에는 맞지 않는다. 어느 쪽인지는 아직 가르지 못했다. 센서를 맞바꾸거나 B의 CN4 케이블을 다시 꽂아 보면 가를 수 있다.
+
+**해결: B의 CN4 카메라 케이블을 다시 꽂았다(16:2x KST).**
+- 순서: B의 dvslive를 멈추고 sync한 뒤 `systemctl poweroff`로 껐다. 사용자가 케이블을 다시 꽂고 전원을 넣었다.
+- 부팅 1분 뒤: CRC 0, err_bits 모두 0, 데이터 있는 시간 100%, scan 985 µs(A와 같다), short_bufs 0, unknown 0, ts_bad 4(시작 값), dvslive 재시작 0.
+- 즉 모든 줄의 CRC는 케이블 접촉 문제였다. PLL은 A와 같은 00/8B/B0을 그대로 쓴다.
+- 이번 부팅에서는 UDC가 `not attached`이다. e850-vbus는 `VBUS on … after 0 ms`이고 11.31의 경합 표시는 없다. 케이블을 만질 때 USB-C가 빠진 것으로 보인다(확인 전).
+- Mac의 UART 로거(`uart-new.log`)는 B를 끌 때 어댑터가 잠깐 사라지면서 죽었다. 다시 켰다. B의 UART 어댑터는 보드 전원을 따라 사라지는 것 같다(추정).
+
+- 10분 시험(16:25~16:35 KST): 버퍼 22,876개(38.1/s), CRC 0, short_bufs 0, unknown 0, fe_missed 0, ts_bad 4(그대로), err_bits 모두 0, dvslive 재시작 0. ts_missed 2130은 시작할 때 생긴 값으로, 10분 동안 늘지 않았다.
+- B의 USB: 케이블을 다시 꽂은 뒤 UDC가 `configured`가 됐다. 그 전 10분 동안 `not attached`였던 것은 케이블 접촉 문제였다(e850-vbus는 정상, 경합 표시 없음).
+
+**A에서 본 것.** A의 dvslive `NRestarts=3`이었다. 그중 한 번은 tar 전송 중인 06:04:25 UTC다. 원인은 root 로그를 못 봐서 모른다(A의 USB를 뽑았고 philip은 journal을 못 읽는다).
+
+### 11.54 웹 화면 90° 회전 (2026-11-14)
+
+카메라를 다른 방향으로 달 수 있으니, 웹 미리보기 아래에 **↺ 왼쪽 90° / ↻ 오른쪽 90°** 버튼을 넣었다(`dvsctl.html`).
+- 돌리는 것은 웹 화면뿐이다. HDMI, `/frame.png`, 렌더러의 "뒤집기"(그대로, 좌우, 상하, 180°)는 그대로다. 90°를 HDMI에 적용하려면 렌더러를 고쳐야 하고 화면 비율도 바뀐다. 이번에는 하지 않았다.
+- 받은 비트맵을 캔버스에서 돌린 뒤 크롭, 이미지 저장, 켜진 픽셀 세기를 한다. 좌표는 돌린 화면 기준이다. 90°와 270°에서는 미리보기가 720×960이 되고, 너비를 75%로 줄여 높이를 비슷하게 맞춘다.
+- 저장 파일 이름에 `-rot90`처럼 각도가 붙는다.
+- 회전 값은 브라우저 localStorage(`dvs-rot`, 보드 주소마다 따로)에 남는다. 주소에 `?rot=90|180|270`을 붙이면 그 값이 우선한다.
+- 확인: headless Chrome으로 `?rot=0`과 `?rot=90`을 B의 데이터로 찍어 보았다. 90°는 720×960 세로이고, 0°는 예전과 같다. 실제 브라우저에서 버튼을 누르는 동작과 돌린 화면에서 크롭하는 동작은 확인하지 않았다.
+- 보드: B에 설치했다(`/usr/local/share/dvsview/dvsctl.html` md5 6df1e198, 이전 판 `/root/dvsctl.html.prev-11.54`). 페이지는 요청마다 파일에서 읽으므로 dvslive는 다시 시작하지 않았다. A에는 `/var/tmp/dvsctl.html.new`까지만 올렸다(root가 필요한데 A의 USB가 빠져 있다).

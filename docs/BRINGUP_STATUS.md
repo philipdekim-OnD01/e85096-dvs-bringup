@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-14 08:45 KST)
+# E850-96 bring-up 현재 상태 (2026-11-14 17:30 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -17,7 +17,8 @@
 | 상자 크기 측정 | **사람 행동 분류와 별개 과제(3장 2번).** 목표는 컨베이어 위 상자를 1.5 m에서 보고 가로·세로·높이를 재는 것이다. 1차 시험에서 손에 든 상자는 재지 못했다. hull이 손과 팔까지 묶었다. 기록 80개는 제각각이었다. 다음 방향은 사용자 결정 대기다 | 11.35 |
 | HDMI 콘솔 색 | 흰 글씨. dpu.ko 패치로 근본 수정했다(`e850-fbpal`과 rebind는 쓰지 않음). 전원을 껐다 켠 뒤에도 사용자가 화면에서 확인했다 | 11.14~11.16 |
 | HDMI 출력 꺼짐 | 해결. `decon_release()`가 fb0를 닫을 때마다 DECON을 끄던 것을 open 수 세기로 고쳤다(dpu.ko 재빌드) | 11.15 |
-| 네트워크 | Wi-Fi 192.168.0.236(ssh), USB NCM 192.168.7.1. **Wi-Fi 펌웨어 패닉 2번**(2026-11-07, 부팅 후 2.6시간과 6분, `WLBT FW PANIC: 0x04`, 원인 모름·재현 못 함). **11.31부터 자동 복구를 켰다**(`e850-wifi.sh`가 `disable_recovery_handling=0`). 강제 패닉 4번(런타임 설정)과 1번(부팅 설정) 모두 복구, `wlan0` 재연결 5.6~6.5초, 8080 응답 5.6~7.3초. 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`. **11.32: journal을 초당 130줄 → 분당 38줄로 줄였다**(카메라 bypass 경고, 워치독 keepalive). journal은 약 2주 남는다(추정). 11.33: vendor 버그 2개 수정(`mx_panic` 0600, system error log WARN). **11.47: 저절로 나는 0x04 패닉(약 3.8시간에 1번)은 펌웨어 Data Abort다. 2026-11-13 00:47 KST에 펌웨어를 Linaro Android 13 판 `S612_E3830_R4-1_Y23W13A`(2023-03)로 바꿨다**(옛 판 2019-12). 다시 붙는 데 8초 걸렸다. **24시간 시험(11-13 00:47~11-14 00:47 KST)에서 패닉 0번**(11.48) | 11.5, 11.30, 11.31, 11.32, 11.33, 11.47, 11.48 |
+| 두 번째 보드 | **2026-11-14 11.53: 복제 완료(boot-dvs3 + A의 rootfs, machine-id만 새로).** Wi-Fi 192.168.0.168, 웹 8080 동작. 처음에는 MIPI CRC가 모든 줄에 났다(dvslive가 수십 초마다 재시작하다 한 번은 보드가 멈춤). **CN4 케이블을 다시 꽂자 CRC 0, 데이터 100%로 A와 같아졌다.** USB-C는 다시 확인해야 한다 | 11.53 |
+| 네트워크 | Wi-Fi 192.168.0.236(ssh), USB 192.168.7.1(gadget 함수는 `ecm.usb0`, 즉 ECM. 문서의 "NCM"은 ECM이다). **11.52: USB에서 보드→Mac 방향만 멈춘 적이 있다(원인 모름). UDC `soft_connect`를 끊었다 붙여 재부팅 없이 복구했다.** **Wi-Fi 펌웨어 패닉 2번**(2026-11-07, 부팅 후 2.6시간과 6분, `WLBT FW PANIC: 0x04`, 원인 모름·재현 못 함). **11.31부터 자동 복구를 켰다**(`e850-wifi.sh`가 `disable_recovery_handling=0`). 강제 패닉 4번(런타임 설정)과 1번(부팅 설정) 모두 복구, `wlan0` 재연결 5.6~6.5초, 8080 응답 5.6~7.3초. 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`. **11.32: journal을 초당 130줄 → 분당 38줄로 줄였다**(카메라 bypass 경고, 워치독 keepalive). journal은 약 2주 남는다(추정). 11.33: vendor 버그 2개 수정(`mx_panic` 0600, system error log WARN). **11.47: 저절로 나는 0x04 패닉(약 3.8시간에 1번)은 펌웨어 Data Abort다. 2026-11-13 00:47 KST에 펌웨어를 Linaro Android 13 판 `S612_E3830_R4-1_Y23W13A`(2023-03)로 바꿨다**(옛 판 2019-12). 다시 붙는 데 8초 걸렸다. **24시간 시험(11-13 00:47~11-14 00:47 KST)에서 패닉 0번**(11.48) | 11.5, 11.30, 11.31, 11.32, 11.33, 11.47, 11.48, 11.52 |
 | 서비스 | nginx(80), ssh, e850-hdmi, e850-wifi, systemd-timesyncd, 워치독 데몬 | |
 | 사용자 계획 | MySQL + Apache로 출입 기록, YOLO nano 영상 처리 | |
 
@@ -107,6 +108,8 @@
 | `/var/tmp/plltest.py`, `dvslink.py`, `pll-ab.sh`, `plltest/` | 추가(11.46). PLL 시험 실행기, 기록 검사기, A/B 묶음, 결과(Mac `~/e850-logs/plltest/`에 사본) |
 | `/usr/local/bin/ov5647-cap.py` | **2026-11-12 128줄 디코딩**(`dvs_ingest(buf, W × (H + 1))`, md5 `03fdbff4…`, 11.46). 이전: `/root/ov5647-cap.py.prev-11.46`(7d82fa17) |
 | `/lib/modules/.../is-cis-s5krc1s.ko`, `/var/tmp/plltest.py` | **2026-11-14 08:20 KST 11.49판: 기본 setfile PLL 00/8B/B0**(모듈 md5 f96703b7, plltest 6787f7a4). 이전: `/root/is-cis-s5krc1s.ko.prev-11.49`(0x75, 0fe3ba23), `/var/tmp/plltest.py.prev-11.49` |
+| `/usr/local/bin/ov5647-cap.py`, `dvslive.sh`, `/lib/modules/.../csis-irqstat.ko` | **2026-11-14 11.51판**: DQBUF마다 VC0 버퍼 상태(QUERYBUF, 345 µs), dvslive가 csis-irqstat 적재(MIPI FS/FE·링크 오류 계수, `/sys/module/csis_irqstat/parameters`). 이전: `/root/ov5647-cap.py.prev-11.51`, `/root/dvslive.sh.prev-11.51` |
+| `/usr/local/share/dvsview/dvsctl.py`, `dvsctl.html`, `dvsfont.json` | **2026-11-14 11.50판**: 웹 크롭, 센서 레지스터 읽기(`/reg`, 읽기만), 1시간 통계 그래프(`/history`, 11.51에서 MIPI·DRAM 묶음과 개수 타일), HDMI 왼쪽 아래 한글 접속 주소. 이전: `/root/dvsctl.py.prev-11.50`, `dvsctl.html.prev-11.50`. `dvsfont.json`은 `tools/host/hangul-atlas.py`로 만든다(저장소에 없음). 11.52에서 배너가 fb0를 한 번만 열도록 고쳤다(`decon_release` 로그가 5초마다 찍히던 것, 40cc3f46). **11.54: 웹 미리보기 90° 회전 버튼**(웹 화면만, `dvsctl.html` 6df1e198, 이전 `/root/dvsctl.html.prev-11.54`) |
 | `/vendor/etc/wifi` | **2026-11-13 00:47 KST**: Linaro A13 WLBT 펌웨어(`mx140.bin` md5 792565d8, `S612_E3830_R4-1_Y23W13A`, 규제 DB `regulatory_db_2_7`, 11.47). 이전(Android 10) 판은 `/var/tmp/wifi-a10-vendor`에 있다. 되돌리기는 root `sh /var/tmp/wifi-fwswap.sh a10`이다. 받기는 `tools/linux510/wifi-fw-linaro.py`다. 01:15 KST부터는 `build-rootfs.sh`가 `out/wifi-a13.tgz`를 넣고, Wi-Fi 패키지와 `e850-wifi`도 넣는다(11.47) |
 | `/usr/local/bin/e850-wifi.sh` | 2026-11-13 펌웨어 출처 주석만 고침(22c43270, 11.47). 이전: `/root/e850-wifi.sh.prev-11.47`(47489536) |
 | `/etc/sysctl.d/90-e850-autoreboot.conf` | 추가(11.22). `softlockup_panic=1`, `panic=5` |
@@ -117,6 +120,16 @@
 | 계정 / Wi-Fi | `philip` 계정. Wi-Fi는 PSK 해시만 보드에 있음(저장소에는 없음) |
 
 ## 3. 다음에 할 실험
+
+0. **웹 서비스(dvsctl) 이어서 할 일 (2026-11-14, 브랜치 `dvs-web-tools`, PR #7 병합 전)**
+   - 지금 상태: 웹 페이지 `tools/linux510/dvsctl.html`과 서버 `dvsctl.py`. 서버는 캡처 프로세스(dvslive) 안에서 CPU7로 돈다. 페이지는 요청마다 파일에서 읽으므로 HTML만 바꿀 때는 dvslive를 다시 시작하지 않는다. 기능과 경과는 11.50(크롭, 레지스터 읽기, 그래프, HDMI 주소 배너), 11.51(MIPI·DRAM 그래프), 11.52(배너 fb0), 11.54(90° 회전)에 있다.
+   - 보드: 보드1 http://192.168.0.236:8080/ 은 **회전 버튼이 아직 없다**(`dvsctl.html` 0133cdc9). 새 파일은 `/var/tmp/dvsctl.html.new`(6df1e198)에 있다. 보드2 http://192.168.0.168:8080/ 은 설치됐다(6df1e198).
+   - 보드1 설치 방법: root가 필요하다. 사용자가 보드1 ssh에서 `sudo sh -c 'cp /usr/local/share/dvsview/dvsctl.html /root/dvsctl.html.prev-11.54; install -m 644 /var/tmp/dvsctl.html.new /usr/local/share/dvsview/dvsctl.html'`을 실행한다(Claude는 sudo 비밀번호를 입력하지 않는다). 또는 USB-C를 보드1에 꽂고 ACM root 콘솔로 설치한다.
+   - 확인하지 못한 것: 실제 브라우저에서 회전 버튼을 누르는 동작, 돌린 화면에서 마우스로 크롭하는 동작, 실제 모니터의 HDMI 주소 배너.
+   - 보드에 배포하는 순서: Mac에서 고친다 → `python3 -m unittest discover -s tools/linux510 -p test_dvsctl.py`를 돌린다 → 페이지를 확인한다(headless Chrome에 `--disable-web-security`를 주고, 로컬 사본에 `<base href="http://<보드>:8080/">`를 넣어 연다. 11.54) → `scp`로 `/var/tmp`에 올린다 → root로 `install`한다. `dvsctl.py`를 바꿨으면 root로 `systemctl restart dvslive`를 한다.
+   - 두 보드를 USB로 동시에 Mac에 꽂지 않는다(같은 192.168.7.1, 같은 ACM 이름). ACM에 붙은 보드는 `cat /etc/machine-id`로 구별한다(보드1 `4aeede4c…`, 보드2 `6f31c0bd…`).
+   - 같이 볼 것: 보드1 dvslive가 2026-11-14에 저절로 3번 재시작했다(`NRestarts=3`). 한 번은 rootfs 전송 중이었다. 원인은 root journal로 확인해야 한다.
+
 
 1. **DVS 사람 행동 분류: 나타남 / 움직임 / 넘어짐 (구현 중)**
    - 설계: `docs/superpowers/specs/2026-11-07-dvs-person-action-design.md`. 조사와 실측: 11.36.
@@ -154,7 +167,7 @@
      - 절전은 기본값(on)이다. 절전 끄기 시험(`wifi-pskeep`)은 바꾸기 전에 멈췄다.
      - 판정: 이 동안 강제 패닉을 내지 않는다. 01:31 KST에 재부팅해서 `mx_recovery_count`는 0부터 센다(그 전 44분은 0번). 이 값이 늘지 않으면 효과가 있다고 본다(옛 빈도라면 0번일 확률 약 0.2%). 1번이라도 나면 `wlbt-panic.py`로 푼다. 기호는 `~/e850-logs/wifi/fw-a13/mx140/debug/common/`에 있다.
      - 또 재부팅하면 `journalctl -k -b -1`도 본다.
-     - 06:13 KST에 전원을 껐다 켰다(사용자). 콜드 부팅에서도 새 펌웨어가 올라왔다. 지금까지 새 펌웨어로 모두 약 5.4시간 돌았고 패닉은 0번이다(아직 판정 전). HDMI는 HPD가 없다(케이블이나 모니터 확인 필요, 11.47).
+     - 06:13 KST에 전원을 껐다 켰다(사용자). 콜드 부팅에서도 새 펌웨어가 올라왔다. 지금까지 새 펌웨어로 모두 약 5.4시간 돌았고 패닉은 0번이다(아직 판정 전). HDMI 화면이 안 나왔다(사용자). 보드 쪽은 정상으로 보인다(e850-hdmi active, LT8912B 1920x1080@60 설정됨, fb0 unblank, 렌더러 57 fps). HPD `not connected`는 화면이 나올 때도 그렇게 읽히므로(2.2) 원인 근거가 아니다. 원인 모름(11.47).
      - [확인] 재부팅(01:31 KST)해 보니 부팅 때도 새 펌웨어가 올라와 다시 붙었다. 규제 DB를 읽게 됐다(`Regulatory Version: 2.7`, 예전에는 `Failed to read regdb`). `Type mismatch`는 그대로인데, HE·TWT·WPA3 MIB가 없다는 뜻이고 Android 기능 문자열에만 쓰여 해가 없다(11.47).
    - 11.31에서 한 것: 자동 복구 켬(강제 패닉 4번 모두 복구, 5.6~6.5초). 큰 송수신 약 1.1 GB, 재결합, roaming 11분 동안 재현 0번. 0x04는 펌웨어 내부 번호라 호스트 소스에 뜻이 없다.
    - 할 일:
@@ -190,7 +203,7 @@
         - 같은 시간 Wi-Fi 패닉 0번이라 이상 구간이 없었다(`stuckscan.py`는 쓸 일이 없었다).
      8. **사용자 결정(2026-11-13):** 24시간 시험으로 안정성이 확인되면 다음 두 가지를 승인했다.
         - (끝남, 11.49) 기본 setfile을 00/8B/B0으로 바꾼다. `is-cis-s5krc1s-setA.h`의 0x30A5~A7을 바꾸고 모듈을 다시 빌드해 보드에 넣었다(이전 모듈 `/root/is-cis-s5krc1s.ko.prev-11.49`). `plltest.py setfile` 10분 확인도 통과했다(readback `00 8b b0`).
-        - `dvs-pll-diag`를 main에 병합한다.
+        - (끝남, 2026-11-14) `dvs-pll-diag`를 main에 병합했다(PR #6, 병합 커밋 e514a95).
 
 ## 4. 사용자 결정 대기
 
