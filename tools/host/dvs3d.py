@@ -19,6 +19,8 @@ import argparse
 import collections
 import glob
 import http.client
+import http.server
+import json
 import os
 import struct
 import sys
@@ -303,7 +305,40 @@ def main():
 
 
 def serve(live, port):
-    """the page (Task 6)"""
+    """the page on localhost:port in a thread (port 0: any free one); returns the server.
+    GET / dvs3d.html (read per request), /points (pack_points), /views.png (both surfaces), /stats (JSON)"""
+    page = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvs3d.html')
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def send(self, body, ctype, code=200):
+            self.send_response(code)
+            self.send_header('Content-Type', ctype)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            with live.lock:
+                st = live.state
+            path = self.path.split('?')[0]
+            if path == '/':
+                self.send(open(page, 'rb').read(), 'text/html; charset=utf-8')
+            elif path == '/points':
+                self.send(st['points'], 'application/octet-stream')
+            elif path == '/views.png':
+                self.send(st['views'], 'image/png') if st['views'] else self.send(b'no pair yet', 'text/plain', 503)
+            elif path == '/stats':
+                self.send(json.dumps(st['stats']).encode(), 'application/json')
+            else:
+                self.send(b'not found', 'text/plain', 404)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
 
 
 if __name__ == '__main__':

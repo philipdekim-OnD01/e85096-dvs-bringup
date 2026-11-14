@@ -2,8 +2,12 @@
 import http.server
 import socket
 import struct
+import json
 import threading
+import types
 import unittest
+import urllib.error
+import urllib.request
 
 import cv2
 import numpy as np
@@ -134,6 +138,38 @@ class TestBoard(unittest.TestCase):
         rgb[11, 21] = (0, 200, 0)
         img = dvs3d.from_png(cv2.imencode('.png', rgb[:, :, ::-1])[1].tobytes())
         self.assertEqual((img.shape, int(img[5, 10]), int(img.sum())), ((360, 480), 200, 200))
+
+
+class TestServe(unittest.TestCase):
+    def setUp(self):
+        xyz = np.ones((2, 3), np.float32)
+        self.live = types.SimpleNamespace(lock=threading.Lock(), state={
+            'points': pack_points(xyz, [5, 6]), 'views': b'', 'stats': {'pairs': 3, 'calib': False}})
+        self.srv = dvs3d.serve(self.live, 0)
+        self.url = 'http://127.0.0.1:%d' % self.srv.server_address[1]
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def get(self, path):
+        return urllib.request.urlopen(self.url + path, timeout=5)
+
+    def test_page(self):
+        r = self.get('/')
+        self.assertEqual(r.status, 200)
+        self.assertIn(b'<canvas', r.read())
+
+    def test_points_and_stats(self):
+        self.assertEqual(len(self.get('/points').read()), 4 + 13 * 2)
+        self.assertEqual(json.load(self.get('/stats')), {'pairs': 3, 'calib': False})
+
+    def test_views_before_the_first_pair(self):
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            self.get('/views.png')
+        self.assertEqual(e.exception.code, 503)
+        self.live.state['views'] = b'\x89PNG'
+        self.assertEqual(self.get('/views.png').headers['Content-Type'], 'image/png')
 
 
 if __name__ == '__main__':
