@@ -61,6 +61,9 @@
 
 #define XS 960
 #define YS 720
+#define SX (XS / 2)			/* dvs_surface: 2 x 2 px each (11.56) */
+#define SY (YS / 2)
+#define D2M 16				/* dvs_disp2mono: the least of the last D2M buffers */
 #define RING (1u << 22)			/* 4M events x 8 B: > 200 ms of a buffer full of events at 40 buffers/s */
 #define STALL 300000			/* data this much off the delay: restart the playout clock */
 #define BLACK 0xff000000u		/* XRGB8888, alpha set as in ov5647-cap.py */
@@ -116,6 +119,10 @@ static struct {
 	_Atomic int64_t delay;
 	_Atomic int64_t anchor;		/* >= 0: restart the render clock at this sensor time */
 	_Atomic int64_t newest;		/* display clock after the last buffer */
+	/* CLOCK_MONOTONIC - display clock at each buffer (11.56): the display clock steps one scan over a gap, so the
+	 * difference grows by the gap; the least of a short run (~0.4 s) follows that and drops the late buffers */
+	_Atomic int64_t d2m[D2M];
+	_Atomic uint32_t d2m_n;
 	_Atomic int started;
 	int64_t cov, tot;		/* sensor time with scans back to back (since the last buffer), all of it */
 	/* the scan period follows the CIS margin (11.29): the most common timestamp step, every stats period */
@@ -557,6 +564,7 @@ int dvs_ingest(uint8_t *buf, size_t len)
 	wake_filter();
 
 	atomic_store(&S.newest, S.t);
+	atomic_store(&S.d2m[atomic_fetch_add(&S.d2m_n, 1) % D2M], now_us() - S.t);
 	atomic_fetch_add(&S.covered, S.cov);
 	S.cov = 0;
 
@@ -1156,6 +1164,64 @@ void dvs_cells(const struct ev *e, int n, uint32_t *cells)
 	}
 }
 
+/* CLOCK_MONOTONIC us - display clock us, the least over the last D2M buffers; 0 before the first (11.56) */
+int64_t dvs_disp2mono(void)
+{
+	uint32_t n = atomic_load(&S.d2m_n);
+	int64_t m = INT64_MAX;
+
+	if (!n)
+		return 0;
+	for (uint32_t i = 0; i < (n < D2M ? n : D2M); i++) {
+		int64_t v = atomic_load(&S.d2m[i]);
+
+		if (v < m)
+			m = v;
+	}
+	return m;
+}
+
+/*
+ * The stereo 3D source (11.56): the events of display-clock window (t_end - win_us, t_end] into dst[SY][SX] (2 x 2 px
+ * each), the latest event of a pixel giving 1 + 254 * (win - age) / win, 0 where none fired; polarity left out.
+ * Walks back from the newest event; times compare as int32 differences (the 32-bit clock wraps every 71.6 min).
+ * info: newest (display us), disp2mono low and high 32 bits, cost us. Returns the events used, -1 when t_end is
+ * after the newest buffer, -2 when the window reaches past the RING / 2 a reader may use (dvs_events()) or the
+ * decoder overwrote it meanwhile, -3 for a bad window. The caller's thread (the page's, CPU7) does the work.
+ */
+int dvs_surface(uint32_t t_end, int win_us, uint8_t *dst, uint32_t *info)
+{
+	int64_t t0 = now_us(), d2m = dvs_disp2mono();
+	uint32_t newest = (uint32_t)atomic_load(&S.newest);
+	uint64_t wr = atomic_load_explicit(&S.wr, memory_order_acquire), lo = wr > RING / 2 ? wr - RING / 2 : 0, i;
+	int n = 0, r;
+
+	if (win_us < 1000 || win_us > 200000 || !dst)
+		return -3;
+	info[0] = newest;
+	info[1] = (uint32_t)d2m;
+	info[2] = (uint32_t)((uint64_t)d2m >> 32);
+	if ((int32_t)(t_end - newest) > 0)
+		return -1;
+	memset(dst, 0, SX * SY);
+	for (i = wr; i > lo; i--) {
+		const struct ev *e = &S.ring[(i - 1) % RING];
+		int32_t age = (int32_t)(t_end - e->t);
+		uint32_t x = e->x, y = e->y & EV_Y;
+
+		if (age >= win_us)
+			break;
+		if (age < 0 || x >= XS || y >= YS)
+			continue;
+		if (!dst[y / 2 * SX + x / 2])
+			dst[y / 2 * SX + x / 2] = 1 + 254 * (win_us - age) / win_us;
+		n++;
+	}
+	r = (i == lo && lo) || atomic_load(&S.wr) - i > RING ? -2 : n;
+	info[3] = (uint32_t)(now_us() - t0);
+	return r;
+}
+
 /* A recording starts mid-stream: first a line that puts a fresh decoder where this one is (the last accepted
  * timestamp, the reference after it, the column), so the replay keeps the first events and their times. */
 static void rec_state(void)
@@ -1578,6 +1644,43 @@ int main(int argc, char **argv)
 		for (int i = 0; i < 4; i++)
 			if (dst[i].x != want[i].x || dst[i].y != want[i].y)
 				return fprintf(stderr, "dvs_events %d: %u,%#x\n", i, dst[i].x, dst[i].y), 1;
+	}
+	{	/* dvs_surface (11.56): the display-clock window (t_end - win, t_end] as a 480 x 360 time surface */
+		static uint8_t img[SX * SY];
+		uint32_t info[4];
+		int lit = 0, n;
+
+		reset();
+		S.ring[0] = (struct ev){ 1000, 10, 20 };		/* same pixel (5, 10) as the next: the later wins */
+		S.ring[1] = (struct ev){ 15000, 10, 20 };
+		S.ring[2] = (struct ev){ 19000, 101, 51 | EV_OFF };	/* pixel (50, 25), polarity not used */
+		atomic_store(&S.wr, 3);
+		atomic_store(&S.newest, 20000);
+		n = dvs_surface(20000, 20000, img, info);
+		for (int i = 0; i < SX * SY; i++)
+			lit += img[i] != 0;
+		if (n != 3 || lit != 2 || img[10 * SX + 5] != 1 + 254 * 15000 / 20000 ||
+		    img[25 * SX + 50] != 1 + 254 * 19000 / 20000 || info[0] != 20000)
+			return fprintf(stderr, "dvs_surface: %d events, %d lit, %u %u, newest %u\n", n, lit,
+				       img[10 * SX + 5], img[25 * SX + 50], info[0]), 1;
+		if (dvs_surface(20001, 20000, img, info) != -1 || dvs_surface(20000, 999, img, info) != -3 ||
+		    dvs_surface(20000, 200001, img, info) != -3)
+			return fprintf(stderr, "dvs_surface: not yet / bad window\n"), 1;
+		reset();					/* the 32-bit display clock wraps inside the window */
+		S.ring[0] = (struct ev){ 0xfffff000u, 2, 2 };
+		S.ring[1] = (struct ev){ 0x800, 4, 4 };
+		atomic_store(&S.wr, 2);
+		atomic_store(&S.newest, 0x1000);
+		if ((n = dvs_surface(0x1000, 20000, img, info)) != 2)
+			return fprintf(stderr, "dvs_surface across the wrap: %d events\n", n), 1;
+		reset();					/* the window reaches past the RING / 2 a reader may use */
+		for (uint64_t i = RING; i < RING + RING / 2 + 10; i++)
+			S.ring[i % RING] = (struct ev){ 50000, 1, 1 };
+		atomic_store(&S.wr, RING + RING / 2 + 10);
+		atomic_store(&S.newest, 50000);
+		if ((n = dvs_surface(50000, 20000, img, info)) != -2)
+			return fprintf(stderr, "dvs_surface past the safe part of the ring: %d\n", n), 1;
+		reset();
 	}
 	{					/* a recording of two lines (timestamps to 300 us, then groups) replays the same */
 		static uint32_t lines[2 * LINE / 4];
