@@ -1,4 +1,4 @@
-# E850-96 bring-up 현재 상태 (2026-11-14 17:50 KST)
+# E850-96 bring-up 현재 상태 (2026-11-14 18:30 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
 
@@ -14,6 +14,7 @@
 | 카메라 OV5647 | 55~63 fps(VTS 수정, 캡처 중 printk 끔). **2026-11-06 사용자가 떼어 내고 DVS 센서로 교체했다** | 11.10 |
 | DVS 센서 S5KRC1S | I2C 확인: `i2c-7`(HSI2C2) 주소 0x10, 0x303B 쓰기/읽기 OK. 전원은 `modules/dvs-power`(LDO32 + RSTN GPC0[2]). 매뉴얼에 칩 ID 레지스터 없음, 0x36도 응답(정체 모름). Pablo CIS 드라이버 `modules/s5krc1s-pablo`(OV5647과 같은 ISP 우회) 빌드, boot-dvs로 부팅. 드라이버로 전원·I2C·stream on까지 동작. Delta_10_2000FPS setfile로 **CSIS가 MIPI 프레임을 받는다**(F38/3 s). 하지만 DMA done이 없어 VC0 프레임은 사용자 공간에 0개, stop 시 VRESOL_MISMATCH·OVERFLOW. overflow 패닉은 껐다. 스트림 도중 I2C 쓰기나 insmod를 한 시험에서 soft lockup이 두 번 났다(전원 재투입 필요). 1000 FPS 시도(`to_scnt1`=1999)는 아직 효과를 측정하지 못했다. IRQ 폭주 원인은 CSIS v1.2가 VRESOL 오류 상태를 지우지 않은 것이었다(패치로 수정). devfreq를 최대로 하면 **DVS 이벤트가 사용자 공간에 온다**(`tools/host/dvsdecode.py`로 AER 패킷 확인). 남은 문제: CRC 오류(1499 Mbps 수신 설정에서 줄지만 남음), 매뉴얼에 없는 패킷 type 000000/000101(손상인지 미확정). 캡처는 `dvscap.sh`. 타임스탬프로 잰 실제 프레임 간격은 494 µs(약 2024 fps)라서 1000 FPS 설정은 효과가 없다. 오류 10프레임이면 CSIS를 끄는 vendor 동작을 `fimc_is.e850_csi_err_stop=0`으로 풀었고, **`ov5647-cap.py --live --raw8`로 HDMI에 이벤트 영상(ON 초록/OFF 빨강)을 계속 띄운다**(`is_cis_s5krc1s.flush_us=250`이면 초당 약 11번 갱신, 11.25. to_scnt1은 프레임 주기가 아니라 MIPI flush 타임아웃이라 999로 되돌림) 32줄 모드(mode1)는 System MMU fault 패닉으로 보류(11.26). 디코딩·렌더를 C(`libdvsview.so`)로 옮겨 HDMI **30 fps**, 디코딩 5.2 ms/MB(numpy의 약 45배). 하지만 버퍼에 센서 시간의 약 14%만 들어온다(CRC 시 DMA abort로 추정, 11.27). **11.28: 화면 깜빡임의 세 원인을 고쳤다.** ① CRC 비트가 `error_id`에 쌓여 프레임마다 오류 flush(fimc-is 패치) ② 링크가 워드의 종류 비트 31~26을 지워 SUB 타임스탬프가 256 ms씩 사라짐(디코더가 복구) ③ 커널 볼륨에 남아 있던 EMERG 디버그 printk가 5초마다 CPU0 인터럽트 안에서 UART로 나가 프레임 손실(지움). 지금 live는 초당 68버퍼, 2초 커버리지 93~100%, 지연 21~24 ms, 어두운 프레임 0장(3분). 화면 조정 앱 `http://192.168.0.236:8080/`(인증 없음). CRC 오류는 초당 약 8700개로 그대로다(링크 문제로 추정). **11.29: 0x30A6을 0x8D에서 0x75로 바꾸자 CRC가 없어졌다.** (**11.46 정정:** 0x30A5~A7은 19비트 PLL 단어이고 0x30A6은 M만이 아니라 P에도 들어간다. 0x75는 공식값 5376 Mbps로 VCO 범위 밖이다. 실제 속도를 모르는 **실험값**이다. 0x75 녹화 42개에서 CRC 없이 scan 1.62%가 빠졌다. 2026-11-12 A/B 10분씩: 0x75, 00/8B/B0, 00/8B/F8 모두 CRC 0. **버퍼 사이 scan 누락(1~1.6%)은 PLL이 아니라 디코더가 128번째 줄을 버린 탓이었다**(센서 128줄, DT 127줄). `W × (H + 1)`로 고친 뒤 00/8B/B0 10분 모든 판정 통과. 수신 설정을 맞춰도 같다. 시험 계획과 결과: [DVS-PLL-TESTS.md](DVS-PLL-TESTS.md))  vendor 0x8D는 줄마다 CRC였고, 0x72~0x78에서는 CRC 0, 깨진 워드 0이다. setfile을 0x75로 바꾸고 재부팅한 뒤 3분 동안 CRC 0개였다(0x70·0x7C·0x80은 데이터 없음, 0x7A는 CRC, 좁은 구간이라 장시간 안정성은 미측정). scan 속도는 `is_cis_s5krc1s.margin`(DTAG_FRM_MARGIN)으로 정한다. 주기는 430 + 32.4 × margin µs이고, 기본 17은 985 µs(1015 fps)다. 디코더가 scan 주기를 직접 잰다. **웹 서비스 `dvslive.service`(부팅 때 시작): `http://192.168.0.236:8080/`**, 미리보기 기본 10 fps(PNG는 C로 만들어 보드 안에서 34 ms), 센서 scan 속도·MIPI flush를 바꾸면 스트림을 다시 시작, 인증 없음. **11.30: 웹을 CPU7 전용으로 하고 keep-alive·TCP_NODELAY를 켜서 Wi-Fi 응답이 104~113 → 28~40 ms**(링크 상태에 따라), 미리보기 20/30 fps 추가 | 11.17~11.30 |
 | DVS 사람 행동 분류 | **구현 중(3장 1번). 과제 1~5 끝, 6~8은 도구까지(11.40):** 보드 분류 스레드(무작위 모델로 16 Hz, live·웹 영향 없음, 11.38), 페이지에서 동작 녹화(11.39), 녹화 확인·데이터·학습·평가 도구(11.40). 공개 데이터 PAF 411개, DailyDVS-200 1,021개를 학습 입력으로 만들었다(11.41). 공개 데이터로 10에폭 학습(69분, loss 1.73 → 0.72). DailyDVS 미사용 323개 참고 평가 67%, 넘어짐 82%. 다만 앉기의 21%가 넘어짐으로 나왔다(정면 데이터, 미세조정 전 기준선, 11.43). 보드 live 첫 시험에서 공개 모델은 앉기를 한 번도 맞히지 못했고, 빈 화면 2분에 오경보 14번을 냈다. 보드 빈 화면 21개를 배경으로 섞어 다시 학습한 `mix` 모델은 빈 화면 5분에 0번이다(11.44). 옆에서 녹화한 앉기 13·일어서기 10(동작마다 자름)을 더해 학습한 `sitstand` 모델은 평가용 앉기·일어서기 4/4를 맞혔다. 다만 빈 화면 0/2다. 보드는 앉음·서 있음만 판정하도록 바꿨고, 상태는 웹 페이지 맨 위에 나온다(`http://<보드>/`, 11.45). **남은 것: 넘어짐 녹화, 빈 화면 오경보 확인.** 나타남·움직임·넘어짐을 DVS 이벤트로 분류해 JSONL에 기록한다. 방법은 60 ms 프레임 → MobileNetV3-small(ImageNet) → GRU, 16 Hz. A55 한 코어에서 무작위 가중치 모델 27.2 ms(실측) | 11.36~11.45 |
+| DVS 스테레오 3D | **1단계(Mac 계산) 구현, 보드 설치 전(11.56).** 보드 `/evframe`(time surface 480×360), Mac `tools/host/dvs3d.py`(시계·짝·SGBM·3D·페이지 http://localhost:8090/·bench·calib). Mac M6 연산량 쌍당 15.9 ms(SGBM 93%). A55 수치 없음(보드 OpenCV 설치 결정 대기). 보정·실제 3D는 사용자가 있을 때. 최종 목표 SLAM | 11.56 |
 | 상자 크기 측정 | **사람 행동 분류와 별개 과제(3장 2번).** 목표는 컨베이어 위 상자를 1.5 m에서 보고 가로·세로·높이를 재는 것이다. 1차 시험에서 손에 든 상자는 재지 못했다. hull이 손과 팔까지 묶었다. 기록 80개는 제각각이었다. 다음 방향은 사용자 결정 대기다 | 11.35 |
 | HDMI 콘솔 색 | 흰 글씨. dpu.ko 패치로 근본 수정했다(`e850-fbpal`과 rebind는 쓰지 않음). 전원을 껐다 켠 뒤에도 사용자가 화면에서 확인했다 | 11.14~11.16 |
 | HDMI 출력 꺼짐 | 해결. `decon_release()`가 fb0를 닫을 때마다 DECON을 끄던 것을 open 수 세기로 고쳤다(dpu.ko 재빌드) | 11.15 |
@@ -131,6 +132,17 @@
    - 같이 볼 것: 보드1 dvslive가 2026-11-14에 저절로 3번 재시작했다(`NRestarts=3`). 한 번은 rootfs 전송 중이었다. 원인은 root journal로 확인해야 한다.
 
 
+0-1. **DVS 스테레오 3D (2026-11-14, 브랜치 `dvs-stereo-3d`, 11.56)**
+   - 설계 `docs/superpowers/specs/2026-11-14-dvs-stereo-3d-design.md`, 계획 `docs/superpowers/plans/2026-11-14-dvs-stereo-3d.md`. 1단계는 Mac에서 계산, 2단계는 경량화해서 보드1로 옮긴다. 최종 목표는 SLAM이다.
+   - 배치: 미니 선풍기 앞, 보드1(광학렌즈) 정면, 보드2(기본렌즈) 왼쪽 30° 4 cm 뒤, 간격 15 cm. 보정한 뒤에는 두 센서를 움직이지 않는다.
+   - **보드 설치(root 필요, 아직 안 함):** 파일은 두 보드 `/var/tmp`에 있다(`libdvsview.so` 0397eb69, `dvsctl.py` f62b7d7c). 보드마다 ssh에서 사용자가 실행한다(또는 USB-C ACM root 콘솔에서 `sudo` 없이):
+     `sudo sh -c 'cp /usr/local/lib/libdvsview.so /root/libdvsview.so.prev-11.56; cp /usr/local/share/dvsview/dvsctl.py /root/dvsctl.py.prev-11.56; install -m 755 /var/tmp/libdvsview.so /usr/local/lib/libdvsview.so; install -m 644 /var/tmp/dvsctl.py /usr/local/share/dvsview/dvsctl.py; systemctl restart dvslive'`
+     확인: `curl -sD- http://<보드>:8080/evframe`에 `X-Dvs-Newest`가 있고, `/stats`의 버퍼 속도(약 38~40/s)와 scan 누락이 설치 전과 같다. 되돌리기는 `/root/*.prev-11.56`을 다시 `install`하고 `systemctl restart dvslive`.
+   - 실행: `python3 tools/host/dvs3d.py live`(두 보드에 `/evframe`이 있을 때). 없으면 `--png`(HDMI 화면, 시각 없음). 페이지 http://localhost:8090/.
+   - 보정(사용자가 있을 때): Mac이나 태블릿 브라우저로 http://localhost:8090/checker 를 전체 화면으로 띄운다. 한 칸 크기를 자로 잰다(m). `python3 tools/host/dvs3d.py calib --square <m>`을 실행하고, 두 센서가 함께 보는 곳에서 화면을 20가지 위치·기울기로 움직인다. 결과는 `~/e850-logs/dvs3d/calib.npz`이고, 판정은 rms 1 px 미만, 초점거리 비 2배 이하다.
+   - 다음 할 일: ① 보드 설치와 `/evframe` 비용 측정 ② 손전등 깜빡임으로 두 보드 시각 차이 측정(2 ms 미만 목표) ③ 보정 ④ 선풍기 원판으로 3D 정확도(거리 ±5 cm, 지름 ±2 cm) ⑤ A55 bench(4장 결정 뒤) ⑥ 경량화 방안(240×180·시차 32, 또는 이벤트 화소만 C로 맞추기) 결정.
+   - 보드1 선풍기 바깥 날개가 안 보이는 문제(조명·조리개·초점)는 그대로다.
+
 1. **DVS 사람 행동 분류: 나타남 / 움직임 / 넘어짐 (구현 중)**
    - 설계: `docs/superpowers/specs/2026-11-07-dvs-person-action-design.md`. 조사와 실측: 11.36.
    - 방법(A′): 60 ms 이벤트 수 프레임(2×120×160) → ImageNet 사전 학습 MobileNetV3-small → GRU, 16 Hz, CPU4~6, 상태가 바뀔 때 JSONL 한 줄. Sony·Intel 2025 넘어짐 연구를 따른다. 공개 데이터 PAF·DailyDVS-200으로 학습하고 우리 센서 녹화(동작당 5~10번)로 미세 조정한다.
@@ -210,4 +222,6 @@
 - Apache 포트: nginx를 끄고 Apache를 80번에 올릴지, Apache를 8080에서 따로 띄울지. **DVS 웹 서비스(`dvslive.service`, 11.29)가 부팅 때부터 8080을 쓴다(인증 없음).** Apache를 8080에 올리면 앱은 페이지 없이 live만 돈다. `dvslive.sh`의 `CTL_PORT`로 앱 포트를 바꿀 수 있다
 - 사람 행동 분류(3장 1번): 공개 데이터(PAF, DailyDVS-200) 브라우저 내려받기, 그리고 보드 앞 동작 녹화 일정(배치: DVS를 옆에 고정, 전신과 매트리스가 화면에 들어오게)
 - 상자 측정: 11.35 "다음 방향" 1~3 중 선택(3장 2번). MySQL 저장은 계속 보류다
+- DVS 3D(11.56): A55 연산량을 재려면 보드에 OpenCV가 있어야 한다. `python3-opencv`(Debian, 의존성이 크다)나 `opencv-python-headless` aarch64 wheel(크기 미확인, `/tmp`에 풀어 쓰면 rootfs를 쓰지 않는다) 중에서 고르고, 다운로드를 허락받아야 한다. rootfs는 보드2 198 MB, 보드1 306 MB 남았다
+- DVS 3D: 보드 두 대에 `/evframe` 설치(root, 3장 0-1의 명령). 렌즈·조명(보드1 바깥 날개)은 나중에
 - YOLO 모델 종류와 입력 크기
