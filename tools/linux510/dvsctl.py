@@ -81,6 +81,7 @@ BANNER_IFS = (('wlan0', '무선 Wi-Fi'), ('usb0', '유선 USB'))
 BANNER_W, BANNER_X = 232, 4                 # inside the 240 px left of the 1.5x view: no zoom covers it
 # the page's own core (11.30): no device IRQ (they all land on CPU0), systemd keeps the rest on 0-6 (e850-cpu7.conf)
 WEB_CPU = 7
+NO_SENSOR = None                            # ov5647-cap.py: why the sensor stream did not start (no DVS on CN4)
 
 
 def pin(cpus, name='dvs-web'):
@@ -278,6 +279,8 @@ def banner_loop(port):
         lines = [('웹 접속 주소', 255)]
         for name, url in addrs(port):
             lines += [(name, 150), (url or '연결 안 됨', 255)]
+        if NO_SENSOR:
+            lines += [('DVS 센서', 150), ('연결 안 됨', 255)]
         try:
             fb_put(fb, banner_rows(font, lines, BANNER_W), BANNER_X, 8)
         except OSError as e:
@@ -433,6 +436,8 @@ def start(lib, port):
                 if crc is not None:
                     st['crc'] = crc
                 st['addrs'] = addrs(port)
+                if NO_SENSOR:
+                    st['no_sensor'] = NO_SENSOR
                 try:
                     st['pll'] = open(PLL).read().strip()
                 except OSError:                 # a CIS module from before 11.46

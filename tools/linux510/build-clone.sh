@@ -29,6 +29,9 @@ od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > $R/etc/machine-id
 echo >> $R/etc/machine-id
 cp $R/etc/machine-id $R/var/lib/dbus/machine-id
 rm -f $R/var/lib/systemd/random-seed
+# files changed on the source since the tar (BOARD-CLONE.md 4), at their paths under /x/overlay; cp onto an
+# existing file keeps its owner and mode
+if [ -d /x/overlay ]; then cp -r /x/overlay/. $R/; echo "overlay: $(cd /x/overlay && find . -type f | wc -l) file(s)"; fi
 echo "machine-id $(cat $R/etc/machine-id), $(df -h $R | tail -1)"
 (cd $R && find usr lib var/tmp root home opt -xdev -type f -print0 | sort -z | xargs -0 md5sum) > /x/manifest.md5
 umount $R

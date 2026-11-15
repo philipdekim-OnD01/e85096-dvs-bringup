@@ -231,8 +231,22 @@ for i in range(len(vc0.bufs)):
     vc0.qbuf(i)
 for i in range(len(ldr.bufs)):
     ldr.qbuf(i)
-fcntl.ioctl(ldr.fd, VIDIOC_S_CTRL, struct.pack('Ii', CID_IS_S_STREAM, 1))
-log('queued, sensor stream on')
+no_sensor = None
+try:
+    fcntl.ioctl(ldr.fd, VIDIOC_S_CTRL, struct.pack('Ii', CID_IS_S_STREAM, 1))
+    log('queued, sensor stream on')
+except OSError as e:
+    if not (a.live and a.raw8 and a.ctl):
+        raise
+    # no sensor on CN4 (i2c fail -6, EINVAL here; 11.57): stream off once and keep the page up saying so. Exiting
+    # instead makes systemd restart us every few seconds through the vendor stop path, which warns each time
+    no_sensor = str(e)
+    log('sensor stream on: %s: no sensor on CN4? page only' % e)
+    for n in (vc0, ldr):
+        try:
+            n.stream(False)
+        except OSError as e2:
+            log('%s STREAMOFF: %s' % (n.name, e2))
 
 class Live:
     """Half-resolution demosaic (one RGB pixel per BGGR cell) through per-channel LUTs that hold
@@ -308,6 +322,7 @@ class DvsLive:
         if a.ctl:
             sys.path.append('/usr/local/share/dvsview')
             import dvsctl
+            dvsctl.NO_SENSOR = no_sensor
             try:
                 dvsctl.start(self.lib, a.ctl)
                 self.ctl = dvsctl
@@ -365,6 +380,12 @@ class DvsLive:
 
 live = (DvsLive() if a.raw8 else Live(a.W, a.H)) if a.live else None
 signal.signal(signal.SIGTERM, signal.default_int_handler)   # pkill: stream off cleanly (& ignores SIGINT)
+if no_sensor:                   # the page and HDMI say so until dvslive starts again with a sensor on CN4
+    try:
+        while True:
+            signal.pause()
+    except KeyboardInterrupt:
+        sys.exit(1)
 saved = 0
 t0 = last = time.time()
 try:

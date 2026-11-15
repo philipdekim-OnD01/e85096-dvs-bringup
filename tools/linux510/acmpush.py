@@ -1,6 +1,6 @@
 # acmpush2.py LOCAL REMOTE - copy a file to the board over the USB-serial shell: raw tty + head -c
 import base64, glob, os, sys, termios, time
-port = glob.glob('/dev/cu.usbmodem*')[0]
+port = '/dev/cu.usbmodeme850_961'       # not glob: a phone's ACM port can sort first
 fd = os.open(port, os.O_RDWR | os.O_NOCTTY)
 a = termios.tcgetattr(fd); a[0]=0; a[1]=0; a[2]=termios.CS8|termios.CREAD|termios.CLOCAL; a[3]=0; termios.tcsetattr(fd, termios.TCSANOW, a)
 data = base64.b64encode(open(sys.argv[1], 'rb').read())

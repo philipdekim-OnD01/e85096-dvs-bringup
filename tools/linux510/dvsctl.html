@@ -15,6 +15,7 @@
   #view { width: 100%; height: auto; aspect-ratio: 4 / 3; background: #000; border-radius: 4px; display: block; margin-inline: auto; }
   h2 { font-size: 15px; margin: 18px 0 2px; color: var(--dim); font-weight: 600; }
   #s-apply { margin-top: 6px; }
+  #nosensor { background: #5a1d1d; color: #fff; border-radius: 6px; padding: 10px 12px; margin: 6px 0; font-weight: 600; }
   #stats { color: var(--dim); font: 13px/1.5 ui-monospace, Menlo, monospace; margin-top: 8px; min-height: 3em; }
   .row { display: grid; grid-template-columns: 7.5em 1fr 3.5em; gap: 8px; align-items: center; margin: 10px 0; }
   .row label { color: var(--dim); }
@@ -69,6 +70,7 @@
   <section class="panel">
     <h1>DVS 화면 조정</h1>
     <div id="act" aria-live="polite"><span id="a-state">분류기 기다리는 중…</span><span id="a-top"></span></div>
+    <div id="nosensor" role="alert" hidden>DVS 센서가 연결되어 있지 않습니다. 보드를 끄고 CN4에 센서를 꽂은 뒤 다시 켜 주세요.</div>
     <canvas id="view" width="960" height="720" aria-label="지금 HDMI에 나가는 화면"></canvas>
     <div class="toggle"><label for="webfps">미리보기</label>
       <select id="webfps"><option value="0">끔</option><option value="2">2 fps</option><option value="5">5 fps</option>
@@ -236,6 +238,8 @@ async function refreshStats() {
         return [name + ' ', v];
       }));
     }
+    document.getElementById('nosensor').hidden = !s.no_sensor;
+    if (s.no_sensor) document.getElementById('stats').textContent = `센서 스트림 시작 실패: ${s.no_sensor}`;
     if (s.fps === undefined) return;
     document.getElementById('stats').textContent =
       `${s.fps} fps, 그리기 ${s.draw_ms} ms, 프레임당 이벤트 ${s.events}\n` +

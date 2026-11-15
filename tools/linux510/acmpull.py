@@ -1,7 +1,7 @@
 # acmpull.py REMOTE LOCAL - fetch a file from the board over the USB-serial shell.
 # Large single transfers lose data on the device->host path, so: gzip, 16 KiB chunks, md5 per chunk, retry.
 import base64, glob, hashlib, os, re, sys, termios, time, zlib
-port = glob.glob('/dev/cu.usbmodem*')[0]
+port = '/dev/cu.usbmodeme850_961'       # not glob: a phone's ACM port can sort first
 fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
 a = termios.tcgetattr(fd); a[0]=0; a[1]=0; a[2]=termios.CS8|termios.CREAD|termios.CLOCAL; a[3]=0; termios.tcsetattr(fd, termios.TCSANOW, a)
 def run(cmd, tmo=20):

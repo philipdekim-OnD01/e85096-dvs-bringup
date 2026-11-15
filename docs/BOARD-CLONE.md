@@ -1,6 +1,6 @@
 # E850-96 보드 복제 절차
 
-돌고 있는 보드(원본)의 시스템을 다른 E850-96(대상)에 그대로 옮기는 방법이다. 2026-11-14에 보드1(192.168.0.236)을 보드2(출하 상태 Android 10)로 복제할 때 쓴 명령과 측정값을 정리했다. 그날 있었던 일은 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11.53절에 있다.
+돌고 있는 보드(원본)의 시스템을 다른 E850-96(대상)에 그대로 옮기는 방법이다. 2026-11-14에 보드1(192.168.0.236)을 보드2(출하 상태 Android 10)로 복제할 때 쓴 명령과 측정값을 정리했다. 그날 있었던 일은 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11.53절에 있다. 2026-11-15에 보드3으로 한 번 더 했다(11.57, 아래 "보드3에서" 표시).
 
 ## 1. 무엇이 옮겨지나
 
@@ -60,6 +60,7 @@ ssh philip@<원본> cat /var/tmp/rootfs-send.md5              # md5와 바이트
 
 - `tar=1`은 정상이다. 돌고 있는 시스템이라 "file changed as we read it"(`./sys`, journal) 경고가 난다. 경고 내용은 원본 ACM에서 `journalctl -u rootfs-send`로 본다(philip은 journal을 못 읽는다).
 - 전송하는 동안 원본의 dvslive가 한 번 재시작했다(원인 미확인, 11.53). 원본의 서비스가 잠깐 끊길 수 있다고 보고 한다.
+- **원본 USB-C가 안 붙을 때(보드3에서):** 한 번 뺐던 케이블을 다시 꽂으면 원본 UDC가 `not attached`에 머물 수 있다(원인 미확인). 그때는 전에 받아 둔 `rootfs.tar`를 새 디렉터리에 `ln`으로 걸고 5장부터 한다. `build-clone.sh`가 machine-id를 새로 만드므로 옛 `part.simg.*`를 그대로 굽지 않는다(그 안에는 앞 대상의 machine-id가 있다). 그 사이 원본에서 바뀐 파일은 `ssh philip@<원본> 'find /usr /etc /home /opt /var/tmp /var/lib -xdev -type f -newermt "<tar 받은 UTC 시각>"'`로 찾는다. 넣을 파일은 `$D/overlay/<경로>`에 두면 `build-clone.sh`가 이미지에 덮어쓴다(이미 있는 파일은 소유자와 권한이 그대로다, 보드4에서). 그러면 8장 파일 비교에서도 차이가 없다.
 
 ## 5. 이미지 만들기 (몇 분)
 
@@ -85,6 +86,8 @@ fastboot devices                                            # 수 초 뒤 대상
 ```
 UART 로그에 `Entering fastboot: reboot bootloader command`가 나온다.
 
+**보드3에서:** 전원을 넣자 LK가 `Volume up key is pressed. Entering fastboot mode!`로 바로 fastboot에 들어갔다. 보드마다 다를 수 있으니 먼저 `fastboot devices`를 본다.
+
 **대상이 이미 우리 Linux일 때:** ACM에서 `to-fastboot`을 실행한다. 워치독을 죽여 약 30초 뒤 `Abnormal RST_STAT`로 들어간다. `rebootarg bootloader`는 LK가 무시한다.
 
 ## 7. 굽기 (약 12분)
@@ -96,7 +99,10 @@ for i in 0 1 2 3; do ~/e850-logs/fbmini flash userdata $D/part.simg.$i; done
 ```
 
 - **`fastboot flash userdata`는 쓰지 않는다.** 굽기 전에 `getvar:is-userspace`를 보내는데, LK가 거기서 멈춘다. 멈추면 전원을 다시 넣어야 한다.
-- 조각마다 걸린 시간은 5분 56초, 76초, 116초, 86초였다. 첫 조각(18,465청크)이 느린 것은 LK가 청크마다 UART에 한 줄을 찍기 때문으로 보인다.
+- **조각마다 결과를 보고 다음으로 간다. 하나라도 실패하면 `reboot`를 보내지 않는다(보드4에서).** 전송 중 `LIBUSB_ERROR_IO`로 끊기면 LK는 나머지 데이터를 기다리며 명령에 답하지 않는다. 대상 전원을 다시 넣는다. Linux가 initramfs 셸로 뜨면(`error loading journal`) 거기서 `to-fastboot`을 그냥 실행한다(`setsid nohup … &`는 initramfs에서 듣지 않았다). 그다음 성공하지 못한 조각부터 다시 굽는다. 조각마다 파티션 전체를 덮으므로 이미 성공한 조각은 다시 굽지 않아도 된다.
+- 대상 USB-C는 Mac 본체 포트에 꽂는다. 보드4는 USB 허브 두 단 뒤에서 두 번 끊겼고, 본체 포트로 옮긴 뒤 됐다(원인 확인은 안 됨).
+- 굽는 동안 `fastboot devices`를 되풀이해 부르지 않는다(같은 USB 장치를 연다. 방해하는지는 확인하지 않았다).
+- 조각마다 걸린 시간은 5분 56초, 76초, 116초, 86초였다(보드3에서는 250 s, 31 s, 53 s, 32 s). 첫 조각(18,465청크)이 느린 것은 LK가 청크마다 UART에 한 줄을 찍기 때문으로 보인다.
 - UART에서 각 조각의 위치를 확인할 수 있다. 첫 줄은 `CHUNK TYPE NONE (lba: <userdata 시작>, sct: …)`이고, 다음 RAW의 lba가 앞 조각의 끝과 이어지면 된다.
 
 ## 8. 확인
@@ -114,6 +120,7 @@ python3 tools/host/acm.py "cat /etc/machine-id; systemctl is-system-running; sys
   ssh -o HostKeyAlias=<원본 주소> philip@<대상 주소> cat /run/m.md5 | LC_ALL=C sort -k2 > /tmp/b.s
   LC_ALL=C sort -k2 $D/manifest.md5 | diff - /tmp/b.s
   ```
+- **센서가 없는 대상(보드3에서):** dvslive가 웹 페이지만 띄우고 화면에 "DVS 센서가 연결되어 있지 않습니다"를 보인다(11.57). 그 판보다 옛 `ov5647-cap.py`이면 dvslive가 몇 초마다 재시작하며 커널 경고를 내니 바로 `systemctl stop dvslive`를 한다.
 - 웹과 카메라: `http://<대상>:8080/`이 200을 돌려주는지 본다. `/stats`의 `crc`, `link.short_bufs`, `coverage`는 원본과 같은 수준이어야 한다(CRC 0, 데이터 100%).
 
 ## 9. 막혔던 곳과 해결
@@ -124,6 +131,8 @@ python3 tools/host/acm.py "cat /etc/machine-id; systemctl is-system-running; sys
 | 대상에서 MIPI CRC가 모든 줄에 나고 dvslive가 수십 초마다 재시작함 | CN4 카메라 케이블 접촉 문제였다. dvslive를 멈추고 → `systemctl poweroff` → 케이블을 다시 꽂고 → 전원을 넣었더니 CRC 0이 됐다. 그대로 두면 정지 경로에서 보드가 멈추고 워치독이 리셋한다 |
 | 대상 UDC가 `not attached`(ACM 없음) | USB-C가 덜 꽂혔다. 다시 꽂으니 `configured`가 됐다. e850-vbus 경합(11.31)과는 다르다. 경합이면 dmesg에 `does not have any gadget`이 나온다 |
 | ACL 경고(`Cannot acl_from_text`) | tar는 ACL을 사용자 이름으로 기록한다. `build-clone.sh`가 원본의 `/etc/passwd`, `/etc/group`을 컨테이너에 먼저 넣어 해결했다 |
+| ACM 도구가 엉뚱한 장치로 보냄 | 휴대폰 같은 다른 ACM 장치가 꽂혀 있으면 `glob('/dev/cu.usbmodem*')[0]`이 그쪽을 골랐다. `acmpush.py`, `acmpull.py`는 이제 `/dev/cu.usbmodeme850_961`만 쓴다(11.57) |
+| acmpush가 끝났는데 md5가 옛 값 | `fs.protected_regular = 2`: `/var/tmp`에 philip의 같은 이름 파일이 있으면 root도 덮어쓰지 못한다. 먼저 `rm -f`한다(11.57) |
 | USB 네트워크로 받을 때 연결 시간 초과 | USB 네트워크의 보드→Mac 방향이 멈춰 있었다(11.52). Wi-Fi ssh 터널로 받는다(4장) |
 
 ## 10. 다음에 하면 좋을 것
