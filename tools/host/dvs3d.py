@@ -11,6 +11,7 @@ the same code to measure the compute on the Mac and, later, on the board (the li
   dvs3d.py live --left 192.168.0.236 --right 192.168.0.168 [--rec DIR] [--calib F] [--png] [--port 8090]
   dvs3d.py bench DIR [--threads N] [--calib F]
   dvs3d.py calib [--left H --right H] [--square M] [--n 20] [--png] [--from DIR]   (writes calib.npz)
+  dvs3d.py rough [--f 600 | --z M] [--baseline 0.05] [--png]   (no corners yet: calib-rough.npz, then live --calib it)
 
 --png: a board without /evframe (no root to install it) serves its HDMI frame instead (/frame.png: the fade of
 the renderer for a time surface, no timestamp, paired by request time). Enough for timing and a look, not for
@@ -38,6 +39,7 @@ CLOCK_KEEP_US = 30_000_000          # clock samples kept; the shortest round tri
 RTT_MAX_US = 20_000                 # a shortest round trip above this: the pairing time is uncertain
 MAX_POINTS = 20_000
 CALIB = os.path.expanduser('~/e850-logs/dvs3d/calib.npz')
+ROUGH = os.path.expanduser('~/e850-logs/dvs3d/calib-rough.npz')   # dvs3d.py rough: never over a real calib
 
 
 def now_us():
@@ -256,6 +258,50 @@ def calibrate(views, square_m, pattern=PATTERN, size=(W, H)):
             'Q': Q, 'rms': rms, 'f_ratio': max(K1[0, 0] / K2[0, 0], K2[0, 0] / K1[0, 0])}
 
 
+def shift(pairs):
+    """(dx, dy) between the views of [(left, right), ...]: dx the disparity of what dominates them (left x - right x),
+    dy how much lower the right view sees it (rows). The centre of what fired in most of the pairs: phase
+    correlation locked onto the blur when one lens was far blurrier than the other (11.56).
+    shortcut: one dominant object (the tablet), upgrade to a feature match when the scene has several."""
+    c = []
+    for i in (0, 1):
+        a = sum(np.float32(p[i] > 0) for p in pairs)
+        ys, xs = np.nonzero(a > 0.3 * a.max()) if a.max() > 0 else ((), ())
+        if not len(xs):
+            raise ValueError('nothing fired in the %s view' % ('left', 'right')[i])
+        c.append((xs.mean(), ys.mean()))
+    return int(round(c[0][0] - c[1][0])), int(round(c[1][1] - c[0][1]))
+
+
+def rough_calib(f, baseline, dy, size=(W, H)):
+    """the keys Pipeline reads for a rig that cannot be calibrated yet (no corners: blurry lenses, 11.56): two equal
+    parallel cameras, focal length f (px) and baseline (m) assumed, only the rows lined up (the right view moved up
+    by dy). Depths scale with f * baseline."""
+    w, h = size
+    K = np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]])
+    P1, P2 = np.hstack([K, np.zeros((3, 1))]), np.hstack([K, [[-f * baseline], [0], [0]]])
+    P2[1, 2] -= dy                                  # remap reads the right view dy rows lower
+    Q = np.array([[1, 0, 0, -w / 2], [0, 1, 0, -h / 2], [0, 0, 0, f], [0, 0, 1 / baseline, 0]])
+    return {'K1': K, 'D1': np.zeros(5), 'K2': K, 'D2': np.zeros(5), 'R1': np.eye(3), 'R2': np.eye(3),
+            'P1': P1, 'P2': P2, 'Q': Q, 'rough': True}
+
+
+def rough_cmd(a):
+    boards, pairs = (Board(a.left), Board(a.right)), []
+    while len(pairs) < a.n:
+        p = grab(boards, a.win, a.png)
+        if p is not None:
+            pairs.append(p)
+    dx, dy = shift(pairs)
+    if a.z:                     # one point: the dominant object at a measured distance sets f (and hides any toe-in)
+        a.f = dx * a.z / a.baseline
+        print('f %.0f px from %d px at %.2f m: a %.0f deg view if the rig is parallel' % (
+            a.f, dx, a.z, 2 * np.degrees(np.arctan(W / 2 / a.f))))
+    np.savez(a.out, **rough_calib(a.f, a.baseline, dy))
+    print('%d pairs: rows %+d (right view lower), disparity %d px -> %s m at f %.0f px, baseline %.3f m -> %s' % (
+        len(pairs), dy, dx, '%.2f' % (a.f * a.baseline / dx) if dx > 0 else '?', a.f, a.baseline, a.out))
+
+
 def calib_cmd(a):
     """capture board poses from both boards (or reuse a capture with --from), then solve and save calib.npz"""
     d = a.from_dir or os.path.expanduser(time.strftime('~/e850-logs/dvs3d/calib-%Y%m%d-%H%M%S'))
@@ -307,7 +353,8 @@ class Live:
         self.n += 1
         left, right, _ = self.pipe.last
         views = cv2.imencode('.png', np.hstack([left, np.full((H, 4), 255, np.uint8), right]))[1].tobytes()
-        stats = {'pairs': self.n, 'dropped': self.dropped, 'points': len(xyz), 'calib': self.pipe.calib is not None,
+        stats = {'pairs': self.n, 'dropped': self.dropped, 'points': len(xyz),
+                 'calib': False if self.pipe.calib is None else 'rough' if 'rough' in self.pipe.calib else True,
                  'source': 'frame.png' if self.png else 'evframe',
                  'timing_ms': {k: round(float(np.median([x[k] for x in self.timing])), 2) for k in t},
                  'boards': [{'host': b.host, 'rtt_ms': None if b.clock.rtt() is None else b.clock.rtt() / 1e3,
@@ -363,6 +410,16 @@ def main():
     cb.add_argument('--win', type=int, default=150000, help='longer than the 100 ms blink')
     cb.add_argument('--out', default=CALIB)
     cb.add_argument('--from', dest='from_dir', help='solve again from a capture directory')
+    rg = sub.add_parser('rough', help='a parallel rig with assumed f and baseline, rows lined up from the images')
+    rg.add_argument('--left', default='192.168.0.236')
+    rg.add_argument('--right', default='192.168.0.168')
+    rg.add_argument('--png', action='store_true')
+    rg.add_argument('--n', type=int, default=20, help='pairs to line up')
+    rg.add_argument('--win', type=int, default=150000)
+    rg.add_argument('--f', type=float, default=600, help='focal length on the 480 x 360 surface (px), assumed')
+    rg.add_argument('--baseline', type=float, default=0.05, help='between the two sensors (m), measured')
+    rg.add_argument('--z', type=float, help='the dominant object (the tablet) is this far (m), measured: sets --f')
+    rg.add_argument('--out', default=ROUGH)
     bn = sub.add_parser('bench')
     bn.add_argument('rec')
     bn.add_argument('--threads', type=int, default=1)
@@ -371,6 +428,8 @@ def main():
     a = ap.parse_args()
     if a.cmd == 'calib':
         return calib_cmd(a)
+    if a.cmd == 'rough':
+        return rough_cmd(a)
     calib = load_calib(a.calib)
     if a.cmd == 'bench':
         return bench(a.rec, a.threads, calib, a.zrange)

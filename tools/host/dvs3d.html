@@ -92,7 +92,7 @@ async function stats() {
   try { s = await (await fetch('/stats')).json(); } catch (e) { return; }
   const rows = [['쌍', `${s.pairs ?? 0} (버림 ${s.dropped ?? 0})`], ['점', s.points ?? 0],
     ['입력', s.source === 'frame.png' ? 'frame.png (임시: 시각 없음, 요청 시각으로 짝)' : '/evframe'],
-    ['보정', s.calib ? '있음' : '없음']];
+    ['보정', s.calib === 'rough' ? '대략 (나란히 가정, 세로만 맞춤)' : s.calib ? '있음' : '없음']];
   for (const [k, v] of Object.entries(s.timing_ms || {})) rows.push([`${k} (ms)`, v]);
   (s.boards || []).forEach((b, i) => rows.push([`보드${i + 1} ${b.host}`,
     `왕복 ${ms(b.rtt_ms)} ms${b.uncertain ? ' (동기 불확실)' : ''}, 받음 ${(b.bytes / 1e6).toFixed(1)} MB` +

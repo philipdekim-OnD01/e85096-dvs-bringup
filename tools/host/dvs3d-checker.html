@@ -5,35 +5,32 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DVS 보정 바둑판</title>
 <style>
+  /* dvs3d.py calib (11.56): 10 x 7 squares (9 x 6 inner corners), top-left square black. Only the white squares
+     blink (white <-> black every 100 ms): a DVS fires on them alone, so its time surface shows the board.
+     Inverting would fire every square. CSS only, so it also blinks in a tablet's mail preview (no JavaScript). */
+  :root { --s: min(calc(100vw / 11), calc(100vh / 8)); }
   html, body { margin: 0; height: 100%; background: #000; color: #888; font: 14px system-ui, sans-serif; overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh; }
+  body { display: grid; place-items: center; }
+  .board { width: calc(10 * var(--s)); height: calc(7 * var(--s));
+    background: repeating-conic-gradient(#fff 0 25%, #000 0 50%) 0 0 / calc(2 * var(--s)) calc(2 * var(--s));
+    animation: blink .2s steps(1, end) infinite; }
+  @keyframes blink { from { opacity: 1 } 50%, to { opacity: 0 } }
   #info { position: fixed; left: 8px; bottom: 8px; }
   button { font: inherit; padding: 6px 12px; }
 </style>
 </head>
 <body>
-<canvas id="c" role="img" aria-label="깜빡이는 바둑판"></canvas>
-<div id="info"><button id="fs">전체 화면</button> <span id="sq"></span></div>
+<div class="board" role="img" aria-label="깜빡이는 바둑판"></div>
+<div id="info"><button id="fs" hidden>전체 화면</button> <span id="sq">한 칸 폭을 자로 재서 --square 값(m)으로 주세요</span></div>
 <script>
-// dvs3d.py calib (11.56): 10 x 7 squares (9 x 6 inner corners). Only the white squares blink (board <-> black every
-// 100 ms): a DVS fires on them alone, so its time surface shows the board. Inverting would fire every square.
-const c = document.getElementById('c'), x = c.getContext('2d');
-let on = false;
-function draw() {
-  c.width = innerWidth * devicePixelRatio; c.height = innerHeight * devicePixelRatio;
-  const s = Math.floor(Math.min(c.width / 11, c.height / 8)), ox = (c.width - 10 * s) / 2, oy = (c.height - 7 * s) / 2;
-  x.fillStyle = '#000'; x.fillRect(0, 0, c.width, c.height);
-  if (on) {
-    x.fillStyle = '#fff';
-    for (let r = 0; r < 7; r++) for (let k = 0; k < 10; k++) if ((r + k) % 2) x.fillRect(ox + k * s, oy + r * s, s, s);
-  }
-  document.getElementById('sq').textContent =
-    `한 칸 ${Math.round(s / devicePixelRatio)} CSS px: 화면에서 자로 재서 --square 값(m)으로 주세요`;
-}
-setInterval(() => { on = !on; draw(); }, 100);
-document.getElementById('fs').onclick = () => document.documentElement.requestFullscreen();
-addEventListener('resize', draw);
-draw();
+// Optional extras when scripts run: full screen (webkit prefix for iPad), keep the screen on, show the square size.
+const fs = document.getElementById('fs'), el = document.documentElement;
+const full = el.requestFullscreen || el.webkitRequestFullscreen;
+if (full) { fs.hidden = false; fs.onclick = () => { full.call(el); navigator.wakeLock?.request('screen').catch(() => {}); }; }
+const show = () => document.getElementById('sq').textContent =
+  `한 칸 ${Math.round(document.querySelector('.board').offsetWidth / 10)} CSS px: 화면에서 자로 재서 --square 값(m)으로 주세요`;
+addEventListener('resize', show);
+show();
 </script>
 </body>
 </html>

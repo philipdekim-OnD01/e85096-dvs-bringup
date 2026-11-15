@@ -177,7 +177,7 @@ class TestServe(unittest.TestCase):
         r = self.get('/')
         self.assertEqual(r.status, 200)
         self.assertIn(b'<canvas', r.read())
-        self.assertIn(b'<canvas', self.get('/checker').read())
+        self.assertIn(b'class="board"', self.get('/checker').read())
 
     def test_points_and_stats(self):
         self.assertEqual(len(self.get('/points').read()), 4 + 13 * 2)
@@ -189,6 +189,40 @@ class TestServe(unittest.TestCase):
         self.assertEqual(e.exception.code, 503)
         self.live.state['views'] = b'\x89PNG'
         self.assertEqual(self.get('/views.png').headers['Content-Type'], 'image/png')
+
+
+class TestRough(unittest.TestCase):      # no corners (blurry lenses): a parallel rig, rows lined up from the images
+    def pair(self, dx, dy):
+        rng = np.random.default_rng(0)
+        pat = rng.integers(1, 256, (60, 60), dtype=np.uint8)
+        left, right = np.zeros((360, 480), np.uint8), np.zeros((360, 480), np.uint8)
+        left[150:210, 200:260] = pat
+        right[150 + dy:210 + dy, 200 - dx:260 - dx] = pat     # dx: disparity, dy: the right sensor sits higher
+        return left, right
+
+    def test_shift(self):
+        self.assertEqual(dvs3d.shift([self.pair(20, 12)]), (20, 12))
+
+    def test_shift_blurry_left_sharp_right(self):   # 11-15: board 1 a wide blur, board 2 the squares (11.56)
+        sq = np.kron((np.indices((7, 10)).sum(0) % 2).astype(np.uint8) * 200, np.ones((27, 27), np.uint8))
+        right = np.zeros((360, 480), np.uint8)
+        right[150:150 + 189, 30:300] = sq
+        left = np.zeros((360, 480), np.uint8)
+        left[83:83 + 189, 129:399] = sq
+        left = np.where(cv2.GaussianBlur(left, (0, 0), 25) > 20, 150, 0).astype(np.uint8)
+        dx, dy = dvs3d.shift([(left, right)] * 5)
+        self.assertLess(abs(dx - 99), 6)
+        self.assertLess(abs(dy - 67), 6)
+
+    def test_depth_after_lining_up_the_rows(self):
+        left, right = self.pair(20, 12)
+        c = dvs3d.rough_calib(F, B, 12)
+        self.assertTrue(c['rough'])
+        xyz = Pipeline(c, zrange=(1.0, 10.0)).run(left, right)[0]
+        self.assertGreater(len(xyz), 500)
+        self.assertAlmostEqual(float(np.median(xyz[:, 2])), F * B / 20, delta=0.45)
+        unaligned = Pipeline(dvs3d.rough_calib(F, B, 0), zrange=(1.0, 10.0)).run(left, right)[0]
+        self.assertLess(len(unaligned), len(xyz) / 2)      # 12 rows apart: 1100 of 3600 points, 40 % of them wrong
 
 
 PATTERN, SQUARE = (9, 6), 0.03
