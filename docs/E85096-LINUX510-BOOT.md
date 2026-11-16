@@ -3774,3 +3774,145 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
   - 그림 종류 넓히기(자연 영상, 손).
   - 모델 축소와 INT8, A55 속도 측정.
   - 보드 사이 MIPI 연결과 분류.
+
+### 11.63 재현 백서(16:9, 57장)와 core 사용률 다시 재기 (2026-11-16, 사용자 외출 중)
+
+**지시(사용자).** "850에 사용된 os, kernel버전, 개발환경, 각 core별 지정 역활과 사용량, 지정방법 코드예, 그리고, 맥에서 사용한 unet 학습방법과 코드, 학습자료는 왜 그런 모양인지 근거, 등등 이 내용을 보고 그대로 할 수 있도록 자세히 백서를 만들어 줘. 16:9 수정가능 html 슬라이드로", "만들어 지면 메일로 보내", "전문용어는 영어를 사용하고, 페이지 하단에 각주로 단어 설명 쉽게써줘".
+
+**만든 것.** [E850-DVS-WHITEPAPER-20261116.html](E850-DVS-WHITEPAPER-20261116.html): 16:9 슬라이드 57장, HTML 한 파일(1.0 MB, 그림 포함). 강의 자료(11.62)와 같은 틀이라 글자를 눌러 고치고 "HTML로 저장", 발표 모드, 인쇄(PDF)가 된다.
+- 구성: 01 Hardware·OS·kernel(boot 흐름, command line 인자의 이유), 02 개발 환경(Mac 버전, Docker volume, 접속 경로), 03 build·flash·복구, 04 core 배치(역할, 근거, systemd·C·Python 지정 코드, uclamp 측정, 사용률, 확인 명령), 05 board DVS pipeline과 DVS 설정, 06 학습 자료(정답 그림 페이지 설계 근거 세 쪽, 녹화, 정렬, 학습 입력), 07 U-Net(구조, 코드 네 쪽, 손상 증강, 설정 근거, 실행 순서, 손실 곡선, 결과), 08 재현 checklist(단계, 시간, 통과 기준), 파일 위치, 한계.
+- 전문용어는 영어로 두고, 쪽마다 아래에 쉬운 한글 각주를 달았다. 본문의 각주 번호와 각주 줄이 쪽마다 같은지 스크립트로 검사했다.
+- 코드 쪽은 손으로 옮겨 적지 않았다. `build.py`의 `CODE` 표가 실제 파일(`dvsview.c`, `dvsctl.py`, `dvsact.py`, `e850-cpu7.conf`, `dvsfuse_page.py`, `rec.py`, `train.py`)에서 시작·끝 문자열로 잘라 넣는다. 코드를 고치면 다시 빌드하면 된다.
+- 원본(`build.py`, `slides.html`, `check.py`, `ui_test.py`, `thr.sh`), PDF(57쪽), 학습 코드 zip은 `~/e850-logs/dvs3d/whitepaper-20261116/`에 있다. zip(`e850-dvs-fusion-scripts-20261116.zip`)은 `~/e850-logs/`에 풀면 백서의 "실행 순서" 쪽에 적은 폴더 모양이 된다.
+
+**새로 잰 것([관찰], 2026-11-16 08:27 KST, 두 보드 각 5초, 읽기 명령만).**
+- core 사용률(`/proc/stat`), 보드1 / 보드2: CPU0 3.6 / 3.6%, CPU1 5.4 / 5.0%, CPU2 34.1 / 20.3%, CPU3 6.0 / 6.4%, CPU4 14.2 / 4.8%, CPU5 40.4 / 0.4%, CPU6 0.0 / 49.4%, CPU7 0.0 / 0.4%.
+- thread 사용률(`/proc/<pid>/task/*/stat`, 따로 잰 5초, 스크립트 `thr.sh`): `dvs-act` 53.8 / 53.8%(허용 4-6), `dvs-render` 36.2 / 20.6%(2), `dvs-filter` 5.4 / 5.8%(3), 디코더(`python3` 주 스레드) 4.4 / 5.8%(1), `dvs-banner`·`dvs-hist` 0.2%(7). 이때 웹을 보는 사람은 없었다.
+- 그리기 차이는 화면 설정 fps가 달라서로 본다(보드1 37, 보드2 23, 11.62의 `settings-after.txt`) [가설].
+- IRQ: 93개의 `smp_affinity_list`가 0-7인데, 장치 IRQ 수는 CPU0에만 있다(보드1 DSIM 7,492,128, `scsc_wlbt` 2,293,669). irqbalance는 없다. 보드2 GIC는 `arm,cortex-a15-gic`이다.
+- ssh 셸의 `nproc`는 7이다(`e850-cpu7.conf`). clock은 두 cluster 모두 546~2002 MHz 12단계, governor는 schedutil이다.
+- Mac 환경: Apple M6(12 core, 32 GB), macOS 27.2.1, Python 3.12.2(`~/.venvs/torch-python`), PyTorch 2.12.0(MPS), opencv-python 4.13.0.92, NumPy 2.4.6, SciPy 1.17.1, Docker 29.9.3. 보드: Python 3.11.2, NumPy 1.24.2, onnxruntime 1.31.1, gcc 없음.
+- `/proc/cmdline` 앞부분(`stack_depot_disable`, `kvm-arm.mode=protected`, `cgroup_disable=pressure` 등)과 `console=ttySAC0`, `androidboot.*`는 `build-bootimg.sh`의 `CMDLINE`에 없다. LK가 붙이는 것으로 본다 [가설].
+
+**검사.** headless Chrome에서 57장 모두 넘침 0, 깨진 그림 0, 390 px 폭 가로 넘침 없음. 이번에는 `check.py`가 코드 블록(`pre`)의 가로 잘림도 본다(강의 자료 때는 뺐다). 처음 빌드에서 코드 블록 7곳이 넘치거나 잘려서 쪽을 나누고 배치를 바꿨다. JetBrains Mono 합자 때문에 `<=`가 `≤`로 보여서 합자를 껐다. `ui_test.py`(발표 모드, 키, Esc, 저장) 7/7 통과, PDF 57쪽.
+
+**메일.** 2026-11-16 08:45:46에 PDF, HTML, 학습 코드 zip을 사용자 메일로 보냈다. 보낸편지함에서 첨부 3개를 확인했다.
+
+**보드1 응답 없음(관찰).** 08:27 측정 뒤 08:31쯤부터 보드1(192.168.0.236)에 ssh가 시간 초과, ping은 `No route to host`/`Host is down`이다. 보드1에 보낸 명령은 `/proc`·sysfs 읽기, `ps`, `systemctl show`뿐이었다. Mac에 USB(ACM)와 UART가 꽂혀 있지 않아 원인을 보지 못했다. 보드2는 정상이다.
+
+**사용자 전원 재투입(2026-11-16 21:57 KST쯤, 관찰).** 사용자가 "보드 3개 다 올림"이라고 알렸다. 22:00에 확인한 결과는 다음과 같다.
+- 보드1(machine-id `4aeede4c`)과 보드4(`e0c18890`): uptime 3분, `dvslive`·`nginx`·`e850-wifi` active, 80번 포트 응답 302.
+- 보드2(`6f31c0bd`): 재부팅 없이 1일 7시간째 동작 중, 같은 서비스 active.
+- 보드3(.234): ping 실패. 서브넷(.2~.254)을 훑어도 ARP에 보드3 MAC(00:00:0f:0a:74:9c, fastboot 일련번호로 추정)이 없다. `A5069RR4` UART를 `~/e850-logs/uart-board3.log`에 다시 기록하기 시작했지만 줄바꿈을 보내도 0바이트였다. 꺼짐, 멈춤, Wi-Fi 없이 동작 중인 상태 가운데 어느 것인지 구별하지 못했다.
+- 보드1이 08:31에 멈춘 원인: 이전 부팅에서 philip이 볼 수 있는 journal은 08:29:11 KST의 ssh 끊김이 마지막이다. 커널 journal은 root가 필요해 보지 못했다. 원인 모름.
+
+**저장소에 바꾼 것(커밋 안 함).** `docs/E850-DVS-WHITEPAPER-20261116.html` 추가, 이 절, `BRINGUP_STATUS.md`. 보드에는 바꾼 것이 없다.
+
+**남은 것.**
+- 학습 코드(`rec.py`, `build.py`, `train.py`, `sweep.py`, `eval.py`, `stats.py`)를 저장소로 옮길지 사용자 확인. 지금은 `~/e850-logs/dvs3d/` 아래에만 있다. `stats.py`는 경로가 절대 경로다.
+- 보드3이 네트워크에 없다. USB-C를 꽂아 fastboot·ACM으로 상태를 보거나, UART를 본 채로 전원을 다시 넣는다.
+- 커밋은 사용자 확인 뒤.
+
+### 11.64 현미경 모드 0단계: 보드4에서 USB 호스트 켜기 시험 (2026-11-17)
+
+**목표(사용자 결정).** SOL 현미경(CX3 UVC, 별도 저장소 `sol-cx3-uvc`)을 E850에 꽂아 HDMI와 Wi-Fi 웹으로 보인다. 레지스터도 읽는다. 부팅 때 DVS 모드와 현미경 모드를 고른다. 용도는 사람들에게 보여 주기와 시료 사진 기록이다. 설치는 보드3에 한다. 보드3이 네트워크에 없어서 0단계 시험은 보드4에서 했다. 보드4에는 사용자가 오늘 DVS 센서를 달았다. dvslive가 영상과 레지스터를 웹과 HDMI에 보인다(사용자 확인).
+
+**알아낸 것.**
+- 모든 보드 커널에 `CONFIG_USB_VIDEO_CLASS=y`, `CONFIG_USB_XHCI_HCD=y`, `CONFIG_USB_DWC3_DUAL_ROLE=y`가 있다. fb0은 1920×1080이다. 보드4에는 `v4l2-ctl`과 numpy가 있다.
+- USB 컨트롤러는 DWC3 하나(`13600000.dwc3`)다. 호스트로 바꾸면 USB-C의 ACM과 ECM이 없어진다.
+- vendor glue에 OTG 상태 sysfs가 있다. `13600000.usb/b_sess`에 0을 쓰면 gadget이 멈춘다. `id`에 0을 쓰면 `a_host`가 되고 xHCI가 올라온다(USB2 루트 포트 1개). `id 1`, `b_sess 1`로 gadget에 돌아오고 ACM도 다시 붙는다. 다섯 번 바꿨고 보드는 멈추지 않았다.
+- 메인라인 `exynos850-e850-96.dts`(kernel.org): DWC3 아래 `usb424,9514`(LAN9514 허브 + 이더넷), USB-A 5 V는 `gpa3-5` active low, 케이블 감지는 `gpa0-0`이다.
+- 이 보드의 Android 10 DTBO(`mmcblk0p5`, 개정 0/1/2 세 개 모두 같음): `regulator-usb-host-vbus`가 `gpa3-5` active low, `regulator-always-on`, 핀은 출력(`usb-pwr-ctl`)이다. DWC3는 `dr_mode = "host"`, `maximum-speed = "high-speed"`이다. 허브 노드나 허브 GPIO는 없다.
+- 지금 쓰는 ERD3830 DT는 `gpa3-5`를 `i2c5-bus`로 두지만, I2C5(`13880000`)에 드라이버가 붙지 않아 핀은 비어 있다(`pinmux-pins`: UNCLAIMED).
+
+**시험(`tools/board/scope/`: `host-spike.sh`, `host-diag.sh`, `host-loop.sh`, `gpiohold.py`, `gpiodump.py`).** 현미경(스위치 ③ NORMAL, EEPROM 부팅)을 보드4 USB-A에 꽂았다.
+
+| 시험 | Mac USB-C | gpa3-5 | 결과 |
+|---|---|---|---|
+| 1 | 꽂힘 | low 90 s | 루트 포트에 장치 없음 |
+| 2 | 뺌 | low 120 s | 장치 없음 |
+| 3 | 뺌 | low 40 s | 장치 없음. PORTSC `Powered Not-connected Disabled Link:RxDetect` |
+| 4 | 뺌 | high 40 s | 같음 |
+| 5 | 뺌 | low 120 s, 그동안 가운데 USB 포트로 옮김 | 같음 |
+
+- 현미경 불은 어느 시험에서도 켜지지 않았다(사용자 관찰).
+- gpiolib은 `gpio-29 (e850-scope) out lo/hi`로 보였다.
+
+**판단.**
+- LAN9514 허브가 루트 포트에 한 번도 나타나지 않았다. USB-A 포트 전원은 LAN9514가 포트마다 켜는 구조로 보인다(데이터시트: 외부 전원 스위치를 허브가 제어). 그렇다면 현미경 불이 꺼진 것은 허브가 동작하지 않은 결과다. 가설이고, 측정하지 않았다.
+- 남은 원인 후보는 셋이다. 신호선 스위치(USB-C 쪽과 허브 쪽), 허브 전원·리셋, 호스트용 PHY 설정. 회로도가 없어서 가리지 못했다.
+- WinLink 하드웨어 매뉴얼에 "USB Host ports" 절이 있지만 사이트가 자동 접근을 막았다.
+
+**이어서: 원인을 찾았다(같은 날).** 사용자가 로컬 회로도(`E850-96_Circuits_v1.0.pdf`)와 하드웨어 매뉴얼 v1.12를 줬다. 현미경을 Mac에 꽂으면 불이 켜졌다(사용자 관찰).
+- 회로도에서 확인한 사실:
+  - USB 신호선은 mux U6(TS3USB221A)이 고른다. micro-USB J1의 VBUS가 Q2를 거쳐 `USB_MODE_SEL`을 정한다. 케이블이 없으면 LAN9514 허브(U16)로 간다. 그래서 현미경을 쓰려면 micro-USB 케이블을 빼야 한다. 사용자가 "USB-C"·"adb"라고 부르는 포트가 이 micro-USB다.
+  - 허브는 USB-A P2·P3와 HS 확장 커넥터에 연결된다. 포트 전원 스위치 U14(MIC2026)의 ENA·ENB는 허브의 PRTCTL2·3(풀업)이 켠다. `USB_PWR_CTL`은 gpa3-5이고 low가 허용이다.
+  - 허브 전원 VDD_LAN은 PMIC S2MPU12의 **LDO24**다. 허브 nRESET은 RC로 풀리고 GPIO가 없다.
+- 원인: ERD3830 DT는 LDO24를 SD 슬롯(dwmmc2)의 `vmmc`로 쓴다. 그래서 SD 카드가 없으면 LDO24가 꺼진 채로 있다. 이 보드의 Android 10 DTBO(rev2)에서는 LDO24가 3.3 V always-on이다.
+- 해결: `modules/e850-hubpwr`(이름 `vmmc` 레귤레이터를 3.3 V로 켜 둠)를 보드4에 insmod했다. 그러자 허브, 이더넷, 현미경이 차례로 붙었다(`2-1`, `2-1.1`, `2-1.3`). 현미경 불이 켜지고(사용자 확인) `/dev/video0`이 생겼다. `v4l2-ctl` 캡처는 816×612와 1632×1224 모두 7.20 fps였다.
+- 위 판단 중 "허브가 동작하지 않아 불이 꺼졌다"는 맞았다. 허브에 전원이 없었다.
+- 남은 의문(측정만 함): 816×612 캡처 하나는 화소가 모두 255였다. 1632 영상은 평균 61로 Mac에서 본 약 132보다 어두웠다. 원인은 모른다.
+
+**보드에 바꾼 것.** `e850-hubpwr.ko`를 `/var/tmp`에서 insmod했다(`/lib/modules`에는 설치하지 않았으므로 재부팅하면 사라진다). 그 밖에는 `/var/tmp` 스크립트와 `systemd-run` 일시 유닛뿐이다. `scope-loop.service`는 끝냈다. 그 뒤 쓴 임시 뷰어 `scope-live.py`(`scope-live2` 유닛)는 11.65의 뷰어로 바꾸면서 껐다.
+
+### 11.65 현미경 웹 뷰어: 연구실 전자현미경 스타일 (2026-11-17)
+
+**요청.** 사용자: "ui/ux를 멋지게 만들어줘 실험실에 있는 전자 현미경 처럼". 목업을 보인 뒤 사용자가 "좋아 만들어"라고 했다.
+
+**구성(`tools/board/scope/`).**
+- `scope-run.sh`(root, `systemd-run --unit=e850-scope`):
+  1. `e850-hubpwr`가 없으면 insmod한다.
+  2. `gpiohold.py 3 5 0`으로 USB-A 전원을 허용한다.
+  3. `b_sess 0` → `id 0`으로 `a_host`로 바꾼다.
+  4. `scope.py`를 돌리고, 끝나면 다시 띄운다(`/reload`).
+  5. `stop` 파일이 생기면 gadget으로 돌아간다.
+- `scope.py`(:8090):
+  - `v4l2-ctl` YUYV 1632×1224 파이프에서 Y만 쓴다.
+  - 평균 1~16장(링 버퍼), 평탄화를 처리한다. 평탄화는 빈 시야 16장으로 gain = 평균/누적을 만들어 `flat.npy`에 둔다.
+  - PNG는 zlib으로 직접 만든다.
+  - `/frame.png?x,y,w,h,step`: step 2는 전체를 2×2 평균한 미리보기, step 1은 보이는 영역을 원본 화소로 준다. `after=n`이면 새 프레임이 올 때까지 최대 1초 기다린다(long poll).
+  - 펌웨어 vendor 요청은 usbfs로 보낸다. 0xD0은 진단, 0xD3·0xD2는 레지스터 읽기·쓰기, 0xD6은 노출이다.
+  - 사진은 `/var/lib/e850-scope/photos/`에 원본 PNG, 1/8 썸네일, 조건 JSON으로 남는다. 설정은 `settings.json`에 둔다.
+  - 시계와 파일 이름은 `TZ=Asia/Seoul`이다. 보드 시스템 시간대(Etc/UTC)는 그대로 두었다.
+- `scope.html`:
+  - 어두운 화면, 머리줄(LIVE·fps·시계·정지·촬영).
+  - 휠·끌기·핀치 확대와 이동. 확대가 1.6배를 넘으면 원본 화소를 받는다.
+  - 십자선, 자동 길이 축척 막대, 거리 측정(µm).
+  - 오른쪽 판:
+    - 노출(로그 슬라이더)·자동 노출·평균.
+    - 표시용 밝기·대비·감마·반전·자동 대비(브라우저만).
+    - 평탄화, 보이는 영역 히스토그램(평균·최소/최대·포화).
+    - 레지스터 읽기·쓰기(쓰기는 확인 창), 진단값.
+    - 촬영 목록(원본 PNG, 데이터 막대 포함 PNG를 브라우저에서 합성).
+    - 화소 크기 설정.
+  - 아래 데이터 막대: 노출·평균·평탄화·화소·시야·배율·커서 좌표와 값·시료 이름.
+  - 단축키: Space, C, F, X, M, +/−.
+
+**시험.**
+- Mac에서 `--fake`(현미경 원본 3장 반복):
+  - 모든 엔드포인트 응답. 한글 시료 이름 사진 저장, 평탄화 16장, `../` 경로는 404.
+  - 헤드리스 Chrome 1600×950 화면을 확인했다. 390 px 틀에서는 문서 폭 390, 넘치는 요소 0.
+  - ×6 확대에서 원본 화소 영역을 받았다. 측정선 134.2 px × 2.24 = 300.6 µm가 화면에 301 µm로 나왔다.
+  - 첫 실행에서 `send()` 인자 순서 버그로 PNG 응답이 죽었고, 고쳤다.
+- 보드4 `--fake`(포트 8094, 가짜 원본이 초당 약 5장): 미리보기 185 KB를 초당 3.9장, 600×400 원본 영역 107 KB를 초당 4.8장 받았다.
+- 보드4 실물(micro-USB를 뺀 뒤): 칩 ID 0x4608, USB HS, MIPI 오류 0, 프레임 주기 139 ms. 화면에 시료 영상이 나왔다(헤드리스 Chrome으로 확인).
+- 10초 동안 센서는 70장(7.0/s)을 냈고, 온전한 프레임은 59장, 뷰어가 받은 것은 62장(6.2/s)이었다. 같은 시각 dvslive가 CPU 141~165%를 쓰고 있었다.
+- `/reload`로 새 `scope.py`가 약 2초 만에 다시 스트리밍했다(두 번).
+
+**판단.**
+- 온전하지 않은 프레임은 CX3가 입력을 잃은 프레임이다. 펌웨어는 이런 프레임을 짧게 끝낸다(`app.c` Pump). 보드의 uvcvideo는 `nodrop=0`이라 크기가 틀린 프레임을 버린다. 그래서 파이프의 프레임 경계는 어긋나지 않는다. 연속 두 원본 프레임의 줄별 평균도 같았다.
+- 입력을 잃는 원인은 USB 쪽이 제때 비우지 못한 것으로 본다. 모든 장치 IRQ(xHCI, Wi-Fi)가 CPU0에 있다. 가설이고, dvslive를 끈 상태에서는 재지 않았다.
+
+**확인하지 않은 것.**
+- 실물에서의 촬영 저장, 평탄화, 자동 노출, 레지스터 쓰기, 데이터 막대 PNG.
+- `/quit` 뒤 gadget 복귀.
+- 화소 크기 2.24 µm(Hi-846 화소 1.12 µm × 2로 가정). 축척 막대와 측정값은 이 값에 달려 있다.
+
+**보드4에 바꾼 것.**
+- `/var/tmp/e850-scope/`(philip 소유 파일을 root가 실행한다. 개발용 지름길이다).
+- `/var/lib/e850-scope/`(설정, 사진).
+- 일시 유닛 `e850-scope`. 재부팅하면 사라진다.
+- 유닛이 도는 동안 DWC3는 호스트 모드이고 ACM·ECM이 없다. 작업은 Wi-Fi ssh로 한다.
+- 고칠 때: `scp … philip@192.168.0.244:/var/tmp/e850-scope/` 다음 `curl http://192.168.0.244:8090/reload`.
+- 끄기: `/quit` 또는 `touch /var/tmp/e850-scope/stop`.
+- 시작할 때는 root가 필요하다. 이번에는 micro-USB를 꽂아 ACM에서 `systemd-run`을 하고, 사용자가 케이블을 뺐다.

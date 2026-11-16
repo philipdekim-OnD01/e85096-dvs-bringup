@@ -1,0 +1,1 @@
+obj-m := e850-hubpwr.o

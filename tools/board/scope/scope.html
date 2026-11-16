@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SOL Microscope</title>
+<style>
+:root{--bg:#090c10;--panel:#10161d;--panel2:#151d26;--line:#223040;--txt:#c9d4df;--dim:#7a8a99;--acc:#3fd0e0;--amb:#f2b544;--red:#ff5a5f;--ok:#4cd98a;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:13px/1.4 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+body{display:grid;grid-template-rows:auto 1fr auto;height:100vh;overflow:hidden}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:6px 12px;background:linear-gradient(#141c25,#0e141a);border-bottom:1px solid var(--line)}
+.brand{font-weight:700;letter-spacing:.14em;color:#e8f6fa}.brand small{color:var(--acc);letter-spacing:.1em;margin-left:6px;font-weight:600}
+.pill{display:flex;align-items:center;gap:6px;font:600 12px var(--mono);padding:2px 8px;border:1px solid var(--line);border-radius:10px;color:var(--dim)}
+.pill i{width:8px;height:8px;border-radius:50%;background:#444}
+.pill.on{color:var(--ok)}.pill.on i{background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 1.2s infinite}
+.pill.pause{color:var(--amb)}.pill.pause i{background:var(--amb)}
+@keyframes pulse{50%{opacity:.35}}
+.mono{font-family:var(--mono)}.sp{flex:1}.dim{color:var(--dim)}
+button,.btn{font:inherit;color:var(--txt);background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:4px 10px;cursor:pointer;text-decoration:none;white-space:nowrap}
+button:hover,.btn:hover{border-color:var(--acc);color:#fff}
+button.on{background:#123a40;border-color:var(--acc);color:#dffaff}
+button.rec{background:#3a1416;border-color:#7a2a2e;color:#ffd9da;font-weight:700}button.rec:hover{border-color:var(--red)}
+main{display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:0}
+#view{position:relative;background:#000;min-height:0;overflow:hidden;cursor:crosshair;touch-action:none}
+#cv{position:absolute;inset:0;width:100%;height:100%}
+#msg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--dim);font-size:15px;text-align:center;pointer-events:none}
+#tag{position:absolute;right:10px;top:8px;font:600 11px var(--mono);color:var(--acc);background:#000a;padding:2px 6px;border-radius:3px;pointer-events:none}
+aside{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:4px 0 20px}
+.grp{border-bottom:1px solid var(--line);padding:8px 12px 10px}
+.grp h3{margin:0 0 6px;font:700 11px var(--mono);letter-spacing:.14em;color:var(--acc);text-transform:uppercase}
+.row{display:flex;align-items:center;gap:8px;margin:5px 0}.row label{width:52px;color:var(--dim);flex:none}
+.row input[type=range]{flex:1;accent-color:var(--acc);min-width:0}
+.val{width:64px;text-align:right;font-family:var(--mono);color:#e6eef5;flex:none}
+.seg{display:flex;flex:1}.seg button{flex:1;border-radius:0;padding:3px 0;margin-left:-1px}.seg button:first-child{border-radius:4px 0 0 4px}.seg button:last-child{border-radius:0 4px 4px 0}
+input[type=text],input[type=number],select{font:12px var(--mono);color:#e6eef5;background:#0b1117;border:1px solid var(--line);border-radius:4px;padding:3px 6px;min-width:0}
+#hist{width:100%;height:70px;display:block;background:#0b1117;border:1px solid var(--line);border-radius:3px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;font:12px var(--mono)}.kv span:nth-child(odd){color:var(--dim)}
+#gal{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}#gal img{width:100%;display:block;border:1px solid var(--line);border-radius:2px;cursor:pointer;image-rendering:auto}
+#gal img:hover{border-color:var(--acc)}
+footer{display:flex;flex-wrap:wrap;align-items:center;gap:4px 18px;padding:5px 12px;background:#0c1116;border-top:1px solid var(--line);font:12px var(--mono)}
+footer span{color:var(--dim)}footer b{color:#e8f0f6;font-weight:600}footer input{width:170px}
+#toast{position:fixed;left:50%;bottom:46px;transform:translateX(-50%);background:#123a40;border:1px solid var(--acc);color:#e8fdff;padding:7px 14px;border-radius:5px;opacity:0;transition:opacity .3s;pointer-events:none}
+#modal{position:fixed;inset:0;background:#000d;display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px}
+#modal img{max-width:100%;max-height:78vh;border:1px solid var(--line)}#modal .bar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.kbd{font:11px var(--mono);color:var(--dim)}
+@media (max-width:900px){body{height:auto;overflow-x:hidden}main{grid-template-columns:minmax(0,1fr)}#clock,#frm{display:none}header{padding:6px 10px}#view{height:70vw;min-height:300px}aside{border-left:0}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">SOL MICROSCOPE<small>E850</small></div>
+  <div id="live" class="pill"><i></i><span>WAIT</span></div>
+  <span class="mono" id="fps">— fps</span><span class="mono dim" id="frm"></span>
+  <div class="sp"></div>
+  <span class="mono dim" id="clock"></span>
+  <button id="bPause" title="Space">❚❚ 정지</button>
+  <button id="bShot" class="rec" title="C">◉ 촬영</button>
+</header>
+<main>
+  <section id="view"><canvas id="cv"></canvas><div id="msg">연결하는 중…</div><div id="tag"></div></section>
+  <aside>
+    <div class="grp"><h3>촬영 조건 · 센서</h3>
+      <div class="row"><label>노출</label><input type="range" id="exp" min="0" max="1000"><span class="val" id="expv"></span></div>
+      <div class="row"><label>평균</label><div class="seg" id="avg"></div></div>
+      <div class="row"><label></label><button id="bAE" title="평균 밝기가 중간이 되도록 노출을 맞춤">자동 노출</button><span class="dim" id="aeTxt"></span></div>
+    </div>
+    <div class="grp"><h3>표시 (화면만)</h3>
+      <div class="row"><label>밝기</label><input type="range" id="bri" min="-100" max="100" value="0"><span class="val" id="briv"></span></div>
+      <div class="row"><label>대비</label><input type="range" id="con" min="-100" max="100" value="0"><span class="val" id="conv"></span></div>
+      <div class="row"><label>감마</label><input type="range" id="gam" min="-100" max="100" value="0"><span class="val" id="gamv"></span></div>
+      <div class="row"><label></label><button id="bAC">자동 대비</button><button id="bRst">초기화</button></div>
+      <div class="row"><label></label><button id="bX" class="on" title="X">십자선</button><button id="bInv">반전</button><button id="bFit" title="F / 더블클릭">맞춤</button></div>
+    </div>
+    <div class="grp"><h3>평탄화 (먼지·조명 보정)</h3>
+      <div class="row"><button id="bFlatTake" title="시료를 치운 빈 상태에서">기준 찍기</button><button id="bFlat">보정 켜기</button></div>
+      <div class="dim" id="flatTxt"></div>
+    </div>
+    <div class="grp"><h3>히스토그램 <span class="dim" id="histScope"></span></h3>
+      <canvas id="hist" width="512" height="140"></canvas>
+      <div class="kv" style="margin-top:5px"><span>평균</span><b id="hMean">—</b><span>최소/최대</span><b id="hMM">—</b><span>포화</span><b id="hSat">—</b></div>
+    </div>
+    <div class="grp"><h3>측정</h3>
+      <div class="row"><button id="bMeas" title="M">거리 재기</button><button id="bMClr">지우기</button></div>
+      <div class="kv" id="measList"></div>
+    </div>
+    <div class="grp"><h3>센서 레지스터 · 상태</h3>
+      <div class="row"><select id="regSel" style="flex:1">
+        <option value="0f16">0x0F16 칩 ID</option><option value="0006">0x0006 프레임 길이(FLL)</option>
+        <option value="0008">0x0008 줄 길이(LLP)</option><option value="0074">0x0074 노출(줄 수)</option>
+        <option value="0a00">0x0A00 스트림 모드</option><option value="">직접 입력…</option></select></div>
+      <div class="row"><input type="text" id="regAddr" placeholder="주소 hex" style="width:90px"><button id="bRegR">읽기</button>
+        <input type="text" id="regVal" placeholder="값 hex" style="width:80px"><button id="bRegW">쓰기</button></div>
+      <div class="mono" id="regOut" style="color:var(--amb);min-height:16px"></div>
+      <div class="kv" id="diag" style="margin-top:4px"></div>
+    </div>
+    <div class="grp"><h3>촬영 목록</h3><div id="gal"></div></div>
+    <div class="grp"><h3>설정</h3>
+      <div class="row"><label>화소</label><input type="number" id="pix" step="0.01" min="0.1" style="width:80px"><span class="dim">µm / 출력 화소</span></div>
+      <div class="dim" style="font-size:11px">렌즈 없는 밀착 촬영이라 배율 1:1. 기본값 2.24 µm = Hi-846 화소 1.12 µm × 2(확인 필요).</div>
+      <div class="kbd" style="margin-top:8px">Space 정지 · C 촬영 · F 맞춤 · X 십자선 · M 측정 · +/− 확대 · 휠 확대 · 끌기 이동</div>
+    </div>
+  </aside>
+</main>
+<footer>
+  <span>노출 <b id="dExp">—</b></span><span>평균 <b id="dAvg">—</b></span><span>평탄화 <b id="dFlat">—</b></span>
+  <span>화소 <b id="dPix">—</b></span><span>시야 <b id="dFov">—</b></span><span>배율 <b id="dZoom">—</b></span>
+  <span>커서 <b id="dCur">—</b></span><div class="sp"></div>
+  <span>시료 <input type="text" id="sample" placeholder="시료 이름"></span>
+</footer>
+<div id="modal"><img id="mImg" alt=""><div class="mono" id="mMeta"></div>
+  <div class="bar"><a class="btn" id="mRaw" download>원본 PNG</a><button id="mBar">데이터 막대 포함 PNG</button><button id="mClose">닫기</button></div></div>
+<div id="toast"></div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const FW = 1632, FH = 1224;                         // full-size image, all image coordinates are in these pixels
+const st = {cfg: {exp: 150, avg: 1, flat: false, pixel_um: 2.24}, live: true, zoom: 1, cx: FW / 2, cy: FH / 2,
+  cross: true, inv: false, measure: false, meas: [], pend: null, cursor: null, n: 0, lastFrameT: 0, fetching: false};
+const disp = {bri: 0, con: 0, gam: 0};
+let src = null;                                     // {img, x, y, w, h, step, data: ImageData}
+const raw = document.createElement("canvas"), rctx = raw.getContext("2d", {willReadFrequently: true});
+const proc = document.createElement("canvas"), pctx = proc.getContext("2d");
+const cv = $("cv"), ctx = cv.getContext("2d");
+let dpr = 1;
+
+function toast(t) { const e = $("toast"); e.textContent = t; e.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.opacity = 0, 2200); }
+const api = (p) => fetch(p).then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.status); return j; }));
+const fmtUm = um => um >= 1000 ? (um / 1000).toFixed(um >= 10000 ? 1 : 2) + " mm" : (um >= 10 ? um.toFixed(0) : um.toFixed(1)) + " µm";
+
+/* ---------- exposure slider: log scale 0.1 ms .. 1 s (firmware unit 100 us, 1..10000) */
+const e2s = e => Math.round(Math.log(e) / Math.log(10000) * 1000), s2e = s => Math.max(1, Math.round(Math.pow(10000, s / 1000)));
+function showExp(e) { $("expv").textContent = (e / 10).toFixed(e < 100 ? 1 : 0) + " ms"; $("dExp").textContent = (e / 10).toFixed(1) + " ms"; }
+$("exp").oninput = () => showExp(s2e(+$("exp").value));
+$("exp").onchange = () => setCfg({exp: s2e(+$("exp").value)});
+["1", "2", "4", "8", "16"].forEach(v => { const b = document.createElement("button"); b.textContent = v; b.onclick = () => setCfg({avg: v}); $("avg").appendChild(b); });
+function setCfg(o) {
+  return api("/set?" + new URLSearchParams(o)).then(c => { st.cfg = c; syncCfg(); }).catch(e => toast("설정 실패: " + e.message));
+}
+function syncCfg() {
+  const c = st.cfg;
+  if (document.activeElement !== $("exp")) { $("exp").value = e2s(c.exp); showExp(c.exp); }
+  [...$("avg").children].forEach(b => b.classList.toggle("on", +b.textContent === c.avg));
+  $("bFlat").classList.toggle("on", c.flat); $("bFlat").textContent = c.flat ? "보정 끄기" : "보정 켜기";
+  if (document.activeElement !== $("pix")) $("pix").value = c.pixel_um;
+  if (document.activeElement !== $("sample")) $("sample").value = c.sample || "";
+  $("dAvg").textContent = c.avg + "장"; $("dFlat").textContent = c.flat ? "켬" : "끔"; $("dPix").textContent = c.pixel_um.toFixed(2) + " µm";
+  $("dFov").textContent = (FW * c.pixel_um / 1000).toFixed(2) + " × " + (FH * c.pixel_um / 1000).toFixed(2) + " mm";
+}
+$("pix").onchange = () => setCfg({pixel_um: $("pix").value});
+$("sample").onchange = () => setCfg({sample: $("sample").value});
+
+/* ---------- auto exposure: scale exposure so the mean of the visible image goes to ~118 */
+$("bAE").onclick = async () => {
+  for (let i = 0; i < 5; i++) {
+    const m = src && src.stats ? src.stats.mean : 0;
+    if (!m) break;
+    $("aeTxt").textContent = `평균 ${m.toFixed(0)}`;
+    if (Math.abs(m - 118) < 10) break;
+    const k = m >= 250 ? 0.4 : 118 / Math.max(m, 4);
+    await setCfg({exp: Math.max(1, Math.min(10000, Math.round(st.cfg.exp * k)))});
+    const n0 = st.n; await new Promise(r => { const t = setInterval(() => { if (st.n >= n0 + 3) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 4000); });
+  }
+  $("aeTxt").textContent = `노출 ${(st.cfg.exp / 10).toFixed(1)} ms`;
+};
+
+/* ---------- display LUT (screen only) */
+function lut() {
+  const b = disp.bri * 1.28, c = Math.pow(4, disp.con / 100), g = Math.pow(3, -disp.gam / 100), L = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) { let x = Math.pow(v / 255, g) * 255; x = (x - 128) * c + 128 + b; L[v] = st.inv ? 255 - x : x; }
+  return L;
+}
+function showDisp() {
+  $("briv").textContent = disp.bri; $("conv").textContent = "×" + Math.pow(4, disp.con / 100).toFixed(2); $("gamv").textContent = Math.pow(3, -disp.gam / 100).toFixed(2);
+}
+["bri", "con", "gam"].forEach(k => $(k).oninput = () => { disp[k] = +$(k).value; showDisp(); process(); });
+$("bRst").onclick = () => { ["bri", "con", "gam"].forEach(k => { disp[k] = 0; $(k).value = 0; }); showDisp(); process(); };
+$("bAC").onclick = () => {            // stretch the 0.5 % .. 99.5 % range of the visible image to full scale
+  if (!src || !src.stats) return;
+  const h = src.stats.hist, tot = h.reduce((a, b) => a + b, 0); let lo = 0, hi = 255, s = 0;
+  for (; lo < 255 && (s += h[lo]) < tot * 0.005; lo++); s = 0; for (; hi > 0 && (s += h[hi]) < tot * 0.005; hi--);
+  if (hi - lo < 4) return;
+  const c = 255 / (hi - lo); disp.con = Math.round(Math.log(c) / Math.log(4) * 100); disp.con = Math.max(-100, Math.min(100, disp.con));
+  disp.gam = 0; disp.bri = Math.round((128 - ((lo + hi) / 2 - 128) * Math.pow(4, disp.con / 100) - 128) / 1.28);
+  disp.bri = Math.max(-100, Math.min(100, disp.bri)); ["bri", "con", "gam"].forEach(k => $(k).value = disp[k]); showDisp(); process();
+};
+$("bX").onclick = () => { st.cross = !st.cross; $("bX").classList.toggle("on", st.cross); draw(); };
+$("bInv").onclick = () => { st.inv = !st.inv; $("bInv").classList.toggle("on", st.inv); process(); };
+$("bFit").onclick = () => fit();
+function fit() { st.zoom = 1; st.cx = FW / 2; st.cy = FH / 2; draw(); }
+
+/* ---------- frames: preview (2x2 mean of the whole image) or, when zoomed in, the visible region at full size */
+function wantRegion() {
+  if (st.zoom < 1.6) return {x: 0, y: 0, w: FW, h: FH, step: 2};
+  const s = scale(), vw = cv.width / s * 1.15, vh = cv.height / s * 1.15;
+  let x = Math.max(0, Math.floor((st.cx - vw / 2) / 2) * 2), y = Math.max(0, Math.floor((st.cy - vh / 2) / 2) * 2);
+  return {x, y, w: Math.min(FW - x, Math.ceil(vw / 2) * 2 + 2), h: Math.min(FH - y, Math.ceil(vh / 2) * 2 + 2), step: 1};
+}
+function fetchFrame() {
+  if (!st.live || st.fetching) return;
+  st.fetching = true;
+  const r = wantRegion(), key = `x=${r.x}&y=${r.y}&w=${r.w}&h=${r.h}&step=${r.step}`;
+  const after = key === st.lastKey && st.frameN != null ? st.frameN : -1;   // same view: wait for the next frame
+  st.lastKey = key;
+  const url = `/frame.png?${key}&after=${after}&t=${Date.now()}`;
+  fetch(url).then(res => {
+    if (!res.ok) throw new Error("no frame");
+    const reg = (res.headers.get("X-Region") || "").split(",").map(Number);
+    return res.blob().then(b => createImageBitmap(b)).then(img => {
+      src = {img, x: reg[0], y: reg[1], w: reg[2], h: reg[3], step: reg[4]};
+      st.frameN = reg[5]; st.lastFrameT = performance.now(); $("msg").style.display = "none"; process();
+    });
+  }).catch(() => {}).finally(() => { st.fetching = false; setTimeout(fetchFrame, st.live ? 30 : 0); });
+}
+function process() {
+  if (!src) return;
+  const {img} = src;
+  if (raw.width !== img.width || raw.height !== img.height) { raw.width = proc.width = img.width; raw.height = proc.height = img.height; }
+  rctx.drawImage(img, 0, 0);
+  const id = rctx.getImageData(0, 0, img.width, img.height), d = id.data, L = lut(), hist = new Uint32Array(256);
+  src.grey = new Uint8Array(img.width * img.height);
+  let sum = 0, mn = 255, mx = 0;
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    const v = d[i]; src.grey[j] = v; hist[v]++; sum += v; if (v < mn) mn = v; if (v > mx) mx = v;
+    const o = L[v]; d[i] = d[i + 1] = d[i + 2] = o;
+  }
+  const n = img.width * img.height;
+  src.stats = {hist, mean: sum / n, mn, mx, sat: (hist[255] + hist[0]) / n};
+  pctx.putImageData(id, 0, 0);
+  drawHist(); draw();
+}
+function drawHist() {
+  const c = $("hist"), g = c.getContext("2d"), h = src.stats.hist, W = c.width, Hh = c.height;
+  g.clearRect(0, 0, W, Hh);
+  let m = 1; for (let v = 1; v < 255; v++) m = Math.max(m, h[v]);
+  const L = lut();
+  g.fillStyle = "#1b2a36"; for (let x = 0; x <= 4; x++) g.fillRect(x * W / 4, 0, 1, Hh);
+  g.beginPath(); g.moveTo(0, Hh);
+  for (let v = 0; v < 256; v++) g.lineTo(v * W / 255, Hh - Math.min(1, Math.sqrt(h[v] / m)) * (Hh - 4));
+  g.lineTo(W, Hh); g.closePath(); g.fillStyle = "#3fd0e055"; g.fill(); g.strokeStyle = "#3fd0e0"; g.lineWidth = 2; g.stroke();
+  g.strokeStyle = "#f2b544"; g.lineWidth = 2; g.beginPath();          // display transfer curve
+  for (let v = 0; v < 256; v += 4) { const y = Hh - L[v] / 255 * (Hh - 2) - 1; v ? g.lineTo(v * W / 255, y) : g.moveTo(0, y); } g.stroke();
+  const s = src.stats; $("hMean").textContent = s.mean.toFixed(1); $("hMM").textContent = s.mn + " / " + s.mx;
+  $("hSat").textContent = (s.sat * 100).toFixed(2) + " %"; $("hSat").style.color = s.sat > 0.01 ? "var(--red)" : "";
+  $("histScope").textContent = src.step === 1 ? "· 보이는 영역" : "· 전체";
+}
+
+/* ---------- view: image -> screen transform */
+function fitScale() { return Math.min(cv.width / FW, cv.height / FH); }
+function scale() { return fitScale() * st.zoom; }
+const toScr = (x, y) => { const s = scale(); return [cv.width / 2 + (x - st.cx) * s, cv.height / 2 + (y - st.cy) * s]; };
+const toImg = (sx, sy) => { const s = scale(); return [st.cx + (sx - cv.width / 2) / s, st.cy + (sy - cv.height / 2) / s]; };
+function clampView() {
+  const s = scale(), hw = cv.width / s / 2, hh = cv.height / s / 2;
+  st.cx = hw * 2 >= FW ? FW / 2 : Math.max(hw, Math.min(FW - hw, st.cx));
+  st.cy = hh * 2 >= FH ? FH / 2 : Math.max(hh, Math.min(FH - hh, st.cy));
+}
+function nice(v) { const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p; }
+function draw() {
+  clampView();
+  const s = scale(), W = cv.width, H = cv.height, um = st.cfg.pixel_um;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  if (src) {
+    ctx.imageSmoothingEnabled = s * (src.step || 1) < 2.5;
+    ctx.setTransform(s, 0, 0, s, W / 2 - st.cx * s, H / 2 - st.cy * s);
+    ctx.drawImage(proc, src.x, src.y, src.w, src.h);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  const [x0, y0] = toScr(0, 0), [x1, y1] = toScr(FW, FH);
+  ctx.strokeStyle = "#223040"; ctx.lineWidth = 1; ctx.strokeRect(x0 - .5, y0 - .5, x1 - x0 + 1, y1 - y0 + 1);
+  if (st.cross) {
+    const [cx, cy] = toScr(FW / 2, FH / 2); ctx.strokeStyle = "rgba(63,208,224,.55)"; ctx.lineWidth = dpr;
+    ctx.beginPath(); ctx.moveTo(cx, Math.max(0, y0)); ctx.lineTo(cx, Math.min(H, y1)); ctx.moveTo(Math.max(0, x0), cy); ctx.lineTo(Math.min(W, x1), cy); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, 14 * dpr, 0, 7); ctx.stroke();
+  }
+  // measurements
+  ctx.font = `600 ${12 * dpr}px ui-monospace,Menlo,monospace`; ctx.lineWidth = 2 * dpr;
+  const seg = (a, b, label) => {
+    const [ax, ay] = toScr(...a), [bx, by] = toScr(...b);
+    ctx.strokeStyle = "#f2b544"; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    for (const [px, py] of [[ax, ay], [bx, by]]) { ctx.beginPath(); ctx.arc(px, py, 3 * dpr, 0, 7); ctx.fillStyle = "#f2b544"; ctx.fill(); }
+    if (label) { const tw = ctx.measureText(label).width; ctx.fillStyle = "#000b"; ctx.fillRect((ax + bx) / 2 + 6 * dpr, (ay + by) / 2 - 16 * dpr, tw + 8 * dpr, 18 * dpr);
+      ctx.fillStyle = "#f2b544"; ctx.fillText(label, (ax + bx) / 2 + 10 * dpr, (ay + by) / 2 - 3 * dpr); }
+  };
+  st.meas.forEach((m, i) => seg(m.a, m.b, `#${i + 1} ${fmtUm(Math.hypot(m.b[0] - m.a[0], m.b[1] - m.a[1]) * um)}`));
+  if (st.pend && st.cursor) seg(st.pend, st.cursor.img, fmtUm(Math.hypot(st.cursor.img[0] - st.pend[0], st.cursor.img[1] - st.pend[1]) * um));
+  // scale bar
+  const target = 160 * dpr, Lum = nice(target / s * um), Lpx = Lum / um * s, bx = 18 * dpr, by = H - 22 * dpr;
+  ctx.fillStyle = "#000a"; ctx.fillRect(bx - 8 * dpr, by - 24 * dpr, Lpx + 16 * dpr, 34 * dpr);
+  ctx.fillStyle = "#fff"; ctx.fillRect(bx, by, Lpx, 4 * dpr); ctx.fillRect(bx, by - 5 * dpr, 2 * dpr, 14 * dpr); ctx.fillRect(bx + Lpx - 2 * dpr, by - 5 * dpr, 2 * dpr, 14 * dpr);
+  ctx.font = `600 ${13 * dpr}px ui-monospace,Menlo,monospace`; ctx.textAlign = "center"; ctx.fillText(fmtUm(Lum), bx + Lpx / 2, by - 8 * dpr); ctx.textAlign = "left";
+  // footer and tag
+  const mag = st.zoom; $("dZoom").textContent = "×" + mag.toFixed(mag < 10 ? 2 : 1) + " · 보이는 폭 " + fmtUm(W / s * um);
+  $("tag").textContent = (src && src.step === 1 ? "원본 화소 " : "미리보기 ½ ") + "×" + st.zoom.toFixed(1);
+}
+
+/* ---------- pointer: pan, wheel / pinch zoom, measure, cursor readout */
+const ptrs = new Map(); let pinch = null, moved = false;
+function evPos(e) { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * dpr, (e.clientY - r.top) * dpr]; }
+function zoomAt(f, sx, sy) {
+  const [ix, iy] = toImg(sx, sy); st.zoom = Math.max(1, Math.min(32, st.zoom * f));
+  const s = scale(); st.cx = ix - (sx - cv.width / 2) / s; st.cy = iy - (sy - cv.height / 2) / s; draw();
+}
+cv.addEventListener("wheel", e => { e.preventDefault(); const [sx, sy] = evPos(e); zoomAt(Math.pow(1.0018, -e.deltaY), sx, sy); }, {passive: false});
+cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, evPos(e)); moved = false;
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = {d: Math.hypot(a[0] - b[0], a[1] - b[1]), z: st.zoom}; } });
+cv.addEventListener("pointermove", e => {
+  const p = evPos(e), q = ptrs.get(e.pointerId);
+  const [ix, iy] = toImg(...p); st.cursor = {img: [ix, iy]}; showCursor(ix, iy);
+  if (q) {
+    if (ptrs.size === 2 && pinch) { ptrs.set(e.pointerId, p); const [a, b] = [...ptrs.values()];
+      const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; zoomAt(pinch.z * Math.hypot(a[0] - b[0], a[1] - b[1]) / pinch.d / st.zoom, ...m); return; }
+    const dx = p[0] - q[0], dy = p[1] - q[1]; if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+    if (!st.measure || moved) { const s = scale(); st.cx -= dx / s; st.cy -= dy / s; }
+    ptrs.set(e.pointerId, p);
+  }
+  draw();
+});
+cv.addEventListener("pointerup", e => {
+  ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch = null;
+  if (st.measure && !moved) {
+    const [ix, iy] = toImg(...evPos(e));
+    if (ix < 0 || iy < 0 || ix > FW || iy > FH) return;
+    if (!st.pend) st.pend = [ix, iy]; else { st.meas.push({a: st.pend, b: [ix, iy]}); st.pend = null; listMeas(); }
+    draw();
+  }
+});
+cv.addEventListener("pointerleave", () => { st.cursor = null; $("dCur").textContent = "—"; draw(); });
+cv.addEventListener("dblclick", fit);
+function showCursor(ix, iy) {
+  if (ix < 0 || iy < 0 || ix >= FW || iy >= FH) { $("dCur").textContent = "—"; return; }
+  let v = "";
+  if (src && src.grey) { const sx = Math.floor((ix - src.x) / src.step), sy = Math.floor((iy - src.y) / src.step);
+    if (sx >= 0 && sy >= 0 && sx < src.img.width && sy < src.img.height) v = " · 값 " + src.grey[sy * src.img.width + sx]; }
+  const um = st.cfg.pixel_um; $("dCur").textContent = `${ix.toFixed(0)}, ${iy.toFixed(0)} px · ${(ix * um / 1000).toFixed(3)}, ${(iy * um / 1000).toFixed(3)} mm${v}`;
+}
+$("bMeas").onclick = () => { st.measure = !st.measure; st.pend = null; $("bMeas").classList.toggle("on", st.measure); cv.style.cursor = st.measure ? "cell" : "crosshair"; draw(); };
+$("bMClr").onclick = () => { st.meas = []; st.pend = null; listMeas(); draw(); };
+function listMeas() {
+  $("measList").innerHTML = st.meas.map((m, i) => `<span>#${i + 1}</span><b>${fmtUm(Math.hypot(m.b[0] - m.a[0], m.b[1] - m.a[1]) * st.cfg.pixel_um)}</b>`).join("");
+}
+
+/* ---------- live / pause / capture / flat */
+$("bPause").onclick = togglePause;
+function togglePause() { st.live = !st.live; $("bPause").textContent = st.live ? "❚❚ 정지" : "▶ 실시간"; $("bPause").classList.toggle("on", !st.live); if (st.live) fetchFrame(); }
+$("bShot").onclick = shoot;
+function shoot() {
+  api("/capture").then(j => { toast("저장: " + j.name + ".png"); loadGal(); }).catch(e => toast("촬영 실패: " + e.message));
+}
+$("bFlatTake").onclick = () => { if (confirm("시료를 치운 빈 상태에서 기준 영상을 16장 찍습니다. 진행할까요?")) api("/flat/take").then(() => toast("기준 영상 찍는 중…")); };
+$("bFlat").onclick = () => setCfg({flat: st.cfg.flat ? 0 : 1});
+
+/* ---------- registers */
+$("regSel").onchange = () => { if ($("regSel").value) $("regAddr").value = $("regSel").value; };
+$("regAddr").value = "0f16";
+$("bRegR").onclick = () => api("/reg?r=" + $("regAddr").value).then(j => $("regOut").textContent = `${j.reg} = ${j.value}`).catch(e => $("regOut").textContent = "실패: " + e.message);
+$("bRegW").onclick = () => {
+  const a = $("regAddr").value, v = $("regVal").value;
+  if (!/^[0-9a-f]{1,4}$/i.test(a) || !/^[0-9a-f]{1,4}$/i.test(v)) return toast("주소와 값을 hex로 넣으세요");
+  if (!confirm(`센서 레지스터 0x${a} 에 0x${v} 를 씁니다.\n잘못된 값은 영상을 멈출 수 있습니다. 진행할까요?`)) return;
+  api(`/reg?r=${a}&v=${v}`).then(j => $("regOut").textContent = `쓴 뒤 ${j.reg} = ${j.value}`).catch(e => $("regOut").textContent = "실패: " + e.message);
+};
+
+/* ---------- gallery and the data-bar export */
+function loadGal() {
+  api("/photos").then(list => {
+    st.photos = list;
+    $("gal").innerHTML = list.slice(0, 12).map((p, i) => `<img src="/photos/${encodeURIComponent(p.name)}.thumb.png" title="${p.name}" data-i="${i}">`).join("") || '<span class="dim">아직 없음</span>';
+    [...$("gal").querySelectorAll("img")].forEach(im => im.onclick = () => openPhoto(st.photos[+im.dataset.i]));
+  }).catch(() => {});
+}
+function openPhoto(p) {
+  const u = "/photos/" + encodeURIComponent(p.name) + ".png";
+  $("mImg").src = u; $("mRaw").href = u; $("mRaw").download = p.name + ".png";
+  $("mMeta").textContent = `${p.time} · 노출 ${(p.exp / 10).toFixed(1)} ms · 평균 ${p.avg}장 · 평탄화 ${p.flat ? "켬" : "끔"} · 화소 ${p.pixel_um} µm${p.sample ? " · 시료 " + p.sample : ""}`;
+  $("mBar").onclick = () => exportBar(p, u); $("modal").style.display = "flex";
+}
+$("mClose").onclick = () => $("modal").style.display = "none";
+async function exportBar(p, u) {
+  const img = await createImageBitmap(await (await fetch(u)).blob()), bh = 70, c = document.createElement("canvas");
+  c.width = img.width; c.height = img.height + bh; const g = c.getContext("2d");
+  g.drawImage(img, 0, 0); g.fillStyle = "#0b0f14"; g.fillRect(0, img.height, c.width, bh);
+  const um = p.pixel_um, Lum = nice(260 * um), Lpx = Lum / um, y = img.height + 44;
+  g.fillStyle = "#fff"; g.fillRect(24, y, Lpx, 6); g.fillRect(24, y - 8, 3, 20); g.fillRect(24 + Lpx - 3, y - 8, 3, 20);
+  g.font = "600 20px Menlo,monospace"; g.textAlign = "center"; g.fillText(fmtUm(Lum), 24 + Lpx / 2, y - 14); g.textAlign = "left";
+  g.font = "600 18px Menlo,'Apple SD Gothic Neo',sans-serif"; g.fillStyle = "#3fd0e0"; g.fillText("SOL MICROSCOPE · E850", Lpx + 60, img.height + 28);
+  g.fillStyle = "#dfe7ee"; g.font = "16px Menlo,'Apple SD Gothic Neo',sans-serif";
+  g.fillText(`${p.time}   노출 ${(p.exp / 10).toFixed(1)} ms   평균 ${p.avg}장   평탄화 ${p.flat ? "켬" : "끔"}   화소 ${um} µm   시야 ${(p.width * um / 1000).toFixed(2)} × ${(p.height * um / 1000).toFixed(2)} mm`, Lpx + 60, img.height + 54);
+  if (p.sample) { g.textAlign = "right"; g.fillStyle = "#f2b544"; g.font = "600 18px Menlo,'Apple SD Gothic Neo',sans-serif"; g.fillText("시료: " + p.sample, c.width - 20, img.height + 28); }
+  c.toBlob(b => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = p.name + "_bar.png"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }, "image/png");
+}
+
+/* ---------- status */
+function poll() {
+  api("/stat").then(j => {
+    st.n = j.n; const fresh = performance.now() - st.lastFrameT < 2500;
+    $("fps").textContent = j.fps.toFixed(1) + " fps"; $("frm").textContent = "#" + j.n; $("clock").textContent = j.time;
+    const L = $("live"); L.className = "pill " + (!st.live ? "pause" : fresh && j.dev ? "on" : ""); L.querySelector("span").textContent = !st.live ? "PAUSE" : fresh && j.dev ? "LIVE" : "WAIT";
+    if (!j.dev || !src) { $("msg").style.display = "block"; $("msg").textContent = j.msg; }
+    st.cfg = j.cfg; syncCfg();
+    $("flatTxt").textContent = j.flat_left ? `기준 영상 찍는 중… ${16 - j.flat_left}/16` : j.flat_ready ? "기준 영상 있음" : "기준 영상 없음 · 시료를 치우고 ‘기준 찍기’";
+    $("bFlat").disabled = !j.flat_ready;
+    const d = j.diag || {};
+    $("diag").innerHTML = d.magic ? [["칩 ID", "0x" + (d.chipId || 0).toString(16)], ["프레임", `${d.goodFrames}/${d.frames}`], ["주기", d.framePeriodMs + " ms"],
+      ["MIPI 오류", d.mipiErrors], ["USB", ["", "FS", "HS", "SS"][d.usbSpeed] || d.usbSpeed], ["줄/프레임", `${d.llp} / ${d.fll}`]]
+      .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("") : "";
+  }).catch(() => { $("live").className = "pill"; $("live").querySelector("span").textContent = "OFFLINE"; });
+}
+
+/* ---------- keys, resize, start */
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  const k = e.key.toLowerCase();
+  if (k === " ") { e.preventDefault(); togglePause(); } else if (k === "c") shoot(); else if (k === "f") fit();
+  else if (k === "x") $("bX").click(); else if (k === "m") $("bMeas").click();
+  else if (k === "+" || k === "=") zoomAt(1.25, cv.width / 2, cv.height / 2); else if (k === "-") zoomAt(0.8, cv.width / 2, cv.height / 2);
+  else if (k === "escape") { $("modal").style.display = "none"; st.pend = null; draw(); }
+});
+new ResizeObserver(() => { dpr = window.devicePixelRatio || 1; cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr); draw(); }).observe(cv);
+showDisp(); syncCfg(); poll(); setInterval(poll, 1000); fetchFrame(); loadGal();
+</script>
+</body>
+</html>
