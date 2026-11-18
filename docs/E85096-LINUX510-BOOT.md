@@ -4090,9 +4090,115 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
   - headless Chrome 화면에서 "LED 끄기"(켜진 상태)와 정보 막대의 "LED 켬"이 보였다.
 - 버튼을 눌렀을 때 자동 노출이 따라오는지는 실물로 보지 않았다.
 
-**보드에 바꾼 것.** 보드4 `/var/tmp/e850-scope/scope.py`, `scope.html`을 LED 판으로 바꿨다(sha256 `7403da7a…`, `eb5d124c…`). `e850-scope`는 꺼져 있다.
+**보드에 바꾼 것.** 보드4 `/var/tmp/e850-scope/scope.py`, `scope.html`을 LED 판으로 바꿨다(sha256 `7403da7a…`, `eb5d124c…`).
+
+**실물 확인(2026-11-19 04:32~, 보드4, 50M 키트를 USB-A에 꽂음, 사용자가 sudo로 `e850-scope`를 띄움).**
+- 스트림: 2016×1536 Hi-5031Q, USB 2.0(HS), 4.39 fps. 처음 49프레임은 모두 온전했고 MIPI 오류 0, DMA 리셋 0이었다. 50M 키트가 E850 USB 2.0에서도 된다.
+- `/set`으로 켜고 끈 밝기: LED 끔·200 ms 106.6, LED 켬·200 ms 255, LED 켬·10 ms 108.1.
+- 버튼(headless Chrome에서 CDP로 클릭):
+  - LED를 끄면 자동 노출이 약 3~5초 만에 227~244 ms, 평균 119~128로 맞췄다.
+  - LED를 켜면 11.6 ms, 평균 123으로 맞췄다.
+  - 같은 시간에 사용자도 자기 브라우저에서 버튼을 눌렀다(내가 누르지 않은 켜기가 기록에 있다).
+- LED를 켜자 영상에 촘촘한 점무늬, 검은 알갱이, 가는 선이 보였다. 방 조명에서는 고른 회색이었다. 무엇인지(시료, 센서 덮개 위 먼지 등)는 모른다.
+
+**프레임 손실: 보드가 Wi-Fi로 많이 보낼 때(관찰).** 펌웨어 diag의 frames와 goodFrames를 20초씩 비교했다.
+
+| 조건 | 온전한 프레임 | 잘린 프레임 |
+|---|---|---|
+| 페이지 1개, LED 켬·11.6 ms(무늬 많음, 미리보기 PNG 670 kB) | 48%, 53% | 7, 4 |
+| 페이지 1개, LED 끔·11.6 ms(거의 검정) | 98% | 1 |
+| 페이지 1개, LED 끔·200 ms(고른 회색, PNG 약 240 kB) | 80% | 7 |
+| 페이지 없음, LED 켬·11.6 ms | 100%, 100% | 0 |
+| 보드 안 localhost로 같은 PNG를 프레임마다 받음 | 100% | 0 |
+| 페이지 없음, ssh로 60 MB를 Mac에 보냄(약 3 MB/s 이상) | 66% | 5 |
+
+- 해석:
+  - LED 전력, 노출, PNG 압축은 원인이 아니다.
+  - 보드가 Wi-Fi로 내보내는 양이 많을수록 CX3가 프레임을 잘라 버린다. USB 호스트가 키트의 데이터를 제때 받아 가지 못한다는 뜻이다.
+  - 잘린 프레임은 uvcvideo가 버린다(뷰어 n과 goodFrames가 같다). 그래서 사진이 깨지지는 않고, 프레임 수만 준다.
+- IRQ: `xhci-hcd:usb2`(114)와 `scsc_wlbt`(123) 모두 CPU0에서 처리된다(affinity 0-7, effective 0). wlan0의 XPS/RPS는 꺼져 있다(00).
+- CPU0 사용률은 34%(IRQ 4.8%, softirq 13.8%)로 포화가 아니었다.
+- 가설(확인 안 함): Wi-Fi 송신 IRQ와 softirq가 CPU0에서 수 ms씩 USB 완료 처리를 늦춘다.
+  - 호스트의 bulk URB 5개(HS에서 최대 각 16 kB)와 CX3 출력 버퍼 4 × 12 kB를 합쳐도 27 MB/s에서 수 ms분밖에 안 된다.
+  - 11.64의 Hi-846(816×612 미리보기)에서 96.3%였던 것도 미리보기가 작았기 때문으로 본다.
+
+**Wi-Fi IRQ를 CPU7로(사용자가 sudo로 실행, 재부팅하면 원래대로).** `echo 7 > /proc/irq/123/smp_affinity_list`를 했다. effective는 7이 됐고, `scsc_wlbt` 인터럽트가 CPU7에서 세어졌다(3초에 596번). Wi-Fi와 ssh는 그대로 됐다. 같은 시험을 다시 했다.
+
+| 조건 | CPU0일 때 | CPU7일 때 |
+|---|---|---|
+| 페이지 1개, LED 켬·11.6 ms | 48%, 53% | 96%, 98%(잘린 프레임 1, 0) |
+| ssh로 60 MB 보냄 | 66%(페이지 없이) | 93%(페이지도 열린 채, 잘린 프레임 0) |
+
+- 가설(Wi-Fi 송신 처리가 CPU0에서 USB 완료 처리를 늦춘다)과 맞는다. 다만 원인을 직접 잰 것은 아니다.
+- CPU7은 dvslive의 웹 전용 CPU다(11.30). 그 웹 지연이 바뀌었는지는 재지 않았다.
+- Wi-Fi 펌웨어가 패닉에서 복구될 때(11.31) 이 설정이 남는지는 보지 않았다.
+
+**보드에 바꾼 것.** 보드4 `/var/tmp/e850-scope/scope.py`, `scope.html`을 LED 판으로 바꿨다(sha256 `7403da7a…`, `eb5d124c…`). 보드4 Wi-Fi IRQ를 CPU7로 옮겼다(재부팅하면 사라짐). 시험용으로 `/var/tmp/localpoll.py`를 넣었다. `e850-scope`는 사용자가 띄웠고 지금 돈다. LED는 켜짐(255, 11.6 ms)이다.
 
 **남은 것.**
 - EEPROM 부팅(스위치 ③ NORMAL) 확인.
 - Hi-846 키트의 LED도 OUT3인지 확인.
-- 실물 키트를 보드4에 꽂아 버튼 확인.
+- Wi-Fi IRQ를 CPU7로 옮기는 설정을 부팅 때 적용할지(`e850-wifi.sh`) 결정.
+
+### 11.69 부팅 때 현미경 자동 시작(보드4), Wi-Fi IRQ를 CPU7로 고정(보드1·2·4) (2026-11-19)
+
+**사용자 결정.**
+- Wi-Fi IRQ를 CPU7로 옮기는 설정을 보드1·2·4 모두 부팅 때 적용한다(11.68의 시험 결과를 보고 정함).
+- 보드4는 부팅하면 현미경도 자동으로 동작하게 한다.
+- 모두 커밋하고 push한다.
+
+**바꾼 것(저장소).**
+- `tools/linux510/e850-wifi.sh`: `ip link set wlan0 up` 다음에 `scsc_wlbt` IRQ를 모두 CPU7로 옮긴다(`/proc/irq/N/smp_affinity_list`).
+  - IRQ는 셋이다(123, 125, 126). 데이터가 오가는 것은 123이다. 125는 1번, 126은 0번 울렸다.
+- `tools/board/scope/scope-run.sh`: 프로그램 디렉터리 `D`(`SCOPE_DIR`)와 실행 디렉터리 `R`(`SCOPE_RUN`: 로그, stop·reload 파일)을 나눴다. 기본값은 둘 다 전과 같은 `/var/tmp/e850-scope`다.
+- `tools/board/scope/e850-scope.service`(새 파일):
+  - 실행 위치: `/opt/e850-scope`(root 소유)
+  - 실행 디렉터리: `/var/lib/e850-scope`
+  - 순서: `After=e850-wifi.service`, `WantedBy=multi-user.target`
+- `tools/board/scope/install.sh`(새 파일, root):
+  - 같은 이름의 유닛을 멈추고 `reset-failed`한다.
+  - `/opt/e850-scope`에 다섯 파일(`scope.py`, `scope.html`, `scope-run.sh`, `gpiohold.py`, `e850-hubpwr.ko`)을 `install`로 넣는다.
+  - 서비스를 넣고 `enable --now`한다.
+  - 되돌리기: `systemctl disable --now e850-scope`.
+
+**설치(사용자가 sudo로 실행).**
+- 세 보드: `/var/tmp/apply-wifi-irq.sh`를 실행했다. 새 `e850-wifi.sh`를 `/usr/local/bin`에 넣고, IRQ 3개를 지금 바로 CPU7로 옮긴다. Wi-Fi는 다시 시작하지 않는다. 세 보드 모두 `irq 123/125/126 -> CPU7`이 출력됐고, 확인한 값도 같았다.
+- 보드4: `install.sh`.
+
+**실패하고 고친 것.**
+- 첫 `install.sh`에서 옛 임시 유닛을 멈추는 데 90초가 걸렸고, 결국 강제 종료됐다.
+  - 원인: 내가 실행 중이던 `/var/tmp/e850-scope/scope-run.sh`를 scp로 같은 파일 위에 덮어썼다. 셸은 스크립트를 실행하면서 파일을 조금씩 읽는다. 그래서 SIGTERM으로 루프를 빠져나온 뒤 새 파일의 엉뚱한 위치를 읽었고, `scope.py`를 다시 띄우고 기다렸다(로그의 `Terminated` 다음 `http on 8090`).
+  - 그 결과 실패한 임시 유닛이 남았다. 이것이 같은 이름의 새 파일을 가려서 `Failed to enable unit: Unit /run/systemd/transient/e850-scope.service is transient or generated`가 났다.
+  - `install.sh`에 `reset-failed`를 넣어 다시 실행하니 됐다.
+  - 앞으로 `/opt`의 파일은 `install`이 새 파일로 바꾸므로, 실행 중인 셸이 이 문제를 겪지 않는다.
+  - 강제 종료 때 정리 코드(gadget 되돌리기)는 돌지 않았다. 새 서비스가 곧 다시 호스트 모드로 바꿨다.
+
+**확인(관찰).**
+- 보드4:
+  - `e850-scope` enabled, active, `FragmentPath=/etc/systemd/system/e850-scope.service`
+  - 로그에 `state a_host`, `streaming … 2016x1536 Hi-5031Q`
+  - 4.4 fps, 20초에 88개 중 86개 온전(98%), 잘린 프레임 0(LED 켬, 10.8 ms, 사용자 페이지가 열려 있었을 수 있음)
+- dvslive 웹 응답(Mac에서 Wi-Fi, 연결 재사용, 중앙값/p90, 한 번씩):
+
+  | 보드 | 요청 | IRQ CPU0 | IRQ CPU7 |
+  |---|---|---|---|
+  | 보드1 | `/stats` ×100 | 12.3 / 30.9 ms | 14.5 / 45.2 ms |
+  | 보드1 | `/frame.png` ×50 | 54.3 / 74.5 ms(27 kB) | 64.7 / 96.9 ms(29 kB) |
+  | 보드2 | `/stats` ×100 | 8.7 / 11.8 ms | 9.7 / 16.6 ms |
+  | 보드2 | `/frame.png` ×50 | 27.4 / 32.0 ms(13 kB) | 31.7 / 34.2 ms(29 kB) |
+
+  - 조금 늘었다. 한 번씩만 재서 Wi-Fi 변동 범위 안인지는 모른다.
+  - `/frame.png`는 화면 내용에 따라 크기가 달라서 그대로 비교할 수 없다.
+  - CPU7에는 dvslive 웹 스레드(`dvs-web`)와 Wi-Fi IRQ가 함께 있다.
+
+**아직 확인하지 않은 것.**
+- 재부팅 뒤 자동 시작. 서비스는 enabled이지만 보드4를 재부팅하지 않았다.
+- 재부팅 뒤 `e850-wifi.sh`가 IRQ를 옮기는지(부팅 때 IRQ가 이미 있는지).
+- Wi-Fi 펌웨어 패닉에서 복구될 때 IRQ 설정이 남는지.
+
+**보드에 바꾼 것.**
+- 보드1·2·4: `/usr/local/bin/e850-wifi.sh`를 새 판으로 바꿨다. `scsc_wlbt` IRQ 3개를 CPU7로 옮겼다.
+- 보드4:
+  - `/opt/e850-scope`(5개 파일)와 `/etc/systemd/system/e850-scope.service`를 넣고 enable했다.
+  - 부팅할 때마다 USB가 호스트 모드가 되므로 micro-USB ACM은 평소에 없다. `curl http://192.168.0.244:8090/quit`로 끄면 다음 부팅까지 돌아온다.
+  - `/var/tmp`에 `apply-wifi-irq.sh`, `e850-wifi.sh`, `localpoll.py`가 남아 있다.

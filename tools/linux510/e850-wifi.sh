@@ -17,6 +17,12 @@ modprobe scsc_mx disable_recovery_handling=0
 modprobe scsc_wlan
 for i in 1 2 3 4 5; do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done
 ip link set wlan0 up          # downloads mx140.bin and boots the WLBT core
+# Wi-Fi IRQ on CPU7 (the web CPU), not CPU0: there its TX work delayed the USB host enough that the
+# microscope kit dropped half its frames while the board sent over Wi-Fi (docs 11.68)
+# (three scsc_wlbt IRQs; the data one is the busy one, the others fire about never)
+for irq in $(awk '/scsc_wlbt/ {sub(":", "", $1); print $1}' /proc/interrupts); do
+    echo 7 > /proc/irq/$irq/smp_affinity_list || true
+done
 if [ "$1" = up ]; then
     systemctl restart systemd-networkd wpa_supplicant@wlan0
     exit 0

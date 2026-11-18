@@ -24,7 +24,7 @@ WinLink E850-96(Samsung Exynos850 = s5e3830, Cortex-A55 8코어)에 vendor Linux
 | 지금 구워진 boot | `~/e850-logs/boot-dvs3/boot.img` = 저장소 빌드, CN4 카메라 DT를 S5KRC1S로, mode0 8192×127 + mode1 8192×32(11.18/11.26). boot-dvs2에 조용한 워치독, gadget을 기다리는 `e850-vbus`를 넣은 판(2026-11-07, 11.32). 그 전 판 `boot-dvs2`, `boot-dvs`. 알려진 정상 이미지는 `~/e850-logs/boot-nokvm/boot.img`(OV5647 DT, 1시간 부하 시험 통과) |
 | 자동 적재 모듈 | `e850-cpuhp`(hotplug, `/etc/modules-load.d`), HDMI 콘솔 색은 dpu.ko 패치(`modules/e850-hdmi/apply.sh`, 11.16). `e850-fbpal`은 더 이상 올리지 않는다 |
 | 수동 적재 | 카메라 `modprobe fimc-is && modprobe is-cis-ov5647`. `fimc_is`는 내리면 다시 올릴 수 없어 재부팅해야 한다 |
-| CPU 배치 | 장치 IRQ는 모두 CPU0. DVS 디코더(캡처 주 스레드) CPU1, 렌더러 `dvs-render` CPU2, 배경 필터 `dvs-filter` CPU3(11.45), 행동 분류 `dvs-act` CPU4~6, 웹 `dvs-web` CPU7 전용. systemd가 띄우는 것은 모두 CPU0~6(`/etc/systemd/system.conf.d/e850-cpu7.conf`, 11.30) |
+| CPU 배치 | 장치 IRQ는 Wi-Fi(`scsc_wlbt`, CPU7, `e850-wifi.sh`, 11.69)를 빼고 모두 CPU0. DVS 디코더(캡처 주 스레드) CPU1, 렌더러 `dvs-render` CPU2, 배경 필터 `dvs-filter` CPU3(11.45), 행동 분류 `dvs-act` CPU4~6, 웹 `dvs-web` CPU7 전용. systemd가 띄우는 것은 모두 CPU0~6(`/etc/systemd/system.conf.d/e850-cpu7.conf`, 11.30) |
 
 ### 접속
 
@@ -36,7 +36,7 @@ WinLink E850-96(Samsung Exynos850 = s5e3830, Cortex-A55 8코어)에 vendor Linux
 | Wi-Fi | 192.168.0.236 | `ssh philip@192.168.0.236` 또는 `e850@`. 평소 작업은 이걸로 충분하다. 핸드폰 핫스팟 `An`이 켜져 있으면 그쪽에 먼저 붙는다(주소는 DHCP, 11.45). 그때는 `ssh -o HostKeyAlias=192.168.0.236 philip@<주소>` |
 | 보드2 (2026-11-14, 11.53) | Wi-Fi 192.168.0.168 (DHCP), UART `/dev/cu.usbserial-A5069RR4`, fastboot `000009f72c9c23e0` | 보드1의 복제본이다(machine-id만 다름, 같은 ssh 호스트 키라 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.168`). 두 보드 모두 USB 주소 192.168.7.1과 ACM 이름 `e850_96`를 쓴다. 그래서 Mac에는 한 번에 한 보드만 USB로 꽂는다. 지금 ACM에 붙은 보드는 `cat /etc/machine-id`로 구별한다(보드1 `4aeede4c…`, 보드2 `6f31c0bd…`) |
 | 보드3 (2026-11-15, 11.57) | Wi-Fi 192.168.0.234 (DHCP), fastboot `00000a749c9c23e0`, machine-id `16314a53…`. UART는 보드2에 쓰던 `A5069RR4`를 옮겨 꽂았다 | 보드1의 복제본(11-14 rootfs). **DVS 센서 없음:** dvslive는 웹만 띄우고 "센서 연결 안 됨"을 보인다. 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.234` |
-| 보드4 (2026-11-15, 11.57) | Wi-Fi 192.168.0.244 (DHCP), fastboot `00000bf40c9c23e0`, machine-id `e0c18890…`, UART 없음 | 보드3과 같은 이미지. 2026-11-17 사용자가 DVS 센서를 달았다(dvslive 동작). 현미경 모드 시험 보드(11.64~11.65): `e850-scope` 일시 유닛이 돌면 USB가 호스트 모드라 ACM이 없다. 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.244` |
+| 보드4 (2026-11-15, 11.57) | Wi-Fi 192.168.0.244 (DHCP), fastboot `00000bf40c9c23e0`, machine-id `e0c18890…`, UART 없음 | 보드3과 같은 이미지. 2026-11-17 사용자가 DVS 센서를 달았다(dvslive 동작). 현미경 보드(11.64~11.69): 부팅 때 `e850-scope.service`가 50M 키트 뷰어 `:8090`을 띄우고 USB를 호스트 모드로 바꾼다. 그래서 평소 ACM이 없다. ACM이 필요하면 `curl http://192.168.0.244:8090/quit`(다음 부팅까지). 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.244` |
 | HDMI | LT8912B 브리지, tty1 텍스트 콘솔(16x32 글꼴) | `e850-hdmi.service` |
 
 ## 빌드

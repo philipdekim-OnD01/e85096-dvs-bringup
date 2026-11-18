@@ -1,0 +1,13 @@
+# /etc/systemd/system/e850-scope.service (install.sh): the SOL microscope at boot (docs 11.64-11.69).
+# It puts the USB port in host mode, so there is no micro-USB ACM console while it runs; GET :8090/quit gives it back
+# until the next boot.
+[Unit]
+Description=SOL microscope: USB host mode and web viewer on :8090
+After=e850-wifi.service
+
+[Service]
+Environment=SCOPE_DIR=/opt/e850-scope SCOPE_RUN=/var/lib/e850-scope
+ExecStart=/bin/sh /opt/e850-scope/scope-run.sh
+
+[Install]
+WantedBy=multi-user.target
