@@ -103,7 +103,7 @@ footer span{color:var(--dim)}footer b{color:#e8f0f6;font-weight:600}footer input
     <div class="grp"><h3>촬영 목록</h3><div id="gal"></div></div>
     <div class="grp"><h3>설정</h3>
       <div class="row"><label>화소</label><input type="number" id="pix" step="0.01" min="0.1" style="width:80px"><span class="dim">µm / 출력 화소</span></div>
-      <div class="dim" style="font-size:11px">렌즈 없는 밀착 촬영이라 배율 1:1. 기본값 2.24 µm = Hi-846 화소 1.12 µm × 2(확인 필요).</div>
+      <div class="dim" style="font-size:11px">렌즈 없는 밀착 촬영이라 배율 1:1. 기본값 2.24 µm: Hi-846 화소 1.12 µm × 2, Hi-5031Q 화소 0.56 µm × 4(4화소 합·화소쌍 평균). 확인 필요.</div>
       <div class="kbd" style="margin-top:8px">클릭·탭: 확대 기준점 · 더블클릭·더블탭: 그 자리 2배 (Shift: ½) · 휠·핀치: 그 자리 확대/축소 · 끌기: 이동<br>
         +/−: 기준점 확대/축소 · F·0: 맞춤 · 1: 1:1 · Space 정지 · C 촬영 · X 십자선 · M 측정 · Esc 기준점 지우기</div>
     </div>
@@ -121,7 +121,7 @@ footer span{color:var(--dim)}footer b{color:#e8f0f6;font-weight:600}footer input
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const FW = 1632, FH = 1224;                         // full-size image, all image coordinates are in these pixels
+let FW = 1632, FH = 1224;                           // full-size image (from /stat), all image coordinates are in these pixels
 const st = {cfg: {exp: 150, avg: 1, flat: false, pixel_um: 2.24}, live: true, zoom: 1, cx: FW / 2, cy: FH / 2,
   cross: true, inv: false, measure: false, meas: [], pend: null, cursor: null, n: 0, lastFrameT: 0, fetching: false};
 const disp = {bri: 0, con: 0, gam: 0};
@@ -435,15 +435,24 @@ function poll() {
     $("fps").textContent = j.fps.toFixed(1) + " fps"; $("frm").textContent = "#" + j.n; $("clock").textContent = j.time;
     const L = $("live"); L.className = "pill " + (!st.live ? "pause" : fresh && j.dev ? "on" : ""); L.querySelector("span").textContent = !st.live ? "PAUSE" : fresh && j.dev ? "LIVE" : "WAIT";
     if (!j.dev || !src) { $("msg").style.display = "block"; $("msg").textContent = j.msg; }
+    if (j.size && (j.size[0] !== FW || j.size[1] !== FH)) {   // another camera (sensor): new image size
+      [FW, FH] = j.size; st.anchor = null; st.meas = []; st.pend = null; listMeas(); fit();
+    }
     st.cfg = j.cfg; syncCfg();
     $("flatTxt").textContent = j.flat_left ? `기준 영상 찍는 중… ${16 - j.flat_left}/16` : j.flat_ready ? "기준 영상 있음" : "기준 영상 없음 · 시료를 치우고 ‘기준 찍기’";
     $("bFlat").disabled = !j.flat_ready;
-    const d = j.diag || {};
-    $("diag").innerHTML = d.magic ? [["칩 ID", "0x" + (d.chipId || 0).toString(16)], ["프레임", `${d.goodFrames}/${d.frames}`], ["주기", d.framePeriodMs + " ms"],
+    const d = j.diag || {}, S = j.sensor || {}, mhz = S.mhz || 288;
+    if (S.regs && S.chip !== st.chip) {                       // this sensor's registers in the list
+      st.chip = S.chip; const keep = $("regSel").value;
+      $("regSel").innerHTML = S.regs.map(([a, t]) => `<option value="${a}">0x${a.toUpperCase()} ${t}</option>`).join("") + '<option value="">직접 입력…</option>';
+      $("regAddr").value = $("regSel").value = S.regs.some(([a]) => a === keep) ? keep : S.regs[0][0];
+    }
+    $("diag").innerHTML = d.magic ? [["센서", `${S.name || "?"} · 0x${(d.chipId || 0).toString(16)}`, "칩 ID 레지스터 값"],
+      ["프레임", `${d.goodFrames}/${d.frames}`], ["주기", d.framePeriodMs + " ms"],
       ["MIPI 오류", d.mipiErrors], ["USB", ["", "FS", "HS", "SS"][d.usbSpeed] || d.usbSpeed],
-      ["줄·프레임 길이", `${d.llp} clk / ${d.fll}줄`, "LLP(0x0008): 한 줄을 읽는 시간, 288 MHz 클럭 수\nFLL(0x0006): 한 프레임의 줄 수(화소 2448줄 + 빈 줄)"],
-      ["줄·프레임 시간", `${(d.llp / 288).toFixed(1)} µs / ${(d.llp * d.fll / 288000).toFixed(1)} ms`, "줄 시간 = LLP ÷ 288 MHz\n프레임 시간 = 줄 시간 × FLL"],
-      ["노출", `${d.exposureLines}줄 = ${(d.exposureLines * d.llp / 288000).toFixed(1)} ms`, "노출(0x0074)은 줄 수로 들어간다: 줄 수 × 줄 시간"]]
+      ["줄·프레임 길이", `${d.llp} clk / ${d.fll}줄`, `LLP(${S.llp || "?"}): 한 줄을 읽는 시간, ${mhz} MHz 클럭 수\nFLL(${S.fll || "?"}): 한 프레임의 줄 수(화소 ${FH * 2}줄 + 빈 줄)`],
+      ["줄·프레임 시간", `${(d.llp / mhz).toFixed(1)} µs / ${(d.llp * d.fll / mhz / 1000).toFixed(1)} ms`, `줄 시간 = LLP ÷ ${mhz} MHz\n프레임 시간 = 줄 시간 × FLL`],
+      ["노출", `${d.exposureLines}줄 = ${(d.exposureLines * d.llp / mhz / 1000).toFixed(1)} ms`, `노출(${S.expReg || "?"})은 줄 수로 들어간다: 줄 수 × 줄 시간`]]
       .map(([k, v, t]) => `<span title="${t || ""}">${k}</span><b title="${t || ""}">${v}</b>`).join("") : "";
   }).catch(() => { $("live").className = "pill"; $("live").querySelector("span").textContent = "OFFLINE"; });
 }

@@ -137,5 +137,5 @@ python3 tools/host/acm.py "cat /etc/machine-id; systemctl is-system-running; sys
 
 ## 10. 다음에 하면 좋을 것
 
-- 파일시스템이 3 GiB이고 90%를 쓰고 있다. 파티션은 54 GiB다. 대상에서 `resize2fs /dev/mmcblk0p24`로 온라인 확장할 수 있다. 시험은 아직 안 했다.
+- 파일시스템은 3 GiB로 만들어지고, 파티션은 54 GiB다. 복제한 뒤 대상에서 `sudo resize2fs /dev/mmcblk0p24`를 한다. 마운트된 채로 늘어나서 재부팅은 필요 없다. 2026-11-19에 보드4와 보드1에서 했다. 둘 다 54 GB가 됐고 49 GB가 남았다(E85096-LINUX510-BOOT.md 11.67). 보드4는 늘리기 전에 100% 차 있었다. 보드2와 보드3은 늘리지 않았다.
 - 두 보드를 동시에 USB로 쓰려면 한쪽의 gadget 주소와 일련번호를 바꿔야 한다. 아직 하지 않았다.
