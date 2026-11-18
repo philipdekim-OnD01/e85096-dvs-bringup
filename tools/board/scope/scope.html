@@ -68,6 +68,7 @@ footer span{color:var(--dim)}footer b{color:#e8f0f6;font-weight:600}footer input
   <aside>
     <div class="grp"><h3>촬영 조건 · 센서</h3>
       <div class="row"><label>노출</label><input type="range" id="exp" min="0" max="1000"><span class="val" id="expv"></span></div>
+      <div class="row"><label>조명</label><button id="bLed" title="시료 위 LED. 켜고 끈 뒤 자동 노출을 한 번 돌림">LED 켜기</button></div>
       <div class="row"><label>평균</label><div class="seg" id="avg"></div></div>
       <div class="row"><label></label><button id="bAE" title="평균 밝기가 중간이 되도록 노출을 맞춤">자동 노출</button><span class="dim" id="aeTxt"></span></div>
     </div>
@@ -110,7 +111,7 @@ footer span{color:var(--dim)}footer b{color:#e8f0f6;font-weight:600}footer input
   </aside>
 </main>
 <footer>
-  <span>노출 <b id="dExp">—</b></span><span>평균 <b id="dAvg">—</b></span><span>평탄화 <b id="dFlat">—</b></span>
+  <span>노출 <b id="dExp">—</b></span><span>평균 <b id="dAvg">—</b></span><span>평탄화 <b id="dFlat">—</b></span><span>LED <b id="dLed">—</b></span>
   <span>화소 <b id="dPix">—</b></span><span>시야 <b id="dFov">—</b></span><span>배율 <b id="dZoom">—</b></span>
   <span>커서 <b id="dCur">—</b></span><div class="sp"></div>
   <span>시료 <input type="text" id="sample" placeholder="시료 이름"></span>
@@ -151,6 +152,7 @@ function syncCfg() {
   $("bFlat").classList.toggle("on", c.flat); $("bFlat").textContent = c.flat ? "보정 끄기" : "보정 켜기";
   if (document.activeElement !== $("pix")) $("pix").value = c.pixel_um;
   if (document.activeElement !== $("sample")) $("sample").value = c.sample || "";
+  $("bLed").classList.toggle("on", c.led > 0); $("bLed").textContent = c.led > 0 ? "LED 끄기" : "LED 켜기"; $("dLed").textContent = c.led > 0 ? "켬" : "끔";
   $("dAvg").textContent = c.avg + "장"; $("dFlat").textContent = c.flat ? "켬" : "끔"; $("dPix").textContent = c.pixel_um.toFixed(2) + " µm";
   $("dFov").textContent = (FW * c.pixel_um / 1000).toFixed(2) + " × " + (FH * c.pixel_um / 1000).toFixed(2) + " mm";
 }
@@ -166,10 +168,16 @@ $("bAE").onclick = async () => {
     if (Math.abs(m - 118) < 10) break;
     const k = m >= 250 ? 0.4 : 118 / Math.max(m, 4);
     await setCfg({exp: Math.max(1, Math.min(10000, Math.round(st.cfg.exp * k)))});
-    const n0 = st.n; await new Promise(r => { const t = setInterval(() => { if (st.n >= n0 + 3) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 4000); });
+    await newFrames(3);
   }
   $("aeTxt").textContent = `노출 ${(st.cfg.exp / 10).toFixed(1)} ms`;
 };
+function newFrames(k) {   // resolves after k new frames (or 4 s)
+  const n0 = st.n;
+  return new Promise(r => { const t = setInterval(() => { if (st.n >= n0 + k) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 4000); });
+}
+/* LED full on or off; the exposure for room light saturates with the LED (LOG 11), so auto exposure follows */
+$("bLed").onclick = async () => { await setCfg({led: st.cfg.led > 0 ? 0 : 255}); await newFrames(3); $("bAE").click(); };
 
 /* ---------- display LUT (screen only) */
 function lut() {
@@ -410,7 +418,7 @@ function loadGal() {
 function openPhoto(p) {
   const u = "/photos/" + encodeURIComponent(p.name) + ".png";
   $("mImg").src = u; $("mRaw").href = u; $("mRaw").download = p.name + ".png";
-  $("mMeta").textContent = `${p.time} · 노출 ${(p.exp / 10).toFixed(1)} ms · 평균 ${p.avg}장 · 평탄화 ${p.flat ? "켬" : "끔"} · 화소 ${p.pixel_um} µm${p.sample ? " · 시료 " + p.sample : ""}`;
+  $("mMeta").textContent = `${p.time} · 노출 ${(p.exp / 10).toFixed(1)} ms · 평균 ${p.avg}장 · 평탄화 ${p.flat ? "켬" : "끔"}${p.led != null ? " · LED " + (p.led ? "켬" : "끔") : ""} · 화소 ${p.pixel_um} µm${p.sample ? " · 시료 " + p.sample : ""}`;
   $("mBar").onclick = () => exportBar(p, u); $("modal").style.display = "flex";
 }
 $("mClose").onclick = () => $("modal").style.display = "none";
@@ -423,7 +431,7 @@ async function exportBar(p, u) {
   g.font = "600 20px Menlo,monospace"; g.textAlign = "center"; g.fillText(fmtUm(Lum), 24 + Lpx / 2, y - 14); g.textAlign = "left";
   g.font = "600 18px Menlo,'Apple SD Gothic Neo',sans-serif"; g.fillStyle = "#3fd0e0"; g.fillText("SOL MICROSCOPE · E850", Lpx + 60, img.height + 28);
   g.fillStyle = "#dfe7ee"; g.font = "16px Menlo,'Apple SD Gothic Neo',sans-serif";
-  g.fillText(`${p.time}   노출 ${(p.exp / 10).toFixed(1)} ms   평균 ${p.avg}장   평탄화 ${p.flat ? "켬" : "끔"}   화소 ${um} µm   시야 ${(p.width * um / 1000).toFixed(2)} × ${(p.height * um / 1000).toFixed(2)} mm`, Lpx + 60, img.height + 54);
+  g.fillText(`${p.time}   노출 ${(p.exp / 10).toFixed(1)} ms   평균 ${p.avg}장   평탄화 ${p.flat ? "켬" : "끔"}${p.led != null ? "   LED " + (p.led ? "켬" : "끔") : ""}   화소 ${um} µm   시야 ${(p.width * um / 1000).toFixed(2)} × ${(p.height * um / 1000).toFixed(2)} mm`, Lpx + 60, img.height + 54);
   if (p.sample) { g.textAlign = "right"; g.fillStyle = "#f2b544"; g.font = "600 18px Menlo,'Apple SD Gothic Neo',sans-serif"; g.fillText("시료: " + p.sample, c.width - 20, img.height + 28); }
   c.toBlob(b => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = p.name + "_bar.png"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }, "image/png");
 }

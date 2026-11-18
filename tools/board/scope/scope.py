@@ -51,7 +51,7 @@ def log(*a):
 
 # ---------------------------------------------------------------- settings (persist across restarts)
 CFG_FILE = os.path.join(A.data, "settings.json")
-cfg = {"exp": 150, "avg": 1, "flat": False, "pixel_um": 2.24, "sample": "", "note": ""}
+cfg = {"exp": 150, "led": 0, "avg": 1, "flat": False, "pixel_um": 2.24, "sample": "", "note": ""}
 try:
     cfg.update(json.load(open(CFG_FILE)))
 except (OSError, ValueError):
@@ -118,6 +118,9 @@ class Sol:
 
     def exposure(self, e100us):
         self.ctl(0x40, 0xD6, e100us, 0, 0)
+
+    def led(self, level):
+        self.ctl(0x40, 0xD5, level, 0, 0)          # LED PWM 0..255 (fw LedSet, LOG 11), 0 = off
 
 
 sol = Sol()
@@ -215,6 +218,7 @@ class Cam:
                         cfg.update(chip=chip, exp=SENSORS[chip]["exp"])
                         save_cfg()
                     sol.exposure(cfg["exp"])
+                    sol.led(cfg["led"])                 # the firmware starts with the LED off
             except OSError as e:
                 log("sensor setup:", e)
             self.dev, self.msg = dev, "streaming"
@@ -256,7 +260,7 @@ def capture():
     if img is None:
         raise OSError("영상 없음")
     with cfg_lock:
-        meta = {k: cfg[k] for k in ("exp", "avg", "flat", "pixel_um", "sample", "note")}
+        meta = {k: cfg[k] for k in ("exp", "led", "avg", "flat", "pixel_um", "sample", "note")}
     meta.update(time=time.strftime("%Y-%m-%d %H:%M:%S"), width=img.shape[1], height=img.shape[0],
                 sensor=cam.sensor.get("name", ""),
                 mean=round(float(img.mean()), 1), board=open("/etc/hostname").read().strip() if os.path.exists("/etc/hostname") else "")
@@ -364,6 +368,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         if k == "exp" and v.isdigit():
                             cfg["exp"] = max(1, min(10000, int(v)))
                             sol.exposure(cfg["exp"])
+                        elif k == "led" and v.isdigit():
+                            cfg["led"] = min(255, int(v))
+                            sol.led(cfg["led"])
                         elif k == "avg" and v in ("1", "2", "4", "8", "16"):
                             cfg["avg"] = int(v)
                         elif k == "flat":
