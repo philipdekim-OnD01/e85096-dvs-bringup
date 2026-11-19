@@ -6,25 +6,32 @@ Capture: v4l2-ctl streams the camera's largest YUYV size (Hi-846 kit 1632x1224, 
 the Y plane goes through frame averaging and flat-field correction here. The sensor is told by the chip ID in the
 firmware's diag (SENSORS), so one viewer serves both kits, including firmware already in a kit's EEPROM. The browser (scope.html) does zoom, display LUT, histogram, measurement and the data bar.
 Sensor access uses the firmware's vendor requests (sol-cx3-uvc fw/uvc/app.h) over usbfs while uvcvideo streams.
+Every photo is analysed (object count and size, scope_rec.py, OpenCV) and kept in the record (SQLite scope.db);
+automatic capture takes one every tl_every seconds with its own LED, exposure, averaging and flat-field steps.
 
   scope.py [--fake FILE.yuv [--size WxH] [--chip 5031]] [--data DIR] [--port N]
   --fake loops raw YUYV frames (default 1632x1224, chip 4608) from a file instead of the camera (PC without a board).
 """
-import argparse, ctypes, fcntl, glob, http.server, json, os, re, socketserver, struct, subprocess, sys, threading, time
+import argparse, ctypes, fcntl, glob, http.server, json, math, os, re, socketserver, struct, subprocess, sys, threading, time
 import urllib.parse, zlib
 import numpy as np
+import scope_rec
 
 os.environ.setdefault("TZ", "Asia/Seoul")        # the board runs in UTC; photo names and the page clock use lab time
 time.tzset()
 W, H = 1632, 1224                                 # current frame size, from the camera (largest_yuyv) or --size
-# By firmware chip ID: line length clock (MHz), the registers the page explains, default exposure (100 us units).
+# By firmware chip ID: line length clock (MHz), the registers the page explains, default exposure (100 us units),
+# output pixel in um (sensor pitch x 2, the firmware averages pixel pairs; Hi-5031Q 0.56 um summed 2 x 2 first).
 SENSORS = {
-    0x4608: {"name": "Hi-846", "mhz": 288, "llp": "0x0008", "fll": "0x0006", "expReg": "0x0074", "exp": 150,
+    0x4608: {"name": "Hi-846", "mp": 8, "mhz": 288, "llp": "0x0008", "fll": "0x0006", "expReg": "0x0074", "exp": 150, "um": 2.24,
              "regs": [["0f16", "칩 ID"], ["0006", "프레임 길이(FLL)"], ["0008", "줄 길이(LLP)"], ["0074", "노출(줄 수)"],
                       ["0a00", "스트림 모드"]]},
-    0x5031: {"name": "Hi-5031Q", "mhz": 124, "llp": "0x0206", "fll": "0x0210", "expReg": "0x020C", "exp": 2000,
+    0x5031: {"name": "Hi-5031Q", "mp": 50, "mhz": 124, "llp": "0x0206", "fll": "0x0210", "expReg": "0x020C", "exp": 2000, "um": 2.24,
              "regs": [["0716", "칩 ID"], ["0210", "프레임 길이(FLL)"], ["0206", "줄 길이(LLP)"], ["020c", "노출(줄 수)"],
                       ["020a", "아날로그 이득(값/16+1 배)"], ["0b00", "스트림 모드"]]},
+    0x1634: {"name": "Hi-1634", "mp": 16, "mhz": 80, "llp": "0x0206", "fll": "0x020E", "expReg": "0x020A", "exp": 200, "um": 2.0,
+             "regs": [["0716", "칩 ID"], ["020e", "프레임 길이(FLL)"], ["0206", "줄 길이(LLP)"], ["020a", "노출(줄 수)"],
+                      ["0b12", "출력 폭"], ["0b00", "스트림 모드"]]},
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIAG_FIELDS = ("magic chipId initStatus usbSpeed frames goodFrames lastFrameBytes buffers commitFail dmaResets "
@@ -51,7 +58,15 @@ def log(*a):
 
 # ---------------------------------------------------------------- settings (persist across restarts)
 CFG_FILE = os.path.join(A.data, "settings.json")
-cfg = {"exp": 150, "led": 0, "avg": 1, "flat": False, "pixel_um": 2.24, "sample": "", "note": ""}
+cfg = {"exp": 150, "led": 0, "avg": 1, "flat": False, "pixel_um": 2.24, "sample": "", "note": "",
+       # automatic capture (tl_), analysis (an_) and record (rec_)
+       "tl_on": False, "tl_every": 300, "tl_hours": 24, "tl_start": 0, "tl_run": None,
+       "tl_led": True, "tl_ae": True, "tl_flat": True, "tl_avg4": False,
+       "an_dark": True, "an_min_um": 5.0, "an_max_um": 500.0, "an_split": True, "an_track": False, "an_sens": 3,
+       "rec_png": True, "rec_ov": True, "rec_gb": 30}
+BOOL_KEYS = ("tl_led", "tl_ae", "tl_flat", "tl_avg4", "an_dark", "an_split", "an_track", "rec_png", "rec_ov")
+AN_KEYS = ("an_dark", "an_min_um", "an_max_um", "an_split", "an_track", "an_sens")
+SENS_K = {1: 5.0, 2: 4.0, 3: 3.0, 4: 2.5, 5: 2.0}      # sensitivity -> threshold in noise units (scope_rec.analyze)
 try:
     cfg.update(json.load(open(CFG_FILE)))
 except (OSError, ValueError):
@@ -144,6 +159,7 @@ class Cam:
     def __init__(self):
         self.lock = threading.Lock()
         self.img = None            # processed frame, uint8 HxW
+        self.raw = None            # last camera frame before averaging and flat-field
         self.n = 0
         self.fps = 0.0
         self.dev = None
@@ -178,7 +194,7 @@ class Cam:
         if flat and self.gain is not None and self.gain.shape == img.shape:
             img = np.minimum(img * self.gain, 255).astype(np.uint8)
         with self.lock:
-            self.img, self.n = img, self.n + 1
+            self.img, self.raw, self.n = img, y, self.n + 1
 
     def take_flat(self):
         self.flat_acc, self.flat_left = np.zeros((H, W), np.float32), FLAT_FRAMES
@@ -214,8 +230,8 @@ class Cam:
                 chip = sol.diag().get("chipId", 0)
                 self.sensor = dict(SENSORS.get(chip, {}), chip=chip)
                 with cfg_lock:
-                    if chip in SENSORS and cfg.get("chip") != chip:    # another kit: its sensor's exposure default
-                        cfg.update(chip=chip, exp=SENSORS[chip]["exp"])
+                    if chip in SENSORS and cfg.get("chip") != chip:    # another module: its exposure and pixel size
+                        cfg.update(chip=chip, exp=SENSORS[chip]["exp"], pixel_um=SENSORS[chip]["um"])
                         save_cfg()
                     sol.exposure(cfg["exp"])
                     sol.led(cfg["led"])                 # the firmware starts with the LED off
@@ -225,11 +241,20 @@ class Cam:
             log("streaming from", dev, sol.path, f"{W}x{H}", self.sensor.get("name", "unknown sensor"))
             p = subprocess.Popen(["v4l2-ctl", "-d", dev, f"--set-fmt-video=width={W},height={H},pixelformat=YUYV",
                                   "--stream-mmap=4", "--stream-to=-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            last = [time.time()]
+
+            def watch():            # an unplugged kit (module swap) leaves v4l2-ctl waiting on the gone node forever
+                while p.poll() is None:
+                    if not os.path.exists(dev) or time.time() - last[0] > 20:   # 20 s: frames come every <= ~1.5 s
+                        p.kill()
+                    time.sleep(1)
+            threading.Thread(target=watch, daemon=True).start()
             try:
                 while True:
                     buf = p.stdout.read(size)
                     if len(buf) < size:
                         break
+                    last[0] = time.time()
                     yield np.frombuffer(buf, np.uint8)[0::2].reshape(H, W)
             finally:
                 p.terminate()
@@ -254,25 +279,192 @@ def safe_name(s):
     return re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", s).strip("_")[:40]
 
 
-def capture():
-    with cam.lock:
-        img = cam.img
-    if img is None:
-        raise OSError("영상 없음")
+rec = scope_rec.Rec(os.path.join(A.data, "scope.db"))
+
+
+def save_photo(img, run_id=None, over=None):
+    """PNG + thumbnail + JSON in photos/, objects into the record. over: settings of an automatic shot at the moment
+    it was taken (exp, led, avg, flat). Returns the photo name."""
     with cfg_lock:
-        meta = {k: cfg[k] for k in ("exp", "led", "avg", "flat", "pixel_um", "sample", "note")}
-    meta.update(time=time.strftime("%Y-%m-%d %H:%M:%S"), width=img.shape[1], height=img.shape[0],
-                sensor=cam.sensor.get("name", ""),
+        c = dict(cfg)
+    meta = {k: c[k] for k in ("exp", "led", "avg", "flat", "pixel_um", "sample", "note")}
+    meta.update(over or {})
+    t = time.time()
+    lt = time.localtime(t)
+    meta.update(time=time.strftime("%Y-%m-%d %H:%M:%S", lt), width=img.shape[1], height=img.shape[0],
+                sensor=cam.sensor.get("name", ""), run=run_id,
                 mean=round(float(img.mean()), 1), board=open("/etc/hostname").read().strip() if os.path.exists("/etc/hostname") else "")
-    name = time.strftime("%Y%m%d-%H%M%S") + ("_" + safe_name(meta["sample"]) if meta["sample"] else "")
-    with open(os.path.join(PHOTOS, name + ".png"), "wb") as f:
-        f.write(png(img))
+    base = time.strftime("%Y%m%d-%H%M%S", lt) + ("_" + safe_name(meta["sample"]) if meta["sample"] else "")
+    name, i = base, 2
+    while os.path.exists(os.path.join(PHOTOS, name + ".json")):     # a manual and an automatic shot in one second
+        name, i = f"{base}-{i}", i + 1
+    keep_png = run_id is None or c["rec_png"]                         # a manual shot always keeps its PNG
+    if keep_png:
+        with open(os.path.join(PHOTOS, name + ".png"), "wb") as f:
+            f.write(png(img))
     with open(os.path.join(PHOTOS, name + ".thumb.png"), "wb") as f:
         f.write(png(img[::8, ::8]))
+    res = None
+    if scope_rec.HAVE_CV:
+        try:
+            res = scope_rec.analyze(img, c["pixel_um"], c["an_dark"], c["an_min_um"], c["an_max_um"], c["an_split"],
+                                    SENS_K.get(c["an_sens"], 3.0))
+            if c["rec_ov"]:
+                with open(os.path.join(PHOTOS, name + ".ov.jpg"), "wb") as f:
+                    f.write(scope_rec.overlay_jpg(img, res))
+        except Exception as e:                                      # an analysis fault must not lose the photo
+            log("analysis:", e)
+            res = None
+    meta.update(png=keep_png, ov=bool(res and c["rec_ov"]), count=res["count"] if res else None,
+                mean_d_um=res["mean_d_um"] if res else None, total_area_um2=res["total_area_um2"] if res else None)
     with open(os.path.join(PHOTOS, name + ".json"), "w") as f:
         json.dump(meta, f, ensure_ascii=False)
-    log("photo", name)
+    try:
+        rec.add_photo(run_id, name, dict(meta, t=t, opts={k: c[k] for k in AN_KEYS}), res, c["pixel_um"],
+                      track=bool(run_id and c["an_track"]))
+    except Exception as e:                                          # the files are written; keep going
+        log("record:", e)
+    log("photo", name, "objects", meta["count"])
     return name
+
+
+def wait_frames(k, timeout=8.0):
+    n0, t_end = cam.n, time.time() + timeout
+    while cam.n < n0 + k:
+        if time.time() > t_end:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def auto_exposure():
+    """Exposure for a mean grey of ~118 on the raw frames, the page's rule (scope.html bAE)."""
+    for _ in range(8):
+        if not wait_frames(3):
+            raise OSError("영상 없음")
+        with cam.lock:
+            m = float(cam.raw[::4, ::4].mean())
+        if abs(m - 118) < 10:
+            return
+        with cfg_lock:
+            cfg["exp"] = max(1, min(10000, round(cfg["exp"] * (0.4 if m >= 250 else 118 / max(m, 4)))))
+            sol.exposure(cfg["exp"])
+
+
+def grab(n, flat):
+    """Mean of the next n raw frames (not the page's running average), flat-field corrected when asked and a
+    reference of this size exists. Returns (image, flat applied)."""
+    acc, got, last, t_end = None, 0, cam.n, time.time() + 10 + 3 * n
+    while got < n:
+        if time.time() > t_end:
+            raise OSError("영상 없음")
+        if cam.n != last:
+            with cam.lock:
+                y, last = cam.raw, cam.n
+            if acc is not None and acc.shape != y.shape:               # the camera changed mid-way
+                acc, got = None, 0
+            acc = y.astype(np.float32) if acc is None else acc + y
+            got += 1
+        time.sleep(0.02)
+    img = acc / n
+    flat = bool(flat and cam.gain is not None and cam.gain.shape == img.shape)
+    if flat:
+        img *= cam.gain
+    return np.clip(img + 0.5, 0, 255).astype(np.uint8), flat
+
+
+# ---------------------------------------------------------------- automatic capture
+tl = {"next": 0, "last": 0, "n": 0, "msg": ""}
+
+
+def tl_stop(msg):
+    with cfg_lock:
+        run, cfg["tl_on"] = cfg["tl_run"], False
+        save_cfg()
+    if run:
+        rec.end_run(run)
+    tl["msg"] = msg
+    log("auto capture stopped:", msg)
+
+
+def photos_bytes():
+    return sum(e.stat().st_size for e in os.scandir(PHOTOS) if e.is_file())
+
+
+def disk_full(limit_gb):
+    """Why automatic capture must stop for space, or None. Nothing is ever deleted automatically."""
+    used = photos_bytes()
+    st = os.statvfs(PHOTOS)
+    if used > limit_gb * 1e9:
+        return f"사진이 보관 한도 {limit_gb} GB를 넘어 자동 촬영을 멈췄습니다"
+    if st.f_bavail * st.f_frsize < 2e9:
+        return "남은 저장 공간이 2 GB 아래라 자동 촬영을 멈췄습니다"
+    return None
+
+
+def shoot_auto(c):
+    """One automatic photo: LED on, auto exposure, average, flat-field as chosen; LED and exposure back after."""
+    with cfg_lock:
+        exp0, led0 = cfg["exp"], cfg["led"]
+    try:
+        if c["tl_led"] and led0 < 255:
+            with cfg_lock:
+                cfg["led"] = 255
+                sol.led(255)
+            wait_frames(3)
+        if c["tl_ae"]:
+            auto_exposure()
+        n = 4 if c["tl_avg4"] else 1
+        img, flat = grab(n, c["tl_flat"])
+        with cfg_lock:
+            over = {"exp": cfg["exp"], "led": cfg["led"], "avg": n, "flat": flat}
+    finally:
+        with cfg_lock:
+            changed = (cfg["exp"], cfg["led"]) != (exp0, led0)
+            cfg["exp"], cfg["led"] = exp0, led0
+            if changed:
+                try:
+                    sol.exposure(exp0)
+                    sol.led(led0)
+                except OSError:
+                    pass
+    return save_photo(img, c["tl_run"], over)
+
+
+def tl_loop():
+    """Shots on the slots tl_start + k * tl_every; a slot missed (busy, camera away) is skipped, not made up."""
+    while True:
+        time.sleep(0.5)
+        with cfg_lock:
+            c = dict(cfg)
+        if not c["tl_on"]:
+            tl["next"] = 0
+            continue
+        now = time.time()
+        if c["tl_hours"] and now >= c["tl_start"] + c["tl_hours"] * 3600:
+            tl_stop("정한 기간이 끝나 자동 촬영을 마쳤습니다")
+            continue
+        if not tl["last"]:                         # just started, or the service restarted in the middle of a run
+            tl["last"] = rec.last_t(c["tl_run"]) or 0
+            tl["n"] = rec.count(c["tl_run"])
+        every = c["tl_every"]
+        slot = math.floor((now - c["tl_start"]) / every)
+        done = math.floor((tl["last"] - c["tl_start"]) / every) if tl["last"] >= c["tl_start"] else -1
+        if slot <= done:
+            tl["next"] = c["tl_start"] + (slot + 1) * every
+            continue
+        tl["last"] = now
+        why = disk_full(c["rec_gb"])
+        if why:
+            tl_stop(why)
+            continue
+        try:
+            shoot_auto(c)
+            tl["msg"] = ""
+        except Exception as e:                    # camera away, sensor error: try again on the next slot
+            tl["msg"] = f"{time.strftime('%H:%M:%S')} 촬영 실패: {e}"
+            log("auto capture:", e)
+        tl["n"] = rec.count(c["tl_run"])
 
 
 def photos():
@@ -283,6 +475,48 @@ def photos():
         except (OSError, ValueError):
             pass
     return out
+
+
+def an_opts(q):
+    """Analysis settings: cfg, with the page's draft values from the query on top (cfg itself is not changed)."""
+    with cfg_lock:
+        c = dict(cfg)
+    g = lambda k: q.get(k, [None])[0]
+    if g("dark") in ("0", "1"):
+        c["an_dark"] = g("dark") == "1"
+    if g("split") in ("0", "1"):
+        c["an_split"] = g("split") == "1"
+    if g("sens") in ("1", "2", "3", "4", "5"):
+        c["an_sens"] = int(g("sens"))
+    for k, key in (("min", "an_min_um"), ("max", "an_max_um")):
+        if g(k):
+            c[key] = max(0.5, min(5000.0, float(g(k))))
+    return c
+
+
+def analyze_c(img, c):
+    return scope_rec.analyze(img, c["pixel_um"], c["an_dark"], c["an_min_um"], c["an_max_um"], c["an_split"],
+                             SENS_K.get(c["an_sens"], 3.0))
+
+
+def an_json(res, pixel_um, cap=3000):
+    """Objects as circles for the page: [x, y, equivalent diameter um], the largest first."""
+    objs = sorted(res["objs"], key=lambda o: -o[2])[:cap]
+    return {"count": res["count"], "mean_d_um": res["mean_d_um"], "total_area_um2": res["total_area_um2"],
+            "truncated": res["truncated"] or len(res["objs"]) > cap,
+            "objs": [[int(x), int(y), round(2 * math.sqrt(a / math.pi) * pixel_um, 1)] for x, y, a in objs]}
+
+
+disk_cache = {"t": 0, "d": None}
+
+
+def disk_info():
+    if time.time() - disk_cache["t"] > 30:
+        st = os.statvfs(PHOTOS)
+        disk_cache.update(t=time.time(), d={"free_gb": round(st.f_bavail * st.f_frsize / 1e9, 2),
+                                            "photos_gb": round(photos_bytes() / 1e9, 3),
+                                            "n": sum(1 for e in os.scandir(PHOTOS) if e.name.endswith(".json"))})
+    return disk_cache["d"]
 
 
 # ---------------------------------------------------------------- HTTP
@@ -360,7 +594,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send({"n": cam.n, "fps": round(cam.fps, 2), "dev": cam.dev, "msg": cam.msg, "cfg": c,
                            "flat_ready": cam.gain is not None and cam.gain.shape == (H, W), "flat_left": cam.flat_left,
                            "diag": diag_cache["d"], "sensor": cam.sensor, "size": [W, H],
-                           "time": time.strftime("%Y-%m-%d %H:%M:%S")})
+                           "tl": {k: tl[k] for k in ("next", "n", "msg")}, "cv": {"have": scope_rec.HAVE_CV, "err": scope_rec.CV_ERR},
+                           "disk": disk_info(),
+                           "time": time.strftime("%Y-%m-%d %H:%M:%S"), "now": time.time()})
             elif p == "/set":
                 with cfg_lock:
                     for k, v in q.items():
@@ -379,6 +615,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             cfg["pixel_um"] = max(0.1, min(50.0, float(v)))
                         elif k in ("sample", "note"):
                             cfg[k] = v[:80]
+                        elif k == "tl_every" and v.isdigit():
+                            cfg[k] = max(10, min(86400, int(v)))
+                        elif k == "tl_hours":
+                            cfg[k] = max(0.0, min(24 * 30.0, float(v)))      # 0 = until stopped
+                        elif k in ("an_min_um", "an_max_um"):
+                            cfg[k] = max(0.5, min(5000.0, float(v)))
+                        elif k == "an_sens" and v in ("1", "2", "3", "4", "5"):
+                            cfg[k] = int(v)
+                        elif k == "rec_gb" and v.isdigit():
+                            cfg[k] = max(1, min(45, int(v)))
+                        elif k in BOOL_KEYS:
+                            cfg[k] = v == "1"
+                        elif k == "tl_on":
+                            on = v == "1"
+                            if on and not cfg["tl_on"]:          # a new run: its settings go with it
+                                cfg["tl_run"] = rec.new_run(cfg["sample"], cfg["tl_every"],
+                                                            {kk: cfg[kk] for kk in cfg if kk.startswith(("tl_", "an_", "rec_")) or kk == "pixel_um"})
+                                cfg["tl_start"] = time.time()
+                                tl.update(last=0, n=0, msg="")
+                            elif not on and cfg["tl_on"]:
+                                rec.end_run(cfg["tl_run"])
+                                tl["msg"] = "멈춤"
+                            cfg["tl_on"] = on
                     save_cfg()
                     self.send(cfg)
             elif p == "/flat/take":
@@ -390,7 +649,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     sol.reg_write(reg, int(q["v"][0], 16))
                 self.send({"reg": f"0x{reg:04x}", "value": f"0x{sol.reg_read(reg):04x}"})
             elif p == "/capture":
-                self.send({"name": capture()})
+                with cam.lock:
+                    img = cam.img
+                if img is None:
+                    raise OSError("영상 없음")
+                self.send({"name": save_photo(img)})
+            elif p == "/analyze/preview":
+                if not scope_rec.HAVE_CV:
+                    return self.send({"error": scope_rec.CV_ERR}, code=503)
+                with cam.lock:
+                    img = cam.img
+                if img is None:
+                    raise OSError("영상 없음")
+                c = an_opts(q)
+                if "fmt" not in q:                                # contour JPEG, as before
+                    res = analyze_c(img, c)
+                    return self.send(scope_rec.overlay_jpg(img, res), "image/jpeg",
+                                     extra=[("X-Count", str(res["count"])), ("X-Mean-D", str(res["mean_d_um"] or ""))])
+                self.send(an_json(analyze_c(img, c), c["pixel_um"]))
+            elif p.startswith("/rec/"):
+                r = q.get("run", [""])[0]
+                run = int(r) if r.isdigit() else None             # none = manual photos
+                what = p[5:]
+                if what == "runs":
+                    self.send(rec.runs())
+                elif what == "photos":
+                    self.send(rec.photos(run))
+                elif what == "objects":
+                    self.send(rec.objects(int(q["photo"][0])))
+                elif what == "tracks":
+                    self.send(rec.tracks(run))
+                elif what == "csv":
+                    kind = "objects" if q.get("what", [""])[0] == "objects" else "photos"
+                    self.send(rec.csv(run, kind), "text/csv; charset=utf-8",
+                              extra=[("Content-Disposition", f'attachment; filename="scope-{run or "manual"}-{kind}.csv"')])
+                else:
+                    self.send({"error": "없음"}, code=404)
             elif p == "/photos":
                 self.send(photos())
             elif p.startswith("/photos/"):
@@ -399,7 +693,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if "/" in f or not os.path.isfile(path):
                     self.send({"error": "없음"}, code=404)
                 else:
-                    self.send(open(path, "rb").read(), "image/png" if f.endswith(".png") else "application/json")
+                    self.send(open(path, "rb").read(), "image/png" if f.endswith(".png") else
+                              "image/jpeg" if f.endswith(".jpg") else "application/json")
             elif p == "/reload":
                 self.send({"reload": True})
                 open(os.path.join(A.ctl, "reload"), "w").close()
@@ -408,7 +703,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 open(os.path.join(A.ctl, "stop"), "w").close()
             else:
                 self.send({"error": "없음"}, code=404)
-        except (OSError, ValueError, KeyError) as e:
+        except (ConnectionResetError, BrokenPipeError):
+            raise
+        except Exception as e:                       # OpenCV and SQLite errors too: an answer, not a dropped request
             self.send({"error": str(e)}, code=400)
 
 
@@ -429,6 +726,7 @@ def main():
     srv = Server(("", A.port), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=cam.run, daemon=True).start()
+    threading.Thread(target=tl_loop, daemon=True).start()
     log("http on", A.port, "fake" if A.fake else "")
     while not any(os.path.exists(os.path.join(A.ctl, f)) for f in ("stop", "reload")):
         time.sleep(0.5)

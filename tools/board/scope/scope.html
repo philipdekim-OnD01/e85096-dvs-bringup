@@ -2,129 +2,438 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>SOL Microscope</title>
+<link rel="icon" href="data:,">
 <style>
-:root{--bg:#090c10;--panel:#10161d;--panel2:#151d26;--line:#223040;--txt:#c9d4df;--dim:#7a8a99;--acc:#3fd0e0;--amb:#f2b544;--red:#ff5a5f;--ok:#4cd98a;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+:root{--bg:#0a0e13;--surf:#10161d;--card:#141b24;--card2:#1a232e;--line:#222d3a;--line2:#2f3d4d;--txt:#d7e0e8;--hi:#f2f6f9;--dim:#8a9aab;--mute:#5f6e7e;
+  --acc:#3fd0e0;--accd:#103238;--ink:#03252a;--amb:#f2b544;--red:#ff5a5f;--ok:#4cd98a;
+  /* chart slots: dataviz validator, dark on #10161d and light (print) on white */
+  --s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767;--grid:#1c2732;--axis:#2c3a48;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark}
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:13px/1.4 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
-body{display:grid;grid-template-rows:auto 1fr auto;height:100vh;overflow:hidden}
-header{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:6px 12px;background:linear-gradient(#141c25,#0e141a);border-bottom:1px solid var(--line)}
-.brand{font-weight:700;letter-spacing:.14em;color:#e8f6fa}.brand small{color:var(--acc);letter-spacing:.1em;margin-left:6px;font-weight:600}
-.pill{display:flex;align-items:center;gap:6px;font:600 12px var(--mono);padding:2px 8px;border:1px solid var(--line);border-radius:10px;color:var(--dim)}
-.pill i{width:8px;height:8px;border-radius:50%;background:#444}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+body{display:grid;grid-template-rows:auto minmax(0,1fr) auto;height:100vh;height:100dvh;overflow:hidden}
+.ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.mono{font-family:var(--mono)}.sp{flex:1}.dim{color:var(--dim)}.note{color:var(--dim);font-size:12.5px}.warn{color:var(--amb)}
+button,.btn{font:inherit;font-size:13.5px;color:var(--txt);background:var(--card2);border:1px solid var(--line2);border-radius:8px;padding:7px 12px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;text-decoration:none;white-space:nowrap;line-height:1.2}
+button:hover,.btn:hover{border-color:#43566b;color:var(--hi)}
+button:focus-visible,.btn:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button.pri{background:var(--acc);border-color:var(--acc);color:var(--ink);font-weight:700}button.pri:hover{background:#74e2ee;color:var(--ink)}
+button.on{background:var(--accd);border-color:var(--acc);color:#dffaff}
+button.danger{background:#2a1214;border-color:#6b2a2e;color:#ffd9da}button.danger:hover{border-color:var(--red)}
+button:disabled{opacity:.45;cursor:not-allowed}
+input[type=text],input[type=number],select{font:inherit;font-size:13.5px;color:var(--hi);background:#0b1117;border:1px solid var(--line2);border-radius:8px;padding:7px 9px;min-width:0}
+input[type=range]{accent-color:var(--acc);min-width:0}
+.sw{appearance:none;-webkit-appearance:none;width:36px;height:20px;border-radius:10px;background:#2a3644;position:relative;cursor:pointer;flex:none;margin:0;transition:background .15s}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#c9d4df;transition:transform .15s}
+.sw:checked{background:var(--acc)}.sw:checked::after{transform:translateX(16px);background:#fff}
+.sw:disabled{opacity:.4;cursor:not-allowed}
+.opt{display:flex;align-items:center;gap:12px;padding:8px 0;cursor:pointer}.opt>span{flex:1;min-width:0}.opt small{display:block;color:var(--dim);font-size:12px}.opt small.warn{color:var(--amb)}
+.pill{display:inline-flex;align-items:center;gap:7px;font:600 12px var(--mono);padding:4px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--dim);white-space:nowrap}
+.pill i{width:8px;height:8px;border-radius:50%;background:#4a5562;flex:none}
 .pill.on{color:var(--ok)}.pill.on i{background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 1.2s infinite}
 .pill.pause{color:var(--amb)}.pill.pause i{background:var(--amb)}
+.pill.rec{color:#ffd9da;border-color:#5a2427}.pill.rec i{background:var(--red);box-shadow:0 0 8px var(--red);animation:pulse 1.2s infinite}
 @keyframes pulse{50%{opacity:.35}}
-.mono{font-family:var(--mono)}.sp{flex:1}.dim{color:var(--dim)}
-button,.btn{font:inherit;color:var(--txt);background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:4px 10px;cursor:pointer;text-decoration:none;white-space:nowrap}
-button:hover,.btn:hover{border-color:var(--acc);color:#fff}
-button.on{background:#123a40;border-color:var(--acc);color:#dffaff}
-button.rec{background:#3a1416;border-color:#7a2a2e;color:#ffd9da;font-weight:700}button.rec:hover{border-color:var(--red)}
-main{display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:0}
+/* header */
+header.top{display:flex;align-items:center;gap:12px;padding:8px 14px;background:#0d1218;border-bottom:1px solid var(--line);min-height:58px}
+.brand{display:flex;align-items:center;gap:10px;color:var(--hi);white-space:nowrap}
+.brand .logo{width:30px;height:30px;color:var(--acc);stroke-width:1.6}.brand b{font-size:15px;letter-spacing:.02em}
+.brand small{display:block;font:600 10px var(--mono);letter-spacing:.16em;color:var(--mute)}
+.tabs{display:flex;gap:2px;background:#090d12;border:1px solid var(--line);border-radius:11px;padding:3px;margin-left:10px}
+.tabs button{border:0;background:none;color:var(--dim);padding:8px 16px;border-radius:8px;font-weight:600;font-size:14px}
+.tabs button[aria-selected=true]{background:var(--card2);color:var(--hi);box-shadow:inset 0 0 0 1px var(--line2)}
+.tabs button[aria-selected=true] .ic{color:var(--acc)}
+#bAdv{padding:7px 9px}
+main{min-height:0;display:block}
+.tab{display:none;height:100%;min-height:0}
+/* live */
+#tab-live.on{display:grid;grid-template-columns:minmax(0,1fr) 320px}
 #view{position:relative;background:#000;min-height:0;overflow:hidden;cursor:crosshair;touch-action:none}
 #cv{position:absolute;inset:0;width:100%;height:100%}
 #msg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--dim);font-size:15px;text-align:center;pointer-events:none}
-#tag{position:absolute;right:10px;top:8px;font:600 11px var(--mono);color:var(--acc);background:#000a;padding:2px 6px;border-radius:3px;pointer-events:none}
-#zoomui{position:absolute;right:10px;bottom:10px;display:flex;align-items:center;gap:4px;background:#000c;border:1px solid var(--line);border-radius:6px;padding:4px}
-#zoomui button{min-width:38px;height:34px;padding:0 8px;font-size:15px}
-#zPct{font:600 12px var(--mono);color:var(--acc);min-width:50px;text-align:center}
-aside{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:4px 0 20px}
-.grp{border-bottom:1px solid var(--line);padding:8px 12px 10px}
-.grp h3{margin:0 0 6px;font:700 11px var(--mono);letter-spacing:.14em;color:var(--acc);text-transform:uppercase}
-.row{display:flex;align-items:center;gap:8px;margin:5px 0}.row label{width:52px;color:var(--dim);flex:none}
-.row input[type=range]{flex:1;accent-color:var(--acc);min-width:0}
-.val{width:64px;text-align:right;font-family:var(--mono);color:#e6eef5;flex:none}
-.seg{display:flex;flex:1}.seg button{flex:1;border-radius:0;padding:3px 0;margin-left:-1px}.seg button:first-child{border-radius:4px 0 0 4px}.seg button:last-child{border-radius:0 4px 4px 0}
-input[type=text],input[type=number],select{font:12px var(--mono);color:#e6eef5;background:#0b1117;border:1px solid var(--line);border-radius:4px;padding:3px 6px;min-width:0}
-#hist{width:100%;height:70px;display:block;background:#0b1117;border:1px solid var(--line);border-radius:3px}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;font:12px var(--mono)}.kv span:nth-child(odd){color:var(--dim)}
-#gal{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}#gal img{width:100%;display:block;border:1px solid var(--line);border-radius:2px;cursor:pointer;image-rendering:auto}
+#tag{position:absolute;right:12px;top:12px;font:600 11px var(--mono);color:var(--acc);background:#000a;padding:3px 7px;border-radius:5px;pointer-events:none}
+#ovChip{position:absolute;left:12px;top:12px;display:none;align-items:center;gap:8px;background:#000c;border:1px solid var(--line2);border-radius:9px;padding:6px 11px;font:600 13px var(--mono);color:var(--hi);pointer-events:none}
+#ovChip i{width:10px;height:10px;border-radius:50%;border:2px solid var(--acc)}
+#zoomui{position:absolute;right:12px;bottom:12px;display:flex;align-items:center;gap:4px;background:#000c;border:1px solid var(--line2);border-radius:10px;padding:4px}
+#zoomui button{min-width:38px;height:34px;padding:0 9px;font-size:14px;background:#141b24}
+#zPct{font:600 12px var(--mono);color:var(--acc);min-width:52px;text-align:center}
+.side{background:var(--surf);border-left:1px solid var(--line);overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card h3{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:13.5px;font-weight:650;color:var(--hi)}
+.card h3 .ic{color:var(--acc)}
+.row{display:flex;align-items:center;gap:8px;margin:8px 0}.row>.l{width:58px;color:var(--dim);font-size:13px;flex:none}
+.row input[type=range]{flex:1}
+.val{min-width:62px;text-align:right;font:13px var(--mono);color:var(--hi);flex:none}
+.seg{display:flex;flex:1;background:#0b1117;border:1px solid var(--line2);border-radius:9px;padding:2px;gap:2px}
+.seg button{flex:1;border:0;background:none;padding:6px 0;border-radius:7px;color:var(--dim)}
+.seg button.on{background:var(--accd);color:#dffaff;box-shadow:inset 0 0 0 1px var(--acc)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.readout{display:flex;align-items:baseline;gap:10px;margin-top:6px}.readout .big{white-space:nowrap}
+.big{font:600 26px var(--mono);color:var(--hi);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+details.card summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:650;color:var(--hi)}
+details.card summary::-webkit-details-marker{display:none}
+details.card summary::after{content:"";margin-left:auto;width:7px;height:7px;border-right:2px solid var(--dim);border-bottom:2px solid var(--dim);transform:rotate(45deg);transition:transform .15s}
+details.card[open] summary{margin-bottom:8px}details.card[open] summary::after{transform:rotate(225deg)}
+#gal{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+#gal img{width:100%;display:block;border:1px solid var(--line);border-radius:6px;cursor:pointer;aspect-ratio:4/3;object-fit:cover;background:#000}
 #gal img:hover{border-color:var(--acc)}
-footer{display:flex;flex-wrap:wrap;align-items:center;gap:4px 18px;padding:5px 12px;background:#0c1116;border-top:1px solid var(--line);font:12px var(--mono)}
-footer span{color:var(--dim)}footer b{color:#e8f0f6;font-weight:600}footer input{width:170px}
-#toast{position:fixed;left:50%;bottom:46px;transform:translateX(-50%);background:#123a40;border:1px solid var(--acc);color:#e8fdff;padding:7px 14px;border-radius:5px;opacity:0;transition:opacity .3s;pointer-events:none}
-#modal{position:fixed;inset:0;background:#000d;display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px}
-#modal img{max-width:100%;max-height:78vh;border:1px solid var(--line)}#modal .bar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
-.kbd{font:11px var(--mono);color:var(--dim)}
-@media (max-width:900px){body{height:auto;overflow-x:hidden}main{grid-template-columns:minmax(0,1fr)}#clock,#frm{display:none}header{padding:6px 10px}#view{height:70vw;min-height:300px}aside{border-left:0}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font:12.5px var(--mono)}.kv span{color:var(--dim)}.kv b{color:var(--hi);font-weight:600}
+footer{display:flex;flex-wrap:wrap;align-items:center;gap:4px 18px;padding:6px 14px;background:#0c1116;border-top:1px solid var(--line);font:12px var(--mono)}
+footer span{color:var(--dim)}footer b{color:#e8f0f6;font-weight:600}
+body:not([data-tab=live]) footer{display:none}
+/* experiment */
+#tab-exp.on{display:block;overflow-y:auto}
+.wrap{max-width:1200px;margin:0 auto;padding:22px 22px 48px}
+.wiz{display:grid;grid-template-columns:240px minmax(0,1fr);gap:22px;align-items:start}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;position:sticky;top:0}
+.steps button{width:100%;justify-content:flex-start;gap:12px;background:none;border:1px solid transparent;padding:10px 12px;border-radius:11px;color:var(--dim);text-align:left}
+.steps .n{width:28px;height:28px;border-radius:50%;border:1.5px solid var(--line2);display:grid;place-items:center;font:600 13px var(--mono);flex:none}
+.steps button.on{background:var(--card);border-color:var(--line2);color:var(--hi)}.steps button.on .n{border-color:var(--acc);color:var(--acc)}
+.steps button.done .n{background:var(--accd);border-color:var(--acc);color:var(--acc)}
+.steps b{display:block;font-weight:600}.steps small{display:block;font-size:12px;color:var(--mute);max-width:170px;overflow:hidden;text-overflow:ellipsis}
+.wstep{display:none}.wstep.on{display:block}
+.wstep h2,.runcard h2{margin:0 0 4px;font-size:21px;color:var(--hi);font-weight:700}
+.lead{color:var(--dim);margin:0 0 18px}
+.field{display:block;margin:0 0 14px}.field>span{display:block;font-size:13px;color:var(--dim);margin-bottom:6px}.field input{width:100%;max-width:520px;font-size:15px;padding:10px 12px}
+.presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.preset{flex-direction:column;align-items:flex-start;gap:5px;padding:14px;border-radius:12px;background:var(--card);border:1px solid var(--line);text-align:left;white-space:normal}
+.preset .ic{width:28px;height:28px;color:var(--acc);margin-bottom:4px}.preset b{color:var(--hi);font-size:14.5px}.preset small{color:var(--dim);font-size:12px;line-height:1.35}
+.preset.on{border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc);background:#0f2a30}
+.opts{display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;margin:14px 0 4px}
+.opts .seg{flex:none;width:220px}
+.sens{display:flex;align-items:center;gap:10px}.sens input{width:150px}.sens small{color:var(--dim);font-size:12px}
+.tgrid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px;margin-top:14px}
+#pvBig{width:100%;aspect-ratio:4/3;display:block;background:#000;border-radius:10px;border:1px solid var(--line)}
+#gate{width:100%;height:160px;display:block;touch-action:none;cursor:ew-resize}
+.range{display:flex;align-items:center;gap:8px;margin-top:8px}.range input{width:90px}
+.tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:10px}
+.tile{flex-direction:column;align-items:stretch;padding:5px;gap:4px;border-radius:10px;background:var(--card);border:1px solid var(--line)}
+.tile canvas{width:100%;aspect-ratio:4/3;display:block;border-radius:6px;background:#000}
+.tile span{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);padding:0 3px}.tile b{font:600 13px var(--mono);color:var(--hi)}
+.tile.on{border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
+.sub{font-size:13.5px;font-weight:650;color:var(--hi);margin:20px 0 4px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{padding:7px 13px;border-radius:999px;background:var(--card);border:1px solid var(--line2);color:var(--txt);font-size:13.5px}
+.chip.on{background:var(--accd);border-color:var(--acc);color:#dffaff}
+label.chip{display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}label.chip input{position:absolute;opacity:0;width:0;height:0}
+label.chip:has(input:checked){background:var(--accd);border-color:var(--acc);color:#dffaff}
+label.chip:has(input:focus-visible){outline:2px solid var(--acc);outline-offset:2px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.est{display:flex;flex-wrap:wrap;gap:10px 28px;align-items:baseline;margin-top:16px;padding:14px 16px;border-radius:12px;background:#0d1a20;border:1px solid #1d3a42}
+.est b{font:600 20px var(--mono);color:var(--hi)}.est span{color:var(--dim);font-size:12.5px;display:block}
+.sum{display:grid;grid-template-columns:130px 1fr;gap:10px 18px;margin:0}.sum dt{color:var(--dim)}.sum dd{margin:0;color:var(--hi)}
+.wnav{display:flex;gap:10px;justify-content:flex-end;margin-top:22px;border-top:1px solid var(--line);padding-top:16px}
+.wnav button{padding:10px 18px;font-size:14px}
+.runcard{padding:20px}
+.rc-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;margin-bottom:16px}.rc-head h2{margin:0}
+.rc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.rc-grid>div{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.k{font-size:12px;color:var(--dim)}
+.prog{height:8px;border-radius:4px;background:#1f2a36;overflow:hidden;margin-top:8px}.prog i{display:block;height:100%;width:0;background:var(--acc);border-radius:4px;transition:width .4s}
+.lastph{display:flex;gap:10px;align-items:center}.lastph img{width:72px;aspect-ratio:4/3;object-fit:cover;border-radius:6px;border:1px solid var(--line);background:#000}
+/* results */
+#tab-results.on{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;background:var(--surf)}
+.rtop{display:flex;flex-wrap:wrap;gap:12px;padding:12px 14px 10px;align-items:stretch}
+.rctl{display:flex;flex-direction:column;gap:8px;justify-content:space-between;min-width:260px}
+.rctl select{font-size:14px;padding:9px 10px}
+.rx{display:flex;gap:6px;flex-wrap:wrap}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;flex:1 1 600px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;min-width:0}
+.kpi .v{font:600 25px var(--mono);color:var(--hi);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rbar2{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 14px 10px}
+.rbody{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 400px;border-top:1px solid var(--line)}
+#rCharts{overflow-y:auto;padding:6px 14px 20px;min-width:0}
+.chart{margin:12px 0 4px}.chart .ct{font-weight:600;color:var(--hi)}.chart .ct span{color:var(--dim);font-weight:400;margin-left:6px;font-size:12.5px}
+.chart canvas{display:block;width:100%;height:170px;touch-action:none}
+.legend{display:flex;flex-wrap:wrap;gap:2px 12px;font:12px var(--mono);color:var(--dim);margin:2px 0}.legend i{display:inline-block;width:14px;height:2px;margin-right:5px;vertical-align:middle;border-radius:1px}
+#rSide{border-left:1px solid var(--line);overflow-y:auto;padding:12px 14px}
+.imgbar{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+#rImgA{display:block}#rImg{width:100%;display:block;border:1px solid var(--line);border-radius:8px;background:#000;min-height:80px;aspect-ratio:4/3;object-fit:contain}
+#rHist{display:block;width:100%;height:150px;margin-top:6px}
+#rTbl{width:100%;border-collapse:collapse;font:12px var(--mono);font-variant-numeric:tabular-nums;margin-top:14px}
+#rTbl th,#rTbl td{padding:4px 8px;border-bottom:1px solid var(--grid);text-align:right}#rTbl th{color:var(--dim);font-weight:600}#rTbl td:first-child,#rTbl th:first-child{text-align:left}
+#rTbl tr.sel td{background:var(--accd)}#rTbl tbody tr{cursor:pointer}
+.rstrip{display:flex;align-items:center;gap:8px;padding:8px 14px;border-top:1px solid var(--line);background:#0d1218;min-width:0}
+.rstrip button{padding:7px 9px}
+#strip{position:relative;flex:1;display:flex;gap:4px;overflow-x:auto;padding:2px;scrollbar-width:thin;min-width:0}
+#strip img{height:54px;width:72px;object-fit:cover;border-radius:5px;border:2px solid transparent;cursor:pointer;flex:none;background:#000;opacity:.7}
+#strip img:hover{opacity:1}#strip img.sel{border-color:var(--acc);opacity:1}
+#stripTxt{font:12px var(--mono);color:var(--dim);min-width:72px;text-align:right}
+.tip{position:fixed;pointer-events:none;background:#0b1117f0;border:1px solid var(--line2);border-radius:7px;padding:7px 10px;font:12px var(--mono);color:var(--dim);display:none;z-index:9;white-space:nowrap}
+.tip b{color:#f0f4f8;font-weight:600}.tip i{display:inline-block;width:12px;height:2px;margin-right:6px;vertical-align:middle}
+.print-only{display:none}
+/* advanced drawer */
+#drawer{position:fixed;top:0;right:0;bottom:0;width:min(390px,100vw);background:var(--surf);border-left:1px solid var(--line2);box-shadow:-24px 0 48px #000a;
+  transform:translateX(105%);transition:transform .2s;z-index:8;overflow-y:auto;padding-bottom:30px;visibility:hidden}
+#drawer.open{transform:none;visibility:visible}
+.dh{position:sticky;top:0;display:flex;align-items:center;gap:10px;padding:14px;background:var(--surf);border-bottom:1px solid var(--line);z-index:1}
+.dh h2{margin:0;font-size:16px;color:var(--hi)}
+#drawer .card{margin:12px}
+#hist{width:100%;height:76px;display:block;background:#0b1117;border:1px solid var(--line);border-radius:6px}
+.kbd{font:12px/1.7 var(--mono);color:var(--dim)}
+#toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%);background:#123a40;border:1px solid var(--acc);color:#e8fdff;padding:9px 16px;border-radius:9px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:10;max-width:90vw;text-align:center}
+#modal{position:fixed;inset:0;background:#000e;display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;z-index:9}
+#modal img{max-width:100%;max-height:78vh;border:1px solid var(--line);border-radius:6px}#modal .bar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+/* phone and narrow windows */
+@media (max-width:900px){
+  body{display:block;height:auto;min-height:100dvh;overflow-x:hidden;padding-bottom:calc(66px + env(safe-area-inset-bottom))}
+  header.top{position:sticky;top:0;z-index:5;gap:8px;padding:8px 12px;min-height:52px}
+  .brand small{display:none}.brand .logo{width:26px;height:26px}
+  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;margin:0;border-radius:0;border:0;border-top:1px solid var(--line);background:#0d1218f5;padding:6px 8px calc(6px + env(safe-area-inset-bottom))}
+  .tabs button{flex:1;flex-direction:column;gap:3px;font-size:12px;padding:6px 0}
+  #bShot .t,#liveFps{display:none}
+  #tab-live.on{display:block}#view{height:75vw;min-height:280px}.side{border-left:0}#zPct,#z100{display:none}#zoomui{right:8px;bottom:8px}#zoomui button{min-width:34px;height:32px}
+  .wrap{padding:14px 12px 30px}.wiz{grid-template-columns:1fr;gap:14px}
+  .steps{flex-direction:row;position:static}.steps li{flex:1;min-width:0}.steps button{flex-direction:column;gap:4px;padding:8px 2px;text-align:center}.steps small{display:none}.steps b{font-size:12px}
+  .presets{grid-template-columns:repeat(2,minmax(0,1fr))}.tgrid,.cols{grid-template-columns:1fr}.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .rc-grid{grid-template-columns:1fr 1fr}.sum{grid-template-columns:1fr;gap:2px}.sum dd{margin-bottom:8px}
+  #tab-results.on{display:block}.rctl{min-width:0;flex:1 1 100%}.kpis{grid-template-columns:1fr 1fr;flex-basis:100%}
+  .rbody{display:block}#rSide{border-left:0;border-top:1px solid var(--line)}
+  .rstrip{position:sticky;bottom:calc(62px + env(safe-area-inset-bottom));z-index:3}
+}
+@media (max-width:520px){.brand div{display:none}header.top{gap:6px}.pill{padding:4px 8px}}
+/* report: the page is laid out at print width first so the charts are drawn at the size they print */
+body.printing{--surf:#fff;--bg:#fff;--card:#fff;--card2:#fff;--grid:#e3e8ee;--axis:#97a3af;--dim:#56636f;--txt:#1b232c;--hi:#0d1318;--line:#d4dbe2;--accd:#e6f7f9}
+body.printing .rbody{display:block;width:700px}body.printing #rSide{width:700px}
+@media print{
+  @page{size:A4;margin:12mm}
+  :root{color-scheme:light}                           /* else Chrome paints the page margins dark (#121212) */
+  html,body{height:auto;overflow:visible;background:#fff;color:#1b232c;display:block;padding:0}
+  header.top,footer,.tabs,#tab-live,#tab-exp,.rctl,.rbar2,.rstrip,.imgbar,#drawer,#toast,.tip,#modal{display:none!important}
+  #tab-results{display:block!important;background:#fff}
+  .print-only{display:block}
+  .rtop{padding:0 0 8px}.kpis{grid-template-columns:repeat(4,1fr)}.kpi{border-color:#d4dbe2}
+  .rbody{border:0}#rCharts{overflow:visible;padding:0}#rSide{border:0;padding:0;overflow:visible;break-inside:avoid}
+  #rImg{width:auto;max-width:100%;height:auto;max-height:105mm;aspect-ratio:auto;background:#fff;border-color:#d4dbe2}.chart{break-inside:avoid}#rTbl{break-before:auto}
+}
+#rReport h1{font-size:18px;margin:0 0 4px;color:#0d1318}#rReport p{margin:2px 0;color:#38444f;font-size:12.5px}
 </style>
 </head>
-<body>
-<header>
-  <div class="brand">SOL MICROSCOPE<small>E850</small></div>
-  <div id="live" class="pill"><i></i><span>WAIT</span></div>
-  <span class="mono" id="fps">— fps</span><span class="mono dim" id="frm"></span>
+<body data-tab="live">
+<header class="top">
+  <div class="brand"><svg class="ic logo" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+    <div><b>SOL Microscope</b><small>E850 · LENSLESS</small></div></div>
+  <nav class="tabs" role="tablist" aria-label="화면">
+    <button role="tab" data-tab="live" aria-selected="true"><svg class="ic" data-ic="live"></svg>실시간</button>
+    <button role="tab" data-tab="exp" aria-selected="false"><svg class="ic" data-ic="flask"></svg>실험</button>
+    <button role="tab" data-tab="results" aria-selected="false"><svg class="ic" data-ic="chart"></svg>결과</button>
+  </nav>
   <div class="sp"></div>
-  <span class="mono dim" id="clock"></span>
-  <button id="bPause" title="Space">❚❚ 정지</button>
-  <button id="bShot" class="rec" title="C">◉ 촬영</button>
+  <div id="live" class="pill" title="카메라 상태"><i></i><span>WAIT</span><span id="liveFps"></span></div>
+  <button id="tlPill" class="pill rec" style="display:none" title="진행 중인 실험 · 누르면 결과"><i></i><span>REC</span></button>
+  <button id="bShot" class="pri" title="지금 화면을 사진으로 저장 (C)"><svg class="ic" data-ic="camera"></svg><span class="t">촬영</span></button>
+  <button id="bAdv" title="고급 설정 · 센서, 보정" aria-label="고급 설정"><svg class="ic" data-ic="sliders"></svg></button>
 </header>
 <main>
-  <section id="view"><canvas id="cv"></canvas><div id="msg">연결하는 중…</div><div id="tag"></div>
-    <div id="zoomui"><button id="zOut" title="축소 (−) · 기준점 중심">−</button><span id="zPct" title="100% = 센서 화소 1개가 화면 점 1개">100%</span>
-      <button id="zIn" title="확대 (+) · 기준점 중심">＋</button><button id="zFit" title="전체 보기 (F, 0)">맞춤</button><button id="z100" title="원래 크기: 센서 화소 1개 = 화면 점 1개 (1)">1:1</button></div></section>
-  <aside>
-    <div class="grp"><h3>촬영 조건 · 센서</h3>
-      <div class="row"><label>노출</label><input type="range" id="exp" min="0" max="1000"><span class="val" id="expv"></span></div>
-      <div class="row"><label>조명</label><button id="bLed" title="시료 위 LED. 켜고 끈 뒤 자동 노출을 한 번 돌림">LED 켜기</button></div>
-      <div class="row"><label>평균</label><div class="seg" id="avg"></div></div>
-      <div class="row"><label></label><button id="bAE" title="평균 밝기가 중간이 되도록 노출을 맞춤">자동 노출</button><span class="dim" id="aeTxt"></span></div>
+<!-- ============ live -->
+<section class="tab on" id="tab-live" role="tabpanel" aria-label="실시간">
+  <div id="view"><canvas id="cv"></canvas><div id="msg">연결하는 중…</div><div id="tag"></div><div id="ovChip"><i></i><span></span></div>
+    <div id="zoomui"><button id="bPause" title="영상 멈춤 (Space)" aria-label="영상 멈춤"><svg class="ic" data-ic="pause"></svg></button>
+      <button id="zOut" title="축소 (−)" aria-label="축소">−</button><span id="zPct" title="100% = 센서 화소 1개가 화면 점 1개">100%</span>
+      <button id="zIn" title="확대 (+)" aria-label="확대">＋</button><button id="zFit" title="전체 보기 (F, 0)">맞춤</button><button id="z100" title="원래 크기 (1)">1:1</button></div></div>
+  <aside class="side">
+    <div class="card"><h3><svg class="ic" data-ic="bulb"></svg>조명 · 노출</h3>
+      <div class="two"><button id="bLed" title="시료 위 LED. 켜고 끈 뒤 자동 노출을 한 번 돌림"><svg class="ic" data-ic="bulb"></svg><span id="bLedT">LED 켜기</span></button><button id="bAE" title="평균 밝기가 중간이 되도록 노출을 맞춤">자동 노출</button></div>
+      <div class="row"><span class="l">노출</span><input type="range" id="exp" min="0" max="1000" aria-label="노출 시간"><span class="val" id="expv"></span></div>
+      <div class="row"><span class="l">평균</span><div class="seg" id="avg" aria-label="프레임 평균 장수"></div></div>
+      <div class="note" id="aeTxt">평균 장수를 늘리면 잡음이 줄고 화면이 느려집니다.</div>
     </div>
-    <div class="grp"><h3>표시 (화면만)</h3>
-      <div class="row"><label>밝기</label><input type="range" id="bri" min="-100" max="100" value="0"><span class="val" id="briv"></span></div>
-      <div class="row"><label>대비</label><input type="range" id="con" min="-100" max="100" value="0"><span class="val" id="conv"></span></div>
-      <div class="row"><label>감마</label><input type="range" id="gam" min="-100" max="100" value="0"><span class="val" id="gamv"></span></div>
-      <div class="row"><label></label><button id="bAC">자동 대비</button><button id="bRst">초기화</button></div>
-      <div class="row"><label></label><button id="bX" class="on" title="X">십자선</button><button id="bInv">반전</button><button id="bFit" title="F / 0">맞춤</button></div>
+    <div class="card" id="ovCard"><h3><svg class="ic" data-ic="dust"></svg>물체 표시<span class="sp"></span><input type="checkbox" class="sw" id="ovOn" aria-label="물체 표시 켜기"></h3>
+      <div class="row"><span class="l">대상</span><select id="ovPreset" style="flex:1" aria-label="분석 대상"></select></div>
+      <div class="readout"><span class="big" id="ovN">—</span><span class="note" id="ovD">켜면 1~2초마다 세어 영상 위에 표시합니다</span></div>
+      <div class="note warn" id="ovNote"></div>
     </div>
-    <div class="grp"><h3>평탄화 (먼지·조명 보정)</h3>
-      <div class="row"><button id="bFlatTake" title="시료를 치운 빈 상태에서">기준 찍기</button><button id="bFlat">보정 켜기</button></div>
-      <div class="dim" id="flatTxt"></div>
+    <div class="card"><h3><svg class="ic" data-ic="camera"></svg>사진</h3>
+      <div class="row"><span class="l">시료</span><input type="text" id="sample" placeholder="시료 이름 (파일 이름에 들어감)" style="flex:1"></div>
+      <div id="gal"></div>
+      <div class="note" style="margin-top:8px">사진을 누르면 크게 봅니다 · 모든 기록은 <a href="#results" style="color:var(--acc)">결과</a> 탭</div>
     </div>
-    <div class="grp"><h3>히스토그램 <span class="dim" id="histScope"></span></h3>
-      <canvas id="hist" width="512" height="140"></canvas>
-      <div class="kv" style="margin-top:5px"><span>평균</span><b id="hMean">—</b><span>최소/최대</span><b id="hMM">—</b><span>포화</span><b id="hSat">—</b></div>
-    </div>
-    <div class="grp"><h3>측정</h3>
-      <div class="row"><button id="bMeas" title="M">거리 재기</button><button id="bMClr">지우기</button></div>
-      <div class="kv" id="measList"></div>
-    </div>
-    <div class="grp"><h3>센서 레지스터 · 상태</h3>
-      <div class="row"><select id="regSel" style="flex:1">
-        <option value="0f16">0x0F16 칩 ID</option><option value="0006">0x0006 프레임 길이(FLL)</option>
-        <option value="0008">0x0008 줄 길이(LLP)</option><option value="0074">0x0074 노출(줄 수)</option>
-        <option value="0a00">0x0A00 스트림 모드</option><option value="">직접 입력…</option></select></div>
-      <div class="row"><input type="text" id="regAddr" placeholder="주소 hex" style="width:90px"><button id="bRegR">읽기</button>
-        <input type="text" id="regVal" placeholder="값 hex" style="width:80px"><button id="bRegW">쓰기</button></div>
-      <div class="mono" id="regOut" style="color:var(--amb);min-height:16px"></div>
-      <div class="kv" id="diag" style="margin-top:4px"></div>
-    </div>
-    <div class="grp"><h3>촬영 목록</h3><div id="gal"></div></div>
-    <div class="grp"><h3>설정</h3>
-      <div class="row"><label>화소</label><input type="number" id="pix" step="0.01" min="0.1" style="width:80px"><span class="dim">µm / 출력 화소</span></div>
-      <div class="dim" style="font-size:11px">렌즈 없는 밀착 촬영이라 배율 1:1. 기본값 2.24 µm: Hi-846 화소 1.12 µm × 2, Hi-5031Q 화소 0.56 µm × 4(4화소 합·화소쌍 평균). 확인 필요.</div>
-      <div class="kbd" style="margin-top:8px">클릭·탭: 확대 기준점 · 더블클릭·더블탭: 그 자리 2배 (Shift: ½) · 휠·핀치: 그 자리 확대/축소 · 끌기: 이동<br>
-        +/−: 기준점 확대/축소 · F·0: 맞춤 · 1: 1:1 · Space 정지 · C 촬영 · X 십자선 · M 측정 · Esc 기준점 지우기</div>
-    </div>
+    <details class="card"><summary><svg class="ic" data-ic="contrast"></svg>표시 보정 <span class="note" style="font-weight:400">화면에만 적용</span></summary>
+      <div class="row"><span class="l">밝기</span><input type="range" id="bri" min="-100" max="100" value="0"><span class="val" id="briv"></span></div>
+      <div class="row"><span class="l">대비</span><input type="range" id="con" min="-100" max="100" value="0"><span class="val" id="conv"></span></div>
+      <div class="row"><span class="l">감마</span><input type="range" id="gam" min="-100" max="100" value="0"><span class="val" id="gamv"></span></div>
+      <div class="two"><button id="bAC">자동 대비</button><button id="bRst">초기화</button><button id="bX" class="on" title="X">십자선</button><button id="bInv">반전</button></div>
+    </details>
+    <details class="card"><summary><svg class="ic" data-ic="ruler"></svg>거리 재기</summary>
+      <div class="two"><button id="bMeas" title="M">재기 시작</button><button id="bMClr">지우기</button></div>
+      <div class="note" style="margin-top:6px">두 점을 차례로 누릅니다.</div>
+      <div class="kv" id="measList" style="margin-top:6px"></div>
+    </details>
   </aside>
+</section>
+<!-- ============ experiment -->
+<section class="tab" id="tab-exp" role="tabpanel" aria-label="실험">
+  <div class="wrap">
+    <div class="card runcard" id="expRun" style="display:none">
+      <div class="rc-head"><span class="pill rec"><i></i>REC</span><h2 id="erTitle">실험 진행 중</h2><span class="sp"></span>
+        <button id="erView"><svg class="ic" data-ic="chart"></svg>결과 보기</button><button class="danger" id="erStop"><svg class="ic" data-ic="stop"></svg>실험 끝내기</button></div>
+      <div class="rc-grid">
+        <div><div class="k">사진</div><div class="big" id="erN">—</div><div class="prog"><i id="erBar"></i></div><div class="note" id="erPct"></div></div>
+        <div><div class="k">다음 촬영까지</div><div class="big" id="erNext">—</div><div class="note" id="erEvery"></div></div>
+        <div><div class="k">기간</div><div style="color:var(--hi);margin-top:4px" id="erSpan">—</div></div>
+        <div><div class="k">최근 사진</div><div class="lastph" id="erLast"><span class="note">아직 없음</span></div></div>
+      </div>
+      <div class="warn" id="erMsg" style="margin-top:12px"></div>
+      <p class="note" style="margin:12px 0 0">실험 중에도 실시간 화면은 볼 수 있습니다. 촬영 때마다 LED와 노출이 잠깐 바뀌었다가 돌아옵니다.</p>
+    </div>
+    <p class="warn" id="wMsg" style="display:none;margin:0 0 14px"></p>
+    <div class="wiz" id="wiz">
+      <ol class="steps" id="wSteps">
+        <li><button data-s="1"><span class="n">1</span><span><b>시료</b><small id="wS1">이름과 메모</small></span></button></li>
+        <li><button data-s="2"><span class="n">2</span><span><b>무엇을 셀까</b><small id="wS2"></small></span></button></li>
+        <li><button data-s="3"><span class="n">3</span><span><b>일정 · 기록</b><small id="wS3"></small></span></button></li>
+        <li><button data-s="4"><span class="n">4</span><span><b>확인 · 시작</b><small>요약을 보고 시작</small></span></button></li>
+      </ol>
+      <div>
+        <div class="wstep" data-s="1"><h2>새 실험 · 시료</h2><p class="lead">사진 이름, 기록, 보고서에 들어갑니다. 비워 둬도 됩니다.</p>
+          <label class="field"><span>시료 이름</span><input type="text" id="wSample" maxlength="80" placeholder="예: 양파 표피, 효모 YPD 30°C"></label>
+          <label class="field"><span>메모</span><input type="text" id="wNote" maxlength="80" placeholder="예: 희석 1:10, 커버글라스 없음"></label>
+          <p class="note">시료를 올리고 <a href="#live" style="color:var(--acc)">실시간</a> 화면에서 초점과 조명을 먼저 확인하세요.</p>
+        </div>
+        <div class="wstep" data-s="2"><h2>무엇을 셀까</h2><p class="lead">비슷한 대상을 고르면 시작값이 정해집니다. 아래 지금 화면의 결과를 보며 고치세요.</p>
+          <div class="presets" id="wPresets"></div>
+          <div class="opts">
+            <div class="seg" id="wDark"><button data-v="1">어두운 물체</button><button data-v="0">밝은 물체</button></div>
+            <div class="sens"><span class="dim">민감도</span><input type="range" id="wSens" min="1" max="5" step="1" aria-label="민감도"><b class="mono" id="wSensV"></b><small id="wSensT"></small></div>
+            <label class="opt" title="맞닿은 물체를 가운데 잘록한 곳에서 나눔"><input type="checkbox" class="sw" data-d="an_split"><span>붙은 물체 나누기</span></label>
+            <label class="opt" title="앞 사진과 가까운 물체를 같은 물체로 이어 하나하나의 크기 변화를 봄"><input type="checkbox" class="sw" data-d="an_track"><span>개별 물체 추적</span></label>
+          </div>
+          <div class="tgrid">
+            <div><canvas id="pvBig" aria-label="지금 화면과 찾은 물체"></canvas>
+              <div class="readout"><span class="big" id="wCount">—</span><span class="note" id="wMean"></span><span class="sp"></span>
+                <button id="bTest"><svg class="ic" data-ic="refresh"></svg>지금 화면으로 다시 세기</button></div>
+              <div class="note" id="wTestTxt"></div></div>
+            <div><div class="sub" style="margin-top:0">크기 범위 <span class="note" style="font-weight:400">손잡이를 끌어 정함 · 등가 지름</span></div>
+              <canvas id="gate" aria-label="물체 크기 분포와 범위"></canvas>
+              <div class="range"><input type="number" id="wMin" step="any" min="0.5" aria-label="최소 지름"><span class="dim">~</span>
+                <input type="number" id="wMax" step="any" min="0.5" aria-label="최대 지름"><span class="dim">µm</span><span class="sp"></span><span class="note" id="wGateTxt"></span></div>
+              <p class="note">회색 막대는 범위 밖이라 세지 않습니다. 화소 크기 <b id="wPix"></b> µm 기준(⚙ 고급에서 바꿈).</p></div>
+          </div>
+          <div class="sub">최소 크기 비교 <span class="note" style="font-weight:400">같은 화면을 최소 크기만 바꿔 센 결과 · 맞아 보이는 것을 누르세요</span></div>
+          <div class="tiles" id="wTiles"></div>
+        </div>
+        <div class="wstep" data-s="3"><h2>일정 · 기록</h2><p class="lead">정한 간격마다 찍고, 찍을 때마다 세어 기록합니다.</p>
+          <div class="sub" style="margin-top:0">촬영 간격</div><div class="chips" id="wEvery"></div>
+          <div class="sub">기간</div><div class="chips" id="wHours"></div>
+          <div class="cols" style="margin-top:14px">
+            <div class="card"><h3>찍기 전 준비</h3>
+              <label class="opt"><input type="checkbox" class="sw" data-d="tl_led"><span>LED 켜기<small>찍을 때만 켜고 끝나면 원래대로</small></span></label>
+              <label class="opt"><input type="checkbox" class="sw" data-d="tl_ae"><span>자동 노출<small>찍기 전에 밝기를 맞춤</small></span></label>
+              <label class="opt"><input type="checkbox" class="sw" data-d="tl_flat"><span>평탄화<small id="wFlatTxt">조명 얼룩·먼지 보정</small></span></label>
+              <label class="opt"><input type="checkbox" class="sw" data-d="tl_avg4"><span>4장 평균<small>잡음 절반, 찍는 시간 4배</small></span></label></div>
+            <div class="card"><h3>남길 것</h3>
+              <label class="opt"><input type="checkbox" class="sw" data-d="rec_png"><span>원본 사진 (PNG)<small>끄면 작은 사진과 분석 값만 남음</small></span></label>
+              <label class="opt"><input type="checkbox" class="sw" data-d="rec_ov"><span>윤곽 표시 사진 (JPEG)<small>찾은 물체에 윤곽을 그린 사진</small></span></label>
+              <label class="opt"><span>보관 한도<small>사진 폴더가 이만큼 차면 멈춤 · 지우지 않음</small></span><input type="number" id="wGb" min="1" max="45" style="width:72px"><span class="dim" style="flex:none">GB</span></label></div>
+          </div>
+          <div class="est" id="wEst"></div>
+        </div>
+        <div class="wstep" data-s="4"><h2>확인 · 시작</h2><p class="lead">시작하면 첫 사진을 바로 찍고 결과 탭으로 갑니다.</p>
+          <dl class="sum" id="wSum"></dl>
+          <div class="warn" id="wSumWarn" style="margin-top:12px"></div>
+        </div>
+        <div class="wnav"><button id="wPrev">이전</button><button class="pri" id="wNext">다음</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ============ results -->
+<section class="tab" id="tab-results" role="tabpanel" aria-label="결과">
+  <div class="rtop">
+    <div id="rReport" class="print-only"></div>
+    <div class="rctl"><select id="rRun" aria-label="실험 선택"></select>
+      <div class="rx"><a class="btn" id="rCsv1"><svg class="ic" data-ic="down"></svg>CSV 사진별</a><a class="btn" id="rCsv2"><svg class="ic" data-ic="down"></svg>CSV 물체별</a>
+        <button id="rPdf" title="인쇄 창에서 ‘PDF로 저장’을 고르세요"><svg class="ic" data-ic="print"></svg>PDF 보고서</button></div></div>
+    <div class="kpis">
+      <div class="kpi"><div class="k">최근 개수</div><div class="v" id="kCount">—</div><div class="s" id="kCountS"></div></div>
+      <div class="kpi"><div class="k">평균 지름</div><div class="v" id="kMean">—</div><div class="s" id="kMeanS"></div></div>
+      <div class="kpi"><div class="k">사진</div><div class="v" id="kPhotos">—</div><div class="s" id="kPhotosS"></div></div>
+      <div class="kpi"><div class="k" id="kNextK">다음 촬영</div><div class="v" id="kNext">—</div><div class="s" id="kNextS"></div></div>
+    </div>
+  </div>
+  <div class="rbar2"><span class="note" style="margin-right:4px">보기</span>
+    <label class="chip"><input type="checkbox" data-s="count" checked>개수</label>
+    <label class="chip"><input type="checkbox" data-s="mean_d_um" checked>평균 지름</label>
+    <label class="chip"><input type="checkbox" data-s="total_area_um2">총면적</label>
+    <label class="chip" title="‘개별 물체 추적’을 켜고 찍은 실험"><input type="checkbox" data-s="tracks">개별 물체</label>
+    <label class="chip" title="선택한 사진의 물체 지름 분포"><input type="checkbox" data-s="hist" checked>크기 분포</label>
+    <label class="chip"><input type="checkbox" data-s="table">표</label></div>
+  <div class="rbody"><div id="rCharts"></div>
+    <div id="rSide"><div class="imgbar"><button id="rOvBtn" class="on" title="윤곽 표시 사진과 원본 사이 전환">윤곽</button><span class="sp"></span>
+        <span class="note">그래프를 누르면 그 사진</span></div>
+      <a id="rImgA" target="_blank" title="새 탭에서 원래 크기로"><img id="rImg" alt="선택한 사진"></a>
+      <div class="kv" id="rKv" style="margin-top:10px"></div>
+      <div id="rHistBox"><div class="chart"><div class="ct">크기 분포<span>선택한 사진 · 물체 수</span></div><canvas id="rHist"></canvas></div></div></div></div>
+  <div class="rstrip"><button id="rPrev" aria-label="앞 사진 (←)"><svg class="ic" data-ic="left"></svg></button>
+    <button id="rPlay" title="타임랩스 재생 (Space)"><svg class="ic" data-ic="play"></svg><span>재생</span></button>
+    <button id="rNext" aria-label="다음 사진 (→)"><svg class="ic" data-ic="right"></svg></button>
+    <div id="strip"></div><span id="stripTxt"></span></div>
+</section>
 </main>
 <footer>
-  <span>노출 <b id="dExp">—</b></span><span>평균 <b id="dAvg">—</b></span><span>평탄화 <b id="dFlat">—</b></span><span>LED <b id="dLed">—</b></span>
+  <span title="끼워진 CIS 모듈 (펌웨어가 칩 ID로 찾는다)">센서 <b id="dSen">—</b></span><span>노출 <b id="dExp">—</b></span><span>평균 <b id="dAvg">—</b></span><span>평탄화 <b id="dFlat">—</b></span><span>LED <b id="dLed">—</b></span>
   <span>화소 <b id="dPix">—</b></span><span>시야 <b id="dFov">—</b></span><span>배율 <b id="dZoom">—</b></span>
-  <span>커서 <b id="dCur">—</b></span><div class="sp"></div>
-  <span>시료 <input type="text" id="sample" placeholder="시료 이름"></span>
+  <span>커서 <b id="dCur">—</b></span><div class="sp"></div><span id="clock"></span>
 </footer>
-<div id="modal"><img id="mImg" alt=""><div class="mono" id="mMeta"></div>
-  <div class="bar"><a class="btn" id="mRaw" download>원본 PNG</a><button id="mBar">데이터 막대 포함 PNG</button><button id="mClose">닫기</button></div></div>
-<div id="toast"></div>
+<!-- ============ advanced -->
+<aside id="drawer" aria-label="고급 설정">
+  <div class="dh"><svg class="ic" data-ic="sliders" style="color:var(--acc)"></svg><h2>고급</h2><span class="sp"></span><button id="dClose" aria-label="닫기"><svg class="ic" data-ic="x"></svg></button></div>
+  <div class="card"><h3>평탄화 기준</h3>
+    <p class="note" style="margin-top:0">시료를 치운 빈 상태에서 기준을 찍으면 조명 얼룩과 센서 먼지를 지웁니다. 실험의 ‘평탄화’도 이 기준을 씁니다.</p>
+    <div class="two"><button id="bFlatTake">기준 찍기</button><button id="bFlat">보정 켜기</button></div>
+    <div class="note" id="flatTxt" style="margin-top:6px"></div></div>
+  <div class="card"><h3>히스토그램 <span class="note" id="histScope" style="font-weight:400"></span></h3>
+    <canvas id="hist" width="512" height="152"></canvas>
+    <div class="kv" style="margin-top:6px"><span>평균</span><b id="hMean">—</b><span>최소/최대</span><b id="hMM">—</b><span>포화</span><b id="hSat">—</b></div></div>
+  <div class="card"><h3>화소 크기</h3>
+    <div class="row"><input type="number" id="pix" step="0.01" min="0.1" style="width:90px"><span class="dim">µm / 출력 화소</span></div>
+    <div class="note">렌즈 없는 밀착 촬영이라 배율 1:1. 기본값은 모듈마다 다르고 모듈을 바꾸면 그 값으로 돌아갑니다: 8M Hi-846 2.24 µm(1.12 µm × 2), 16M Hi-1634 2.0 µm(1.0 µm × 2), 50M Hi-5031Q 2.24 µm(0.56 µm × 4, 4화소 합·화소쌍 평균). 확인 필요.</div></div>
+  <div class="card"><h3>센서 레지스터 · 상태</h3>
+    <div class="row"><select id="regSel" style="flex:1"><option value="0f16">0x0F16 칩 ID</option><option value="">직접 입력…</option></select></div>
+    <div class="row"><input type="text" id="regAddr" placeholder="주소 hex" style="width:96px"><button id="bRegR">읽기</button>
+      <input type="text" id="regVal" placeholder="값 hex" style="width:86px"><button id="bRegW">쓰기</button></div>
+    <div class="mono" id="regOut" style="color:var(--amb);min-height:16px"></div>
+    <div class="kv" id="diag" style="margin-top:6px"></div></div>
+  <div class="card"><h3>분석 엔진</h3><div class="note" id="cvInfo">—</div></div>
+  <div class="card"><h3>단축키</h3><div class="kbd">
+    실시간 · 클릭/탭: 확대 기준점 · 더블클릭: 2배 (Shift ½) · 휠/핀치: 확대 · 끌기: 이동<br>
+    +/−  확대/축소 · F, 0  맞춤 · 1  1:1 · Space  멈춤 · X  십자선 · M  거리 재기<br>
+    C  촬영 · R  결과 · Esc  닫기<br>결과 · ←/→  앞뒤 사진 · Space  재생</div></div>
+</aside>
+<div id="modal"><img id="mImg" alt=""><div class="mono" id="mMeta" style="color:var(--dim);text-align:center"></div>
+  <div class="bar"><button id="mOv">윤곽 보기</button><a class="btn" id="mRaw" download>원본 PNG</a><button id="mBar">데이터 막대 포함 PNG</button><button id="mClose">닫기</button></div></div>
+<div class="tip" id="rTip"></div>
+<div id="toast" role="status"></div>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+/* ---------- icons (stroke paths on a 24 grid) */
+const IC = {live: '<circle cx="12" cy="12" r="3"/><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/>',
+  flask: '<path d="M9 3h6M10 3v6l-5.6 9.4A2 2 0 0 0 6.1 21h11.8a2 2 0 0 0 1.7-2.6L14 9V3"/><path d="M7.5 15h9"/>',
+  chart: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
+  camera: '<path d="M4 7h3l2-3h6l2 3h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="4"/>',
+  sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
+  dust: '<circle cx="7" cy="8" r="2"/><circle cx="16.5" cy="6.5" r="1.5"/><circle cx="14" cy="15" r="3.2"/><circle cx="6" cy="17" r="1.5"/>',
+  cell: '<path d="M12 3.5c4.8 0 8.5 3.6 8.5 8.3 0 4.8-3.9 8.7-8.6 8.7-4.6 0-8.4-3.8-8.4-8.5S7.3 3.5 12 3.5z"/><circle cx="13" cy="11" r="3"/>',
+  colony: '<circle cx="8" cy="9" r="4.2"/><circle cx="16" cy="15.5" r="5"/><circle cx="17.5" cy="5" r="2"/><circle cx="5.5" cy="18.5" r="1.5"/>',
+  pause: '<path d="M8 5v14M16 5v14"/>', play: '<path d="M7 4.5l12.5 7.5L7 19.5z"/>', stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
+  left: '<path d="M15 5l-7 7 7 7"/>', right: '<path d="M9 5l7 7-7 7"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  down: '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>', print: '<path d="M6 9V3h12v6M6 18H4v-7h16v7h-2"/><path d="M7 14h10v7H7z"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/>', contrast: '<circle cx="12" cy="12" r="9"/><path d="M12 3v18" /><path d="M12 3a9 9 0 0 1 0 18" fill="currentColor" stroke="none"/>',
+  ruler: '<path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>'};
+function icons(root) { root.querySelectorAll("svg[data-ic]").forEach(s => { if (!s.innerHTML) { s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("aria-hidden", "true"); s.innerHTML = IC[s.dataset.ic] || ""; } }); }
+icons(document);
+const svg = (n, cls) => `<svg class="ic ${cls || ""}" viewBox="0 0 24 24" aria-hidden="true">${IC[n]}</svg>`;
+
 let FW = 1632, FH = 1224;                           // full-size image (from /stat), all image coordinates are in these pixels
-const st = {cfg: {exp: 150, avg: 1, flat: false, pixel_um: 2.24}, live: true, zoom: 1, cx: FW / 2, cy: FH / 2,
-  cross: true, inv: false, measure: false, meas: [], pend: null, cursor: null, n: 0, lastFrameT: 0, fetching: false};
+const st = {cfg: {exp: 150, avg: 1, flat: false, pixel_um: 2.24}, got: false, live: true, zoom: 1, cx: FW / 2, cy: FH / 2, tab: "live",
+  cross: true, inv: false, measure: false, meas: [], pend: null, cursor: null, n: 0, lastFrameT: 0, fetching: false,
+  toff: 0, tl: {}, disk: null, cvOk: true, cvErr: "", flatReady: false, ov: {on: false, busy: false, res: null}};
 const disp = {bri: 0, con: 0, gam: 0};
 let src = null;                                     // {img, x, y, w, h, step, data: ImageData}
 const raw = document.createElement("canvas"), rctx = raw.getContext("2d", {willReadFrequently: true});
@@ -132,9 +441,34 @@ const proc = document.createElement("canvas"), pctx = proc.getContext("2d");
 const cv = $("cv"), ctx = cv.getContext("2d");
 let dpr = 1;
 
-function toast(t) { const e = $("toast"); e.textContent = t; e.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.opacity = 0, 2200); }
+function toast(t) { const e = $("toast"); e.textContent = t; e.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.opacity = 0, 2600); }
 const api = (p) => fetch(p).then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.status); return j; }));
 const fmtUm = um => um >= 1000 ? (um / 1000).toFixed(um >= 10000 ? 1 : 2) + " mm" : (um >= 10 ? um.toFixed(0) : um.toFixed(1)) + " µm";
+const pad2 = n => String(n).padStart(2, "0");
+const nowS = () => Date.now() / 1000 + st.toff;     // board clock
+function fmtT(t, date, sec) {
+  const d = new Date(t * 1000);
+  return (date ? `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` : "") + `${pad2(d.getHours())}:${pad2(d.getMinutes())}` + (sec ? ":" + pad2(d.getSeconds()) : "");
+}
+const fmtEvery = s => s < 60 ? s + "초" : s < 3600 ? s / 60 + "분" : s / 3600 + "시간";
+const fmtHours = h => !h ? "멈출 때까지" : h % 24 === 0 ? h / 24 + "일" : h + "시간";
+function fmtLeft(s) { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return (h ? h + ":" + pad2(m) : m) + ":" + pad2(s % 60); }
+
+/* ---------- tabs and drawer */
+function showTab(t) {
+  if (!["live", "exp", "results"].includes(t)) t = "live";
+  const was = st.tab; st.tab = t; document.body.dataset.tab = t;
+  document.querySelectorAll(".tabs [data-tab]").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === t)));
+  document.querySelectorAll("main > .tab").forEach(s => s.classList.toggle("on", s.id === "tab-" + t));
+  if (location.hash !== "#" + t) history.replaceState(null, "", "#" + t);
+  if (t === "results" && was !== "results") openRec(); else if (t !== "results") closeRec();
+  if (t === "exp") enterExp();
+  if (t === "live") requestAnimationFrame(draw);
+}
+document.querySelectorAll(".tabs [data-tab]").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+$("bAdv").onclick = () => $("drawer").classList.toggle("open");
+$("dClose").onclick = () => $("drawer").classList.remove("open");
 
 /* ---------- exposure slider: log scale 0.1 ms .. 1 s (firmware unit 100 us, 1..10000) */
 const e2s = e => Math.round(Math.log(e) / Math.log(10000) * 1000), s2e = s => Math.max(1, Math.round(Math.pow(10000, s / 1000)));
@@ -143,18 +477,20 @@ $("exp").oninput = () => showExp(s2e(+$("exp").value));
 $("exp").onchange = () => setCfg({exp: s2e(+$("exp").value)});
 ["1", "2", "4", "8", "16"].forEach(v => { const b = document.createElement("button"); b.textContent = v; b.onclick = () => setCfg({avg: v}); $("avg").appendChild(b); });
 function setCfg(o) {
-  return api("/set?" + new URLSearchParams(o)).then(c => { st.cfg = c; syncCfg(); }).catch(e => toast("설정 실패: " + e.message));
+  const q = new URLSearchParams(); for (const [k, v] of Object.entries(o)) q.append(k, v === true ? 1 : v === false ? 0 : v);
+  return api("/set?" + q).then(c => { st.cfg = c; syncCfg(); }).catch(e => toast("설정 실패: " + e.message));
 }
 function syncCfg() {
   const c = st.cfg;
   if (document.activeElement !== $("exp")) { $("exp").value = e2s(c.exp); showExp(c.exp); }
   [...$("avg").children].forEach(b => b.classList.toggle("on", +b.textContent === c.avg));
-  $("bFlat").classList.toggle("on", c.flat); $("bFlat").textContent = c.flat ? "보정 끄기" : "보정 켜기";
+  $("bFlat").classList.toggle("on", !!c.flat); $("bFlat").textContent = c.flat ? "보정 끄기" : "보정 켜기";
   if (document.activeElement !== $("pix")) $("pix").value = c.pixel_um;
   if (document.activeElement !== $("sample")) $("sample").value = c.sample || "";
-  $("bLed").classList.toggle("on", c.led > 0); $("bLed").textContent = c.led > 0 ? "LED 끄기" : "LED 켜기"; $("dLed").textContent = c.led > 0 ? "켬" : "끔";
+  $("bLed").classList.toggle("on", c.led > 0); $("bLedT").textContent = c.led > 0 ? "LED 끄기" : "LED 켜기"; $("dLed").textContent = c.led > 0 ? "켬" : "끔";
   $("dAvg").textContent = c.avg + "장"; $("dFlat").textContent = c.flat ? "켬" : "끔"; $("dPix").textContent = c.pixel_um.toFixed(2) + " µm";
   $("dFov").textContent = (FW * c.pixel_um / 1000).toFixed(2) + " × " + (FH * c.pixel_um / 1000).toFixed(2) + " mm";
+  syncLiveOv(c);
 }
 $("pix").onchange = () => setCfg({pixel_um: $("pix").value});
 $("sample").onchange = () => setCfg({sample: $("sample").value});
@@ -164,13 +500,13 @@ $("bAE").onclick = async () => {
   for (let i = 0; i < 5; i++) {
     const m = src && src.stats ? src.stats.mean : 0;
     if (!m) break;
-    $("aeTxt").textContent = `평균 ${m.toFixed(0)}`;
+    $("aeTxt").textContent = `맞추는 중 · 평균 밝기 ${m.toFixed(0)}`;
     if (Math.abs(m - 118) < 10) break;
     const k = m >= 250 ? 0.4 : 118 / Math.max(m, 4);
     await setCfg({exp: Math.max(1, Math.min(10000, Math.round(st.cfg.exp * k)))});
     await newFrames(3);
   }
-  $("aeTxt").textContent = `노출 ${(st.cfg.exp / 10).toFixed(1)} ms`;
+  $("aeTxt").textContent = `노출 ${(st.cfg.exp / 10).toFixed(1)} ms로 맞춤`;
 };
 function newFrames(k) {   // resolves after k new frames (or 4 s)
   const n0 = st.n;
@@ -201,7 +537,6 @@ $("bAC").onclick = () => {            // stretch the 0.5 % .. 99.5 % range of th
 };
 $("bX").onclick = () => { st.cross = !st.cross; $("bX").classList.toggle("on", st.cross); draw(); };
 $("bInv").onclick = () => { st.inv = !st.inv; $("bInv").classList.toggle("on", st.inv); process(); };
-$("bFit").onclick = () => fit();
 function fit() { st.zoom = 1; st.cx = FW / 2; st.cy = FH / 2; draw(); }
 
 /* ---------- frames: preview (2x2 mean of the whole image) or, when zoomed in, the visible region at full size */
@@ -213,6 +548,7 @@ function wantRegion() {
 }
 function fetchFrame() {
   if (!st.live || st.fetching) return;
+  if (st.tab !== "live" || !cv.width) { setTimeout(fetchFrame, 500); return; }      // hidden view: no frames over Wi-Fi
   st.fetching = true;
   const r = wantRegion(), key = `x=${r.x}&y=${r.y}&w=${r.w}&h=${r.h}&step=${r.step}`;
   const after = key === st.lastKey && st.frameN != null ? st.frameN : -1;   // same view: wait for the next frame
@@ -242,9 +578,11 @@ function process() {
   const n = img.width * img.height;
   src.stats = {hist, mean: sum / n, mn, mx, sat: (hist[255] + hist[0]) / n};
   pctx.putImageData(id, 0, 0);
-  drawHist(); draw();
+  if ($("drawer").classList.contains("open")) drawHist();
+  draw();
 }
 function drawHist() {
+  if (!src || !src.stats) return;
   const c = $("hist"), g = c.getContext("2d"), h = src.stats.hist, W = c.width, Hh = c.height;
   g.clearRect(0, 0, W, Hh);
   let m = 1; for (let v = 1; v < 255; v++) m = Math.max(m, h[v]);
@@ -272,6 +610,7 @@ function clampView() {
 }
 function nice(v) { const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p; }
 function draw() {
+  if (!cv.width || !cv.height) return;
   clampView();
   const s = scale(), W = cv.width, H = cv.height, um = st.cfg.pixel_um;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
@@ -283,6 +622,15 @@ function draw() {
   }
   const [x0, y0] = toScr(0, 0), [x1, y1] = toScr(FW, FH);
   ctx.strokeStyle = "#223040"; ctx.lineWidth = 1; ctx.strokeRect(x0 - .5, y0 - .5, x1 - x0 + 1, y1 - y0 + 1);
+  if (st.ov.on && st.ov.res && st.ov.res.objs) {      // objects found: a circle of the equivalent diameter each
+    ctx.strokeStyle = "rgba(63,208,224,.95)"; ctx.lineWidth = 2 * dpr; ctx.beginPath();
+    for (const [x, y, d] of st.ov.res.objs) {                 // a ring just outside the object, so it stays visible
+      const [sx, sy] = toScr(x, y), r = Math.max(6 * dpr, d / um / 2 * s + 3 * dpr);
+      if (sx + r < 0 || sy + r < 0 || sx - r > W || sy - r > H) continue;
+      ctx.moveTo(sx + r, sy); ctx.arc(sx, sy, r, 0, 7);
+    }
+    ctx.stroke();
+  }
   if (st.cross) {
     const [cx, cy] = toScr(FW / 2, FH / 2); ctx.strokeStyle = "rgba(63,208,224,.55)"; ctx.lineWidth = dpr;
     ctx.beginPath(); ctx.moveTo(cx, Math.max(0, y0)); ctx.lineTo(cx, Math.min(H, y1)); ctx.moveTo(Math.max(0, x0), cy); ctx.lineTo(Math.min(W, x1), cy); ctx.stroke();
@@ -380,7 +728,8 @@ function showCursor(ix, iy) {
     if (sx >= 0 && sy >= 0 && sx < src.img.width && sy < src.img.height) v = " · 값 " + src.grey[sy * src.img.width + sx]; }
   const um = st.cfg.pixel_um; $("dCur").textContent = `${ix.toFixed(0)}, ${iy.toFixed(0)} px · ${(ix * um / 1000).toFixed(3)}, ${(iy * um / 1000).toFixed(3)} mm${v}`;
 }
-$("bMeas").onclick = () => { st.measure = !st.measure; st.pend = null; $("bMeas").classList.toggle("on", st.measure); cv.style.cursor = st.measure ? "cell" : "crosshair"; draw(); };
+$("bMeas").onclick = () => { st.measure = !st.measure; st.pend = null; $("bMeas").classList.toggle("on", st.measure); $("bMeas").textContent = st.measure ? "재기 끝" : "재기 시작";
+  cv.style.cursor = st.measure ? "cell" : "crosshair"; draw(); };
 $("bMClr").onclick = () => { st.meas = []; st.pend = null; listMeas(); draw(); };
 function listMeas() {
   $("measList").innerHTML = st.meas.map((m, i) => `<span>#${i + 1}</span><b>${fmtUm(Math.hypot(m.b[0] - m.a[0], m.b[1] - m.a[1]) * st.cfg.pixel_um)}</b>`).join("");
@@ -388,10 +737,13 @@ function listMeas() {
 
 /* ---------- live / pause / capture / flat */
 $("bPause").onclick = togglePause;
-function togglePause() { st.live = !st.live; $("bPause").textContent = st.live ? "❚❚ 정지" : "▶ 실시간"; $("bPause").classList.toggle("on", !st.live); if (st.live) fetchFrame(); }
+function togglePause() {
+  st.live = !st.live; $("bPause").innerHTML = svg(st.live ? "pause" : "play"); $("bPause").classList.toggle("on", !st.live);
+  $("bPause").title = st.live ? "영상 멈춤 (Space)" : "다시 보기 (Space)"; if (st.live) fetchFrame();
+}
 $("bShot").onclick = shoot;
 function shoot() {
-  api("/capture").then(j => { toast("저장: " + j.name + ".png"); loadGal(); }).catch(e => toast("촬영 실패: " + e.message));
+  api("/capture").then(j => { toast("저장했습니다: " + j.name); loadGal(); }).catch(e => toast("촬영 실패: " + e.message));
 }
 $("bFlatTake").onclick = () => { if (confirm("시료를 치운 빈 상태에서 기준 영상을 16장 찍습니다. 진행할까요?")) api("/flat/take").then(() => toast("기준 영상 찍는 중…")); };
 $("bFlat").onclick = () => setCfg({flat: st.cfg.flat ? 0 : 1});
@@ -409,16 +761,21 @@ $("bRegW").onclick = () => {
 
 /* ---------- gallery and the data-bar export */
 function loadGal() {
-  api("/photos").then(list => {
+  return api("/photos").then(list => {
     st.photos = list;
-    $("gal").innerHTML = list.slice(0, 12).map((p, i) => `<img src="/photos/${encodeURIComponent(p.name)}.thumb.png" title="${p.name}" data-i="${i}">`).join("") || '<span class="dim">아직 없음</span>';
+    $("gal").innerHTML = list.slice(0, 9).map((p, i) => `<img src="/photos/${encodeURIComponent(p.name)}.thumb.png" title="${p.name}${p.count != null ? " · 물체 " + p.count + "개" : ""}" alt="${p.time}" data-i="${i}">`).join("") || '<span class="note" style="grid-column:1/-1">아직 없음 · 위 ‘촬영’을 누르세요</span>';
     [...$("gal").querySelectorAll("img")].forEach(im => im.onclick = () => openPhoto(st.photos[+im.dataset.i]));
+    showLastPhoto();
   }).catch(() => {});
 }
 function openPhoto(p) {
-  const u = "/photos/" + encodeURIComponent(p.name) + ".png";
+  const base = "/photos/" + encodeURIComponent(p.name), hasPng = p.png !== false, u = base + (hasPng ? ".png" : p.ov ? ".ov.jpg" : ".thumb.png");
   $("mImg").src = u; $("mRaw").href = u; $("mRaw").download = p.name + ".png";
-  $("mMeta").textContent = `${p.time} · 노출 ${(p.exp / 10).toFixed(1)} ms · 평균 ${p.avg}장 · 평탄화 ${p.flat ? "켬" : "끔"}${p.led != null ? " · LED " + (p.led ? "켬" : "끔") : ""} · 화소 ${p.pixel_um} µm${p.sample ? " · 시료 " + p.sample : ""}`;
+  $("mMeta").textContent = `${p.time} · 노출 ${(p.exp / 10).toFixed(1)} ms · 평균 ${p.avg}장 · 평탄화 ${p.flat ? "켬" : "끔"}${p.led != null ? " · LED " + (p.led ? "켬" : "끔") : ""} · 화소 ${p.pixel_um} µm${p.sample ? " · 시료 " + p.sample : ""}` +
+    (p.count != null ? ` · 물체 ${p.count}개${p.mean_d_um ? " · 평균 지름 " + p.mean_d_um.toFixed(1) + " µm" : ""}` : "");
+  ["mRaw", "mBar"].forEach(id => $(id).style.display = hasPng ? "" : "none");
+  let ov = false; $("mOv").style.display = p.ov && hasPng ? "" : "none"; $("mOv").textContent = "윤곽 보기";
+  $("mOv").onclick = () => { ov = !ov; $("mImg").src = ov ? base + ".ov.jpg" : u; $("mOv").textContent = ov ? "원본 보기" : "윤곽 보기"; };
   $("mBar").onclick = () => exportBar(p, u); $("modal").style.display = "flex";
 }
 $("mClose").onclick = () => $("modal").style.display = "none";
@@ -436,20 +793,72 @@ async function exportBar(p, u) {
   c.toBlob(b => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = p.name + "_bar.png"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }, "image/png");
 }
 
+/* ---------- analysis presets (starting values; design doc 2026-11-19) */
+const PRESETS = {
+  particle: {t: "입자 · 먼지", d: "분말, 침전물, 먼지 · 20 µm ~ 1 mm", ic: "dust", v: {an_dark: true, an_min_um: 20, an_max_um: 1000, an_sens: 3, an_split: true, an_track: false}},
+  cell: {t: "세포", d: "부유·부착 세포 · 8 ~ 80 µm", ic: "cell", v: {an_dark: true, an_min_um: 8, an_max_um: 80, an_sens: 4, an_split: true, an_track: false}},
+  colony: {t: "콜로니", d: "세균·효모 집락의 성장 · 0.1 ~ 5 mm", ic: "colony", v: {an_dark: true, an_min_um: 100, an_max_um: 5000, an_sens: 3, an_split: true, an_track: true}},
+  custom: {t: "직접 설정", d: "크기와 민감도를 직접 정함", ic: "sliders"}};
+const presetOf = c => Object.keys(PRESETS).find(k => { const v = PRESETS[k].v;
+  return v && !!v.an_dark === !!c.an_dark && +v.an_min_um === +c.an_min_um && +v.an_max_um === +c.an_max_um && +v.an_sens === +c.an_sens; }) || "custom";
+const SENS_T = {1: "뚜렷한 것만", 2: "낮음", 3: "보통", 4: "높음", 5: "흐린 것까지"};
+const anTxt = c => `${c.an_dark ? "어두운" : "밝은"} 물체 · ${+c.an_min_um}–${+c.an_max_um} µm · 민감도 ${c.an_sens}`;
+
+/* ---------- live object overlay: the current frame with the analysis settings, every ~1.5 s while shown */
+for (const [k, p] of Object.entries(PRESETS)) $("ovPreset").add(new Option(p.t, k));
+$("ovOn").onchange = () => { st.ov.on = $("ovOn").checked; st.ov.res = null; showOv(); draw(); if (st.ov.on) ovTick(); };
+$("ovPreset").onchange = () => {
+  const k = $("ovPreset").value;
+  if (st.cfg.tl_on) { syncLiveOv(st.cfg); return toast("실험 중에는 실험 조건으로 셉니다"); }
+  if (PRESETS[k].v) setCfg(PRESETS[k].v).then(() => { st.ov.res = null; ovTick(); });
+  else { toast("직접 설정은 실험 탭 2단계에서 정합니다"); showTab("exp"); W.step = 2; renderWiz(); }
+};
+function syncLiveOv(c) {
+  if (!st.got) return;
+  const k = presetOf(c), sel = $("ovPreset"); sel.value = k;
+  sel.options[3].text = k === "custom" ? "직접 · " + anTxt(c) : "직접 설정…";
+  sel.disabled = !!c.tl_on;
+  $("ovNote").textContent = !st.cvOk ? "분석 기능 없음: " + st.cvErr : c.tl_on ? "실험 중에는 실험 조건으로 셉니다" : "";
+  $("ovOn").disabled = !st.cvOk;
+}
+function showOv() {
+  const r = st.ov.res, chip = $("ovChip");
+  chip.style.display = st.ov.on ? "flex" : "none";
+  if (!st.ov.on) { $("ovN").textContent = "—"; $("ovD").textContent = "켜면 1~2초마다 세어 영상 위에 표시합니다"; return; }
+  if (!r) { chip.lastChild.textContent = "세는 중…"; $("ovN").textContent = "…"; return; }
+  const d = r.mean_d_um != null ? "평균 " + r.mean_d_um.toFixed(1) + " µm" : "물체 없음";
+  chip.lastChild.textContent = `물체 ${r.count}개 · ${d}${r.truncated ? " · 큰 3000개만 표시" : ""}`;
+  $("ovN").textContent = r.count + "개"; $("ovD").textContent = d + " · " + anTxt(st.cfg);
+}
+async function ovTick() {
+  if (!st.ov.on || st.ov.busy || st.tab !== "live" || !st.live || !st.cvOk) return;
+  st.ov.busy = true;
+  try { st.ov.res = await api("/analyze/preview?fmt=json&t=" + Date.now()); showOv(); draw(); }
+  catch (e) { $("ovNote").textContent = "분석 실패: " + e.message; }
+  finally { st.ov.busy = false; }
+}
+setInterval(ovTick, 1500);
+
 /* ---------- status */
 function poll() {
   api("/stat").then(j => {
-    st.n = j.n; const fresh = performance.now() - st.lastFrameT < 2500;
-    $("fps").textContent = j.fps.toFixed(1) + " fps"; $("frm").textContent = "#" + j.n; $("clock").textContent = j.time;
-    const L = $("live"); L.className = "pill " + (!st.live ? "pause" : fresh && j.dev ? "on" : ""); L.querySelector("span").textContent = !st.live ? "PAUSE" : fresh && j.dev ? "LIVE" : "WAIT";
+    st.n = j.n; const fresh = performance.now() - st.lastFrameT < 2500; st.toff = j.now ? j.now - Date.now() / 1000 : 0;
+    $("liveFps").textContent = j.fps.toFixed(1) + " fps"; $("clock").textContent = j.time;
+    const L = $("live"), ok = st.tab !== "live" ? j.dev && j.fps > 0 : fresh && j.dev;
+    L.className = "pill " + (!st.live ? "pause" : ok ? "on" : ""); L.querySelector("span").textContent = !st.live ? "PAUSE" : ok ? "LIVE" : "WAIT";
     if (!j.dev || !src) { $("msg").style.display = "block"; $("msg").textContent = j.msg; }
     if (j.size && (j.size[0] !== FW || j.size[1] !== FH)) {   // another camera (sensor): new image size
       [FW, FH] = j.size; st.anchor = null; st.meas = []; st.pend = null; listMeas(); fit();
     }
-    st.cfg = j.cfg; syncCfg();
-    $("flatTxt").textContent = j.flat_left ? `기준 영상 찍는 중… ${16 - j.flat_left}/16` : j.flat_ready ? "기준 영상 있음" : "기준 영상 없음 · 시료를 치우고 ‘기준 찍기’";
+    st.cvOk = !j.cv || j.cv.have; st.cvErr = j.cv ? j.cv.err : ""; st.disk = j.disk || null; st.flatReady = j.flat_ready;
+    const runChanged = !!st.cfg.tl_on !== !!j.cfg.tl_on, first = !st.got;
+    st.cfg = j.cfg; st.got = true; syncCfg(); showAuto(j);
+    if ((runChanged || first) && st.tab === "exp") enterExp();
+    $("cvInfo").textContent = st.cvOk ? "OpenCV 사용 중 · 물체 분석 가능" : "OpenCV 없음: " + st.cvErr + " · 촬영과 실시간은 그대로 동작";
+    $("flatTxt").textContent = j.flat_left ? `기준 영상 찍는 중… ${16 - j.flat_left}/16` : j.flat_ready ? "기준 영상 있음" : "기준 영상 없음";
     $("bFlat").disabled = !j.flat_ready;
     const d = j.diag || {}, S = j.sensor || {}, mhz = S.mhz || 288;
+    $("dSen").textContent = S.name ? `${S.name} · ${S.mp}M` : "—";
     if (S.regs && S.chip !== st.chip) {                       // this sensor's registers in the list
       st.chip = S.chip; const keep = $("regSel").value;
       $("regSel").innerHTML = S.regs.map(([a, t]) => `<option value="${a}">0x${a.toUpperCase()} ${t}</option>`).join("") + '<option value="">직접 입력…</option>';
@@ -465,15 +874,535 @@ function poll() {
   }).catch(() => { $("live").className = "pill"; $("live").querySelector("span").textContent = "OFFLINE"; });
 }
 
+/* ---------- the running experiment: header pill, experiment card, result tiles */
+const runTotal = c => c.tl_hours ? Math.ceil(c.tl_hours * 3600 / c.tl_every) : null;
+function showAuto(j) {
+  const T = j.tl || {}, c = j.cfg, on = !!c.tl_on, P = $("tlPill"); st.tl = T;
+  const tot = runTotal(c), n = T.n || 0, left = T.next ? fmtLeft(T.next - nowS()) : "곧";
+  P.style.display = on ? "" : "none";
+  P.querySelector("span").textContent = `REC ${n}${tot ? "/" + tot : ""} · ${left}`;
+  if (st.lastTlN !== n) { st.lastTlN = n; loadGal(); if (st.tab === "results") loadPhotos(true).catch(() => {}); }
+  if (on) {
+    $("erTitle").textContent = (c.sample || "시료 이름 없음") + ` · 실험 #${c.tl_run}`;
+    $("erN").textContent = n + (tot ? " / " + tot : "장");
+    $("erBar").style.width = tot ? Math.min(100, n / tot * 100) + "%" : "100%";
+    $("erPct").textContent = tot ? Math.floor(n / tot * 100) + "% 진행" : "멈출 때까지 계속";
+    $("erNext").textContent = left; $("erEvery").textContent = fmtEvery(c.tl_every) + "마다";
+    const end = c.tl_hours ? c.tl_start + c.tl_hours * 3600 : 0;
+    $("erSpan").textContent = `${fmtT(c.tl_start, true)} 시작 · ` + (end ? fmtT(end, true) + " 끝" : "멈출 때까지");
+    $("erMsg").textContent = T.msg || "";
+  }
+  const why = !on && T.msg && T.msg !== "멈춤" ? T.msg : "";      // why the last run stopped by itself (space, limit, period end)
+  $("wMsg").style.display = why ? "" : "none"; $("wMsg").textContent = why && "지난 실험: " + why;
+  showKpis();
+}
+function showLastPhoto() {
+  const p = (st.photos || []).find(p => p.run != null && p.run === st.cfg.tl_run);
+  $("erLast").innerHTML = p ? `<img src="/photos/${encodeURIComponent(p.name)}.thumb.png" alt=""><div><b class="mono" style="color:var(--hi)">${p.count ?? "—"}개</b><div class="note">${p.time.slice(11)}${p.mean_d_um ? " · " + p.mean_d_um.toFixed(1) + " µm" : ""}</div></div>`
+    : '<span class="note">아직 없음</span>';
+}
+$("tlPill").onclick = () => { R.run = String(st.cfg.tl_run); showTab("results"); };
+$("erView").onclick = () => { R.run = String(st.cfg.tl_run); showTab("results"); };
+$("erStop").onclick = () => { if (confirm("실험을 끝냅니다. 찍은 사진과 기록은 그대로 남습니다. 끝낼까요?")) setCfg({tl_on: 0}).then(() => { toast("실험을 끝냈습니다"); enterExp(); }); };
+
+/* ---------- new experiment: a draft in the page, sent with /set only at the start */
+const DKEYS = ["sample", "note", "an_dark", "an_min_um", "an_max_um", "an_sens", "an_split", "an_track", "tl_every", "tl_hours",
+  "tl_led", "tl_ae", "tl_flat", "tl_avg4", "rec_png", "rec_ov", "rec_gb"];
+const BRACKET = [5, 10, 20, 50, 100, 200];
+const EVERY = [[10, "10초 (시험)"], [30, "30초"], [60, "1분"], [120, "2분"], [300, "5분"], [600, "10분"], [900, "15분"], [1800, "30분"], [3600, "1시간"], [7200, "2시간"], [21600, "6시간"]];
+const HOURS = [[1, "1시간"], [6, "6시간"], [12, "12시간"], [24, "1일"], [48, "2일"], [72, "3일"], [168, "7일"], [336, "14일"], [720, "30일"], [0, "멈출 때까지"]];
+let D = null;
+const W = {step: 1, tries: null, frame: null, busy: false, gen: 0, key: "", timer: 0, drag: null};
+function enterExp() {
+  const on = !!st.cfg.tl_on;
+  $("expRun").style.display = on ? "" : "none"; $("wiz").style.display = on ? "none" : "";
+  if (on) { showLastPhoto(); return; }
+  if (!D && st.got) { D = {}; for (const k of DKEYS) D[k] = st.cfg[k]; }
+  if (D) renderWiz();
+}
+function chipRow(box, list, key) {
+  box.textContent = "";
+  for (const [v, t] of list) { const b = document.createElement("button"); b.className = "chip"; b.textContent = t; b.dataset.v = v;
+    b.onclick = () => { D[key] = v; renderWiz(); }; box.appendChild(b); }
+}
+chipRow($("wEvery"), EVERY, "tl_every"); chipRow($("wHours"), HOURS, "tl_hours");
+for (const [k, p] of Object.entries(PRESETS)) {
+  const b = document.createElement("button"); b.className = "preset"; b.dataset.p = k;
+  b.innerHTML = `${svg(p.ic)}<b>${p.t}</b><small>${p.d}</small>`;
+  b.onclick = () => { W.custom = !p.v; if (p.v) Object.assign(D, p.v); renderWiz(); if (p.v) testSoon(0); else $("wMin").focus(); };
+  $("wPresets").appendChild(b);
+}
+function renderWiz() {
+  if (!D) return;
+  document.querySelectorAll(".wstep").forEach(s => s.classList.toggle("on", +s.dataset.s === W.step));
+  document.querySelectorAll("#wSteps button").forEach(b => { b.classList.toggle("on", +b.dataset.s === W.step); b.classList.toggle("done", +b.dataset.s < W.step); });
+  $("wPrev").style.visibility = W.step > 1 ? "" : "hidden";
+  $("wNext").innerHTML = W.step < 4 ? "다음" : svg("play") + "실험 시작";
+  if (document.activeElement !== $("wSample")) $("wSample").value = D.sample || "";
+  if (document.activeElement !== $("wNote")) $("wNote").value = D.note || "";
+  const pk = W.custom ? "custom" : presetOf(D);
+  document.querySelectorAll("#wPresets .preset").forEach(b => b.classList.toggle("on", b.dataset.p === pk));
+  [...$("wDark").children].forEach(b => b.classList.toggle("on", (b.dataset.v === "1") === !!D.an_dark));
+  $("wSens").value = D.an_sens; $("wSensV").textContent = D.an_sens; $("wSensT").textContent = SENS_T[D.an_sens];
+  document.querySelectorAll("[data-d]").forEach(e => e.checked = !!D[e.dataset.d]);
+  if (document.activeElement !== $("wMin")) $("wMin").value = +D.an_min_um;
+  if (document.activeElement !== $("wMax")) $("wMax").value = +D.an_max_um;
+  if (document.activeElement !== $("wGb")) $("wGb").value = D.rec_gb;
+  $("wPix").textContent = st.cfg.pixel_um;
+  document.querySelectorAll("#wEvery .chip").forEach(b => b.classList.toggle("on", +b.dataset.v === +D.tl_every));
+  document.querySelectorAll("#wHours .chip").forEach(b => b.classList.toggle("on", +b.dataset.v === +D.tl_hours));
+  $("wFlatTxt").textContent = st.flatReady ? "조명 얼룩·먼지 보정 · 기준 영상 있음" : "기준 영상이 없어 보정 없이 찍습니다 · ⚙ 고급에서 기준 찍기";
+  $("wFlatTxt").className = st.flatReady || !D.tl_flat ? "" : "warn";
+  $("wS1").textContent = D.sample || "이름 없음";
+  $("wS2").textContent = PRESETS[pk].t + " · " + +D.an_min_um + "–" + +D.an_max_um + " µm";
+  $("wS3").textContent = fmtEvery(D.tl_every) + "마다 · " + fmtHours(+D.tl_hours);
+  showEst(); if (W.step === 4) showSum();
+  if (W.step === 2) { drawWiz(); if (!W.tries) testSoon(0); }
+}
+document.querySelectorAll("#wSteps button").forEach(b => b.onclick = () => { W.step = +b.dataset.s; renderWiz(); });
+$("wPrev").onclick = () => { W.step = Math.max(1, W.step - 1); renderWiz(); };
+$("wNext").onclick = () => { if (W.step < 4) { W.step++; renderWiz(); window.scrollTo(0, 0); $("tab-exp").scrollTop = 0; } else startExp(); };
+$("wSample").oninput = () => { D.sample = $("wSample").value; $("wS1").textContent = D.sample || "이름 없음"; };
+$("wNote").oninput = () => { D.note = $("wNote").value; };
+[...$("wDark").children].forEach(b => b.onclick = () => { D.an_dark = b.dataset.v === "1"; renderWiz(); testSoon(); });
+$("wSens").oninput = () => { D.an_sens = +$("wSens").value; renderWiz(); testSoon(); };
+document.querySelectorAll("[data-d]").forEach(e => e.onchange = () => { D[e.dataset.d] = e.checked; renderWiz(); if (e.dataset.d === "an_split") testSoon(); });
+$("wMin").onchange = () => setRange(+$("wMin").value, D.an_max_um, true);
+$("wMax").onchange = () => setRange(D.an_min_um, +$("wMax").value, true);
+$("wGb").onchange = () => { D.rec_gb = Math.max(1, Math.min(45, Math.round(+$("wGb").value) || 30)); renderWiz(); };
+$("bTest").onclick = () => { clearTimeout(W.timer); testDraft(true); };
+const round2 = v => +v.toPrecision(v < 10 ? 2 : v < 1000 ? 2 : 3);
+function setRange(lo, hi, test) {
+  lo = Math.max(0.5, Math.min(5000, +lo || 0.5)); hi = Math.max(0.5, Math.min(5000, +hi || 5000));
+  if (lo > hi) [lo, hi] = [hi, lo];
+  D.an_min_um = lo; D.an_max_um = hi; renderWiz(); if (test) testSoon();
+}
+function testSoon(ms) { clearTimeout(W.timer); W.timer = setTimeout(testDraft, ms ?? 500); }
+const tryKey = () => [D.an_max_um, D.an_sens, D.an_dark ? 1 : 0, D.an_split ? 1 : 0].join();
+async function testDraft(force) {
+  // The chosen minimum first, then the comparison tiles one by one: a large minimum takes seconds on the board
+  // (its blur grows with it). Results for other settings are kept while only the minimum changes.
+  if (!D) return;
+  if (!st.cvOk) { $("wTestTxt").textContent = "분석 기능 없음: " + st.cvErr; return; }
+  const gen = ++W.gen, key = tryKey();
+  W.busy = true; $("bTest").disabled = true;
+  try {
+    if (force || key !== W.key || !W.tries) {
+      W.tries = []; W.key = key; W.lastT = null; drawWiz();
+      const fr = await grabFrame(); if (gen !== W.gen) return; W.frame = fr || W.frame;
+    }
+    const order = [+D.an_min_um, ...BRACKET].filter((m, i, a) => a.indexOf(m) === i && !W.tries.some(t => t.min === m));
+    for (const m of order) {
+      $("wTestTxt").textContent = `세는 중… 최소 ${m} µm`;
+      const q = new URLSearchParams({fmt: "json", min: m, max: D.an_max_um, sens: D.an_sens, dark: D.an_dark ? 1 : 0, split: D.an_split ? 1 : 0, t: Date.now()});
+      const t = await api("/analyze/preview?" + q);
+      if (gen !== W.gen) return;
+      t.min = m; W.tries.push(t); drawWiz();
+    }
+    $("wTestTxt").textContent = `${fmtT(nowS(), false, true)} 화면 기준 · 시료나 초점을 바꿨으면 다시 세세요`;
+  } catch (e) { if (gen === W.gen) $("wTestTxt").textContent = "세지 못했습니다: " + e.message; }
+  finally { if (gen === W.gen) { W.busy = false; $("bTest").disabled = false; drawWiz(); } }
+}
+async function grabFrame() {
+  try { const r = await fetch(`/frame.png?x=0&y=0&w=${FW}&h=${FH}&step=2&after=-1&t=${Date.now()}`); if (!r.ok) return null; return await createImageBitmap(await r.blob()); }
+  catch (e) { return null; }
+}
+const chosen = () => W.tries && W.tries.find(t => Math.abs(t.min - D.an_min_um) < 1e-6);
+function drawObjs(c, frame, objs, rmin) {   // the frame fitted into the canvas, one circle per object
+  const dp = window.devicePixelRatio || 1, Wd = c.clientWidth, Ht = c.clientHeight; if (!Wd) return;
+  c.width = Math.round(Wd * dp); c.height = Math.round(Ht * dp);
+  const g = c.getContext("2d"); g.setTransform(dp, 0, 0, dp, 0, 0); g.fillStyle = "#000"; g.fillRect(0, 0, Wd, Ht);
+  const s = Math.min(Wd / FW, Ht / FH), ox = (Wd - FW * s) / 2, oy = (Ht - FH * s) / 2;
+  if (frame) g.drawImage(frame, ox, oy, FW * s, FH * s);
+  else { g.fillStyle = "#5f6e7e"; g.font = "12px sans-serif"; g.textAlign = "center"; g.fillText("영상 없음", Wd / 2, Ht / 2); }
+  if (!objs) return;
+  const um = st.cfg.pixel_um; g.strokeStyle = "#3fd0e0"; g.lineWidth = rmin > 2 ? 2 : 1.4; g.beginPath();
+  for (const [x, y, d] of objs) { const r = Math.max(rmin, d / um / 2 * s + rmin / 2), cx = ox + x * s, cy = oy + y * s; g.moveTo(cx + r, cy); g.arc(cx, cy, r, 0, 7); }
+  g.stroke();
+}
+function drawWiz() {
+  if (W.step !== 2 || st.tab !== "exp") return;
+  const t = chosen(); if (t) W.lastT = t;
+  drawObjs($("pvBig"), W.frame, t && t.objs, 5);
+  $("wCount").textContent = t ? t.count + "개" : "—";
+  $("wMean").textContent = t ? (t.mean_d_um != null ? "평균 지름 " + t.mean_d_um.toFixed(1) + " µm" : "찾은 물체 없음") + (t.truncated ? " · 큰 3000개만 표시" : "") : W.busy ? "세는 중…" : "";
+  const box = $("wTiles");
+  if (box.children.length !== BRACKET.length) {
+    box.textContent = "";
+    for (const m of BRACKET) { const b = document.createElement("button"); b.className = "tile"; b.dataset.m = m;
+      b.innerHTML = `<canvas></canvas><span>최소 ${m} µm<b>—</b></span>`; b.onclick = () => setRange(m, D.an_max_um, false); box.appendChild(b); }
+  }
+  for (const b of box.children) {
+    const m = +b.dataset.m, tr = W.tries && W.tries.find(x => x.min === m);
+    b.classList.toggle("on", m === +D.an_min_um); b.querySelector("b").textContent = tr ? tr.count + "개" : "—";
+    drawObjs(b.querySelector("canvas"), W.frame, tr && tr.objs, 2);
+  }
+  drawGate();
+}
+/* size distribution on a log axis 1 um .. 5 mm with min / max handles; objects of the chosen analysis */
+const GL = {lo: 0, hi: Math.log10(5000), L: 14, R: 14, T: 20, B: 24};
+function gateX(c, d) { return GL.L + (Math.log10(d) - GL.lo) / (GL.hi - GL.lo) * (c.clientWidth - GL.L - GL.R); }
+function gateD(c, x) { return Math.pow(10, GL.lo + (x - GL.L) / (c.clientWidth - GL.L - GL.R) * (GL.hi - GL.lo)); }
+function drawGate() {
+  const c = $("gate"), dp = window.devicePixelRatio || 1, Wd = c.clientWidth, Ht = c.clientHeight; if (!Wd) return;
+  c.width = Math.round(Wd * dp); c.height = Math.round(Ht * dp);
+  const g = c.getContext("2d"); g.setTransform(dp, 0, 0, dp, 0, 0);
+  const cs = getComputedStyle(document.body), col = n => cs.getPropertyValue(n).trim();
+  const ph = Ht - GL.T - GL.B, t = chosen() || W.lastT, ds = t ? t.objs.map(o => o[2]) : [];
+  const nb = 37, cnt = new Array(nb).fill(0), bw = (Wd - GL.L - GL.R) / nb;         // 1/10 decade bins
+  for (const d of ds) { const k = Math.floor((Math.log10(d) - GL.lo) / (GL.hi - GL.lo) * nb); if (k >= 0 && k < nb) cnt[k]++; }
+  const top = Math.max(1, ...cnt), x0 = gateX(c, D.an_min_um), x1 = gateX(c, D.an_max_um);
+  g.fillStyle = "#0b1117"; g.fillRect(GL.L, GL.T, Wd - GL.L - GL.R, ph);
+  g.fillStyle = "#0f2a30"; g.fillRect(x0, GL.T, x1 - x0, ph);                       // the counted range
+  cnt.forEach((n, k) => { if (!n) return; const h = Math.max(2, Math.sqrt(n / top) * (ph - 6)), x = GL.L + k * bw, mid = Math.pow(10, GL.lo + (k + .5) / nb * (GL.hi - GL.lo));
+    g.fillStyle = mid >= D.an_min_um && mid <= D.an_max_um ? col("--s1") : "#3a4654"; g.beginPath();
+    g.roundRect ? g.roundRect(x + 1, GL.T + ph - h, bw - 2, h, [3, 3, 0, 0]) : g.rect(x + 1, GL.T + ph - h, bw - 2, h); g.fill(); });
+  g.fillStyle = col("--axis"); g.fillRect(GL.L, GL.T + ph, Wd - GL.L - GL.R, 1);
+  g.font = "11px ui-monospace,Menlo,monospace"; g.textAlign = "center"; g.textBaseline = "top"; g.fillStyle = col("--dim");
+  for (const [d, l] of [[1, "1 µm"], [10, "10"], [100, "100"], [1000, "1 mm"]]) { const x = gateX(c, d); g.fillRect(x, GL.T + ph, 1, 4); g.fillText(l, Math.max(GL.L + 14, x), GL.T + ph + 7); }
+  for (const [x, v] of [[x0, D.an_min_um], [x1, D.an_max_um]]) {                // handles
+    g.fillStyle = "#3fd0e0"; g.fillRect(x - 1, GL.T, 2, ph);
+    g.beginPath(); g.arc(x, GL.T + ph / 2, 6, 0, 7); g.fill(); g.strokeStyle = "#0b1117"; g.lineWidth = 2; g.stroke();
+    const lab = fmtUm(v), tw = g.measureText(lab).width, isMin = x === x0;
+    g.textBaseline = "bottom"; g.fillStyle = col("--hi"); g.textAlign = "left";
+    g.fillText(lab, Math.max(0, Math.min(Wd - tw, isMin ? x - tw + 4 : x - 4)), GL.T - 4); g.textAlign = "center";
+  }
+  if (W.drag && t) {
+    const n = ds.filter(d => d >= D.an_min_um && d <= D.an_max_um).length;
+    $("wGateTxt").textContent = `범위 안 ≈ ${n}개 · 놓으면 다시 셉니다`;
+  } else $("wGateTxt").textContent = t && t.truncated ? "큰 3000개 기준 분포" : "";
+}
+$("gate").addEventListener("pointerdown", e => {
+  const c = $("gate"), x = e.clientX - c.getBoundingClientRect().left, x0 = gateX(c, D.an_min_um), x1 = gateX(c, D.an_max_um);
+  W.drag = Math.abs(x - x0) <= Math.abs(x - x1) ? "min" : "max"; c.setPointerCapture(e.pointerId); gateMove(e);
+});
+$("gate").addEventListener("pointermove", e => { if (W.drag) gateMove(e); });
+function gateMove(e) {
+  const c = $("gate"), d = round2(Math.max(0.5, Math.min(5000, gateD(c, e.clientX - c.getBoundingClientRect().left))));
+  if (W.drag === "min") D.an_min_um = Math.min(d, D.an_max_um * 0.9); else D.an_max_um = Math.max(d, D.an_min_um * 1.1);
+  D.an_min_um = round2(D.an_min_um); D.an_max_um = round2(D.an_max_um);
+  $("wMin").value = D.an_min_um; $("wMax").value = D.an_max_um; drawGate();
+}
+for (const ev of ["pointerup", "pointercancel"]) $("gate").addEventListener(ev, () => { if (!W.drag) return; W.drag = null; renderWiz(); testSoon(0); });
+function estimate(d) {        // bytes per output pixel measured on board 4 photos (2016 x 1536): PNG 0.8, contour JPEG 0.22, thumbnail 0.014
+  const px = FW * FH, mb = ((d.rec_png ? 0.8 : 0) + (d.rec_ov ? 0.22 : 0) + 0.014) * px / 1e6;
+  const n = d.tl_hours ? Math.ceil(d.tl_hours * 3600 / d.tl_every) : null, perDay = 86400 / d.tl_every;
+  return {mb, n, gb: n != null ? n * mb / 1000 : null, dayGb: perDay * mb / 1000, perDay};
+}
+function estWarn(d, e) {
+  const dk = st.disk; if (!dk) return "";
+  const room = Math.min(d.rec_gb - dk.photos_gb, dk.free_gb - 2), canN = Math.max(0, Math.floor(room * 1000 / e.mb));
+  if (e.n != null ? e.gb > room : true) return (d.rec_gb - dk.photos_gb <= dk.free_gb - 2 ? `보관 한도 ${d.rec_gb} GB` : "남은 공간") + `에 닿아 약 ${canN}장째에 멈춥니다` + (e.n == null ? ` (약 ${(canN / e.perDay).toFixed(1)}일)` : "");
+  return "";
+}
+function showEst() {
+  const e = estimate(D), dk = st.disk, w = estWarn(D, e);
+  $("wEst").innerHTML = `<div><span>찍을 사진</span><b>${e.n != null ? e.n.toLocaleString() + "장" : "하루 " + Math.round(e.perDay).toLocaleString() + "장"}</b></div>` +
+    `<div><span>예상 용량</span><b>${e.n != null ? "약 " + (e.gb < 1 ? Math.round(e.gb * 1000) + " MB" : e.gb.toFixed(1) + " GB") : "하루 약 " + e.dayGb.toFixed(1) + " GB"}</b></div>` +
+    `<div><span>한 장</span><b>${e.mb.toFixed(1)} MB</b></div>` +
+    (dk ? `<div><span>남은 공간 · 지금 사진</span><b>${dk.free_gb.toFixed(0)} GB · ${dk.photos_gb.toFixed(1)} GB</b></div>` : "") +
+    (w ? `<div class="warn" style="flex-basis:100%">${w}</div>` : "");
+}
+function showSum() {
+  const pk = W.custom ? "custom" : presetOf(D), e = estimate(D), end = D.tl_hours ? nowS() + D.tl_hours * 3600 : 0, on = (k, t) => D[k] ? t : null;
+  const rows = [["시료", (D.sample || "이름 없음") + (D.note ? " · " + D.note : "")],
+    ["분석", PRESETS[pk].t + " · " + anTxt(D) + (D.an_split ? " · 붙은 물체 나누기" : "") + (D.an_track ? " · 개별 물체 추적" : "")],
+    ["일정", fmtEvery(D.tl_every) + "마다 · " + fmtHours(+D.tl_hours) + (end ? ` (${fmtT(end, true)}에 끝)` : "")],
+    ["찍기 전", [on("tl_led", "LED 켜기"), on("tl_ae", "자동 노출"), on("tl_flat", "평탄화" + (st.flatReady ? "" : " (기준 없음)")), on("tl_avg4", "4장 평균")].filter(Boolean).join(" · ") || "없음"],
+    ["남길 것", [on("rec_png", "원본 PNG"), on("rec_ov", "윤곽 사진")].filter(Boolean).concat("분석 값").join(" · ") + ` · 보관 한도 ${D.rec_gb} GB`],
+    ["예상", e.n != null ? `${e.n.toLocaleString()}장 · 약 ${e.gb.toFixed(1)} GB` : `하루 ${Math.round(e.perDay)}장 · 약 ${e.dayGb.toFixed(1)} GB`]];
+  $("wSum").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd></dd>`).join("");
+  [...$("wSum").querySelectorAll("dd")].forEach((dd, i) => dd.textContent = rows[i][1]);
+  const t = chosen();
+  $("wSumWarn").textContent = [estWarn(D, e), !st.cvOk ? "분석 기능이 없어 사진만 찍습니다" : t && t.count === 0 ? "지금 화면에서는 물체를 하나도 찾지 못했습니다. 2단계에서 크기를 확인하세요" : ""].filter(Boolean).join(" · ");
+}
+async function startExp() {
+  const o = {}; for (const k of DKEYS) o[k] = D[k];
+  $("wNext").disabled = true;
+  try {
+    await setCfg(o);
+    await setCfg({tl_on: 1});
+    if (!st.cfg.tl_on) throw new Error("서버가 시작하지 않았습니다");
+    toast("실험을 시작했습니다 · 첫 사진을 바로 찍습니다");
+    D = null; W.step = 1; W.tries = null; W.custom = false; R.run = String(st.cfg.tl_run); showTab("results");
+  } catch (e) { toast("시작하지 못했습니다: " + e.message); }
+  finally { $("wNext").disabled = false; }
+}
+
+/* ---------- results: one chart per measure on a shared time axis (no second y axis), the photo behind a point */
+const R = {run: null, runs: [], P: [], sel: -1, hover: -1, tracks: [], objs: null, charts: [], timer: null, t0: 0, t1: 1, ov: true};
+const SER = {count: {t: "개수", u: "개", zero: true, f: v => v.toFixed(0)},
+  mean_d_um: {t: "평균 지름", u: "µm · 등가 지름", zero: false, f: v => v.toFixed(1) + " µm"},
+  total_area_um2: {t: "총면적", u: "µm²", zero: true, f: v => compact(v) + " µm²"}};
+const want = k => { const e = document.querySelector(`#tab-results [data-s="${k}"]`); return e && e.checked; };
+const cssv = n => getComputedStyle(document.body).getPropertyValue(n).trim();
+const printing = () => document.body.classList.contains("printing");
+function compact(v) { const a = Math.abs(v); return a >= 1e6 ? (v / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M" : a >= 1e4 ? (v / 1e3).toFixed(0) + "K" : a >= 1000 ? Math.round(v).toLocaleString("en-US") : String(+v.toPrecision(3)); }
+function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(x || 1))), f = x / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; }
+async function openRec() {
+  try { await loadRuns(); } catch (e) { toast("기록을 읽지 못했습니다: " + e.message); }
+  clearInterval(R.timer); R.timer = setInterval(() => loadPhotos(true).catch(() => {}), 10000);
+}
+function closeRec() { clearInterval(R.timer); R.timer = null; $("rTip").style.display = "none"; play(false); }
+async function loadRuns() {
+  const runs = await api("/rec/runs"), sel = $("rRun"), keep = R.run;
+  R.runs = runs; sel.textContent = "";
+  for (const r of runs) sel.add(new Option(runLabel(r), r.id == null ? "manual" : String(r.id)));
+  sel.value = keep || (st.cfg.tl_on && st.cfg.tl_run ? String(st.cfg.tl_run) : runs.length ? (runs[0].id == null ? "manual" : String(runs[0].id)) : "manual");
+  if (sel.selectedIndex < 0) sel.selectedIndex = 0;
+  R.run = sel.value; await loadPhotos(false);
+}
+$("rRun").onchange = () => { R.run = $("rRun").value; R.sel = -1; R.P = []; $("strip").textContent = ""; play(false); loadPhotos(false); };
+const runLabel = r => r.id == null ? `수동 촬영 · ${r.n}장` :
+  `#${r.id} ${r.sample || "시료 이름 없음"} · ${r.started ? fmtT(r.started, true) : ""} · ${r.n}장${r.ended ? "" : " · 진행 중"}`;
+const runQ = () => "run=" + (R.run === "manual" ? "" : R.run);
+const runInfo = () => R.runs.find(r => (r.id == null ? "manual" : String(r.id)) === R.run) || null;
+const activeRun = () => !!st.cfg.tl_on && String(st.cfg.tl_run) === R.run;
+async function loadPhotos(refresh) {
+  if (!R.run) return;
+  const P = await api("/rec/photos?" + runQ()), was = R.P[R.sel], follow = !was || R.sel === R.P.length - 1;
+  if (refresh && P.length === R.P.length && (!P.length || P[P.length - 1].id === R.P[R.P.length - 1].id)) { showKpis(); return; }
+  R.P = P; R.sel = !was || (follow && !PL.on) ? P.length - 1 : Math.max(0, P.findIndex(p => p.id === was.id));
+  R.tracks = want("tracks") ? await api("/rec/tracks?" + runQ()) : [];
+  $("rCsv1").href = "/rec/csv?" + runQ() + "&what=photos"; $("rCsv2").href = "/rec/csv?" + runQ() + "&what=objects";
+  if (refresh) { R.runs = await api("/rec/runs").catch(() => R.runs);
+    for (const o of $("rRun").options) { const r = R.runs.find(r => (r.id == null ? "manual" : String(r.id)) === o.value); if (r) o.text = runLabel(r); } }
+  buildCharts(); buildStrip(); showKpis();
+  if (!refresh || R.P[R.sel] !== was) selectIdx(R.sel); else drawCharts();
+}
+document.querySelectorAll("#tab-results [data-s]").forEach(e => e.onchange = () => { R.P = []; loadPhotos(false); });
+function showKpis() {
+  if (st.tab !== "results" && !printing()) return;
+  const P = R.P, last = P[P.length - 1], prev = P[P.length - 2], info = runInfo(), act = activeRun(), set = (id, v, s) => { $(id).textContent = v; $(id + "S").textContent = s; };
+  if (last && last.count != null) {
+    const dd = prev && prev.count != null ? last.count - prev.count : null;
+    set("kCount", last.count + "개", dd == null ? fmtT(last.t, true) + " 사진" : `${dd > 0 ? "▲ " + dd : dd < 0 ? "▼ " + -dd : "변화 없음"} · 직전 사진 대비`);
+  } else set("kCount", "—", last ? "분석 값 없음" : "사진 없음");
+  set("kMean", last && last.mean_d_um != null ? last.mean_d_um.toFixed(1) + " µm" : "—", last && last.total_area_um2 != null ? "총면적 " + compact(last.total_area_um2) + " µm²" : "등가 지름 평균");
+  const tot = act ? runTotal(st.cfg) : null;
+  set("kPhotos", P.length + (tot ? " / " + tot : "장"), act ? (tot ? Math.floor(P.length / tot * 100) + "% 진행" : "멈출 때까지 계속") : P.length ? `${fmtT(P[0].t, true)} ~ ${fmtT(last.t, true)}` : "");
+  if (act) { $("kNextK").textContent = "다음 촬영까지"; set("kNext", st.tl.next ? fmtLeft(st.tl.next - nowS()) : "곧", fmtEvery(st.cfg.tl_every) + "마다" + (st.tl.msg ? " · " + st.tl.msg : "")); }
+  else { $("kNextK").textContent = "상태"; set("kNext", info && info.id != null ? (info.ended ? "끝남" : "멈춤") : "수동", info && info.ended ? fmtT(info.ended, true) + "에 끝남" : info && info.every_s ? fmtEvery(info.every_s) + " 간격" : ""); }
+}
+function buildCharts() {
+  const box = $("rCharts"); box.textContent = ""; R.charts = [];
+  const note = t => { const d = document.createElement("div"); d.className = "note"; d.style.margin = "22px 0"; d.textContent = t; box.appendChild(d); };
+  if (!R.P.length) note(R.run === "manual" ? "수동으로 찍은 사진이 없습니다. 머리줄의 ‘촬영’을 누르면 여기에 쌓입니다." : "이 실험에는 아직 사진이 없습니다. 첫 사진은 시작하자마자 찍힙니다.");
+  const keys = R.P.length ? Object.keys(SER).filter(want).concat(want("tracks") ? ["tracks"] : []) : [];
+  const slots = [1, 2, 3, 4, 5, 6, 7, 8].map(i => cssv("--s" + i));
+  R.tracks.sort((a, b) => a.track - b.track).forEach((tr, i) => tr.color = slots[i]);     // colour follows the object (by id)
+  for (const k of keys) {
+    if (k === "tracks" && !R.tracks.length) { note("개별 물체 기록이 없습니다: 실험을 시작할 때 ‘개별 물체 추적’을 켜야 하고, 사진이 2장 이상 있어야 합니다."); continue; }
+    const div = document.createElement("div"), ct = document.createElement("div"), u = document.createElement("span"), cv = document.createElement("canvas");
+    div.className = "chart"; ct.className = "ct"; ct.append(k === "tracks" ? "개별 물체 지름" : SER[k].t);
+    u.textContent = k === "tracks" ? "µm · 가장 여러 사진에 이어진 8개" : SER[k].u; ct.appendChild(u); div.appendChild(ct);
+    if (k === "tracks") {
+      const lg = document.createElement("div"); lg.className = "legend";
+      for (const tr of R.tracks) { const s = document.createElement("span"), i = document.createElement("i"); i.style.background = tr.color; s.append(i, "#" + tr.track); lg.appendChild(s); }
+      div.appendChild(lg);
+    }
+    div.appendChild(cv); box.appendChild(div); R.charts.push({k, cv}); hookChart(cv);
+  }
+  if (want("table") && R.P.length) buildTable(box);
+  $("rHistBox").style.display = want("hist") ? "" : "none";
+  drawCharts();
+}
+function seriesOf(k) {
+  return k === "tracks" ? R.tracks.map(tr => ({color: tr.color, name: "#" + tr.track, pts: tr.pts}))
+    : [{color: cssv("--s1"), name: SER[k].t, pts: R.P.map(p => [p.t, p[k]])}];
+}
+function drawCharts() {
+  if (R.P.length) { R.t0 = R.P[0].t; R.t1 = R.P[R.P.length - 1].t; if (R.t1 - R.t0 < 60) { R.t0 -= 30; R.t1 += 30; } }
+  R.charts.forEach(drawOne);
+  [...document.querySelectorAll("#rTbl tbody tr")].forEach(tr => tr.classList.toggle("sel", +tr.dataset.i === R.sel));
+}
+function drawOne(c) {
+  const cv = c.cv, dp = printing() ? 3 : window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  if (cv.width !== Math.round(W * dp) || cv.height !== Math.round(H * dp)) { cv.width = Math.round(W * dp); cv.height = Math.round(H * dp); }
+  const g = cv.getContext("2d"), muted = cssv("--dim"), grid = cssv("--grid"), axis = cssv("--axis"), surf = cssv("--surf");
+  g.setTransform(dp, 0, 0, dp, 0, 0); g.clearRect(0, 0, W, H);
+  const L = 58, Rm = 16, T = 8, B = 22, pw = W - L - Rm, ph = H - T - B, S = seriesOf(c.k);
+  let lo = Infinity, hi = -Infinity;
+  for (const s of S) for (const [, v] of s.pts) if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  g.font = "11px ui-monospace,Menlo,monospace"; g.fillStyle = muted;
+  if (!isFinite(lo)) { g.textAlign = "center"; g.fillText("값 없음 (OpenCV 없이 찍은 사진은 분석 값이 없습니다)", W / 2, H / 2); c.geom = null; return; }
+  const zero = c.k !== "tracks" && SER[c.k].zero;
+  if (zero) lo = Math.min(0, lo);
+  if (hi - lo < 1e-9) { hi += 1; if (!zero) lo -= 1; }
+  let step = niceStep((hi - lo) / 4); if (c.k === "count") step = Math.max(1, step);
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const X = t => L + (t - R.t0) / (R.t1 - R.t0) * pw, Y = v => T + ph - (v - lo) / (hi - lo) * ph;
+  g.textAlign = "right"; g.textBaseline = "middle";
+  for (let v = lo; v <= hi + step / 2; v += step) {
+    g.fillStyle = v === lo ? axis : grid; g.fillRect(L, Math.round(Y(v)), pw, 1);
+    g.fillStyle = muted; g.fillText(c.k === "total_area_um2" ? compact(v) : String(+v.toFixed(6)), L - 6, Y(v));
+  }
+  const span = R.t1 - R.t0, ts = [10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800]
+    .find(x => span / x <= Math.max(2, Math.floor(pw / 95))) || 604800, tz = -new Date().getTimezoneOffset() * 60;
+  g.textAlign = "center"; g.textBaseline = "top";
+  for (let t = Math.ceil((R.t0 + tz) / ts) * ts - tz; t <= R.t1; t += ts) {
+    const lab = fmtT(t, span > 86400, ts < 60), lw = g.measureText(lab).width / 2;
+    g.fillStyle = grid; g.fillRect(Math.round(X(t)), T, 1, ph);
+    if (X(t) + lw <= W - 2) { g.fillStyle = muted; g.fillText(lab, X(t), T + ph + 6); }      // never a clipped label
+  }
+  const dots = R.P.length <= 150;
+  for (const s of S) {
+    g.strokeStyle = s.color; g.lineWidth = 2; g.lineJoin = g.lineCap = "round"; g.beginPath();
+    let pen = false; for (const [t, v] of s.pts) { if (v == null) { pen = false; continue; } pen ? g.lineTo(X(t), Y(v)) : g.moveTo(X(t), Y(v)); pen = true; }
+    g.stroke();
+    if (dots) for (const [t, v] of s.pts) if (v != null) dot(g, X(t), Y(v), 4, s.color, surf);
+  }
+  for (const [i, col] of [[R.sel, cssv("--hi")], [R.hover, muted]]) {           // selected photo, then the crosshair
+    const p = R.P[i]; if (!p) continue;
+    g.fillStyle = col; g.fillRect(Math.round(X(p.t)), T, 1, ph);
+    for (const s of S) { const q = s.pts.find(([t]) => t === p.t); if (q && q[1] != null) dot(g, X(p.t), Y(q[1]), i === R.sel ? 5 : 4, s.color, surf); }
+  }
+  c.geom = {L, pw};
+}
+function dot(g, x, y, r, fill, ring) { g.beginPath(); g.arc(x, y, r + 2, 0, 7); g.fillStyle = ring; g.fill(); g.beginPath(); g.arc(x, y, r, 0, 7); g.fillStyle = fill; g.fill(); }
+function nearest(c, e) {
+  if (!c.geom || !R.P.length) return -1;
+  const r = c.cv.getBoundingClientRect(), t = R.t0 + (e.clientX - r.left - c.geom.L) / c.geom.pw * (R.t1 - R.t0);
+  let a = 0, b = R.P.length - 1; while (b - a > 1) { const m = (a + b) >> 1; R.P[m].t < t ? a = m : b = m; }
+  return Math.abs(R.P[a].t - t) <= Math.abs(R.P[b].t - t) ? a : b;
+}
+function hookChart(cv) {
+  const c = () => R.charts.find(x => x.cv === cv);
+  cv.addEventListener("pointermove", e => { const i = nearest(c(), e); if (i !== R.hover) { R.hover = i; drawCharts(); } tip(e, i); });
+  cv.addEventListener("pointerleave", () => { R.hover = -1; drawCharts(); $("rTip").style.display = "none"; });
+  cv.addEventListener("click", e => { const i = nearest(c(), e); if (i >= 0) { play(false); selectIdx(i); } });
+}
+function tip(e, i) {
+  const el = $("rTip"), p = R.P[i]; if (!p) { el.style.display = "none"; return; }
+  el.textContent = "";
+  const line = (color, val, name) => { const d = document.createElement("div"), k = document.createElement("i"), b = document.createElement("b");
+    k.style.background = color; b.textContent = val; d.append(k, b, " " + name); el.appendChild(d); };
+  const head = document.createElement("div"); head.textContent = p.time; el.appendChild(head);
+  for (const k of Object.keys(SER).filter(want)) line(cssv("--s1"), p[k] == null ? "—" : SER[k].f(p[k]), SER[k].t);
+  if (want("tracks")) for (const tr of R.tracks) { const q = tr.pts.find(([t]) => t === p.t); if (q) line(tr.color, q[1].toFixed(1) + " µm", "#" + tr.track); }
+  el.style.display = "block";
+  const w = el.offsetWidth, h = el.offsetHeight;
+  el.style.left = Math.min(innerWidth - w - 8, e.clientX + 14) + "px"; el.style.top = Math.max(8, Math.min(innerHeight - h - 8, e.clientY - h - 10)) + "px";
+}
+const photoSrc = p => "/photos/" + encodeURIComponent(p.name) + (R.ov && p.ov ? ".ov.jpg" : p.png ? ".png" : p.ov ? ".ov.jpg" : ".thumb.png");
+async function selectIdx(i) {
+  const kv = $("rKv"); kv.textContent = "";
+  if (!R.P.length) { $("rImg").removeAttribute("src"); $("stripTxt").textContent = ""; R.objs = null; drawSizeHist(); return; }
+  i = Math.max(0, Math.min(R.P.length - 1, i)); R.sel = i; drawCharts();
+  const p = R.P[i], u = photoSrc(p);
+  $("rImg").src = u; $("rImgA").href = u; $("rOvBtn").disabled = !p.ov;
+  const strip = $("strip"); strip.querySelectorAll("img.sel").forEach(im => im.classList.remove("sel"));
+  const im = strip.children[i];
+  if (im) { im.classList.add("sel"); if (im.offsetLeft < strip.scrollLeft || im.offsetLeft + im.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = im.offsetLeft - strip.clientWidth / 2; }
+  $("stripTxt").textContent = `${i + 1} / ${R.P.length}`;
+  const rows = [["시각", p.time], ["물체", p.count == null ? "분석 없음" : p.count + "개" + (p.truncated ? " (5000개만 기록)" : "")],
+    ["평균 지름", p.mean_d_um == null ? "—" : p.mean_d_um.toFixed(1) + " µm"], ["총면적", p.total_area_um2 == null ? "—" : compact(p.total_area_um2) + " µm²"],
+    ["노출 · LED", `${(p.exp / 10).toFixed(1)} ms · ${p.led ? "켬" : "끔"}`], ["화소", p.pixel_um + " µm"]];
+  for (const [k, v] of rows) { const a = document.createElement("span"), b = document.createElement("b"); a.textContent = k; b.textContent = v; kv.append(a, b); }
+  if (!want("hist")) return;
+  try { const o = await api("/rec/objects?photo=" + p.id); if (R.P[R.sel] === p) { R.objs = o; drawSizeHist(); } } catch (e) { R.objs = null; drawSizeHist(); }
+}
+$("rOvBtn").onclick = () => { R.ov = !R.ov; $("rOvBtn").classList.toggle("on", R.ov); $("rOvBtn").textContent = R.ov ? "윤곽" : "원본"; selectIdx(R.sel); };
+function buildStrip() {         // thumbnails in time order; new photos are appended, a different run rebuilds
+  const s = $("strip");
+  if (s.children.length > R.P.length || (s.children.length && s.children[0].dataset.n !== R.P[0].name)) s.textContent = "";
+  for (let i = s.children.length; i < R.P.length; i++) {
+    const im = new Image(); im.loading = "lazy"; im.decoding = "async"; im.alt = R.P[i].time; im.title = R.P[i].time + (R.P[i].count != null ? " · " + R.P[i].count + "개" : "");
+    im.src = "/photos/" + encodeURIComponent(R.P[i].name) + ".thumb.png"; im.dataset.n = R.P[i].name; im.onclick = () => { play(false); selectIdx(i); }; s.appendChild(im);
+  }
+}
+const PL = {on: false, h: 0};
+function play(on) {
+  PL.on = on === undefined ? !PL.on : on; clearTimeout(PL.h);
+  $("rPlay").innerHTML = svg(PL.on ? "pause" : "play") + `<span>${PL.on ? "멈춤" : "재생"}</span>`; $("rPlay").classList.toggle("on", PL.on);
+  if (PL.on) { if (R.sel >= R.P.length - 1) selectIdx(0); PL.h = setTimeout(playStep, 400); }
+}
+function playStep() {           // the next photo only after this one has been shown
+  if (!PL.on) return;
+  if (R.sel >= R.P.length - 1) return play(false);
+  selectIdx(R.sel + 1);
+  $("rImg").decode().catch(() => {}).then(() => { if (PL.on) PL.h = setTimeout(playStep, 350); });
+}
+$("rPlay").onclick = () => play();
+$("rPrev").onclick = () => { play(false); selectIdx(R.sel - 1); };
+$("rNext").onclick = () => { play(false); selectIdx(R.sel + 1); };
+function drawSizeHist() {
+  const cv = $("rHist"), dp = printing() ? 3 : window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  cv.width = Math.round(W * dp); cv.height = Math.round(H * dp);
+  const g = cv.getContext("2d"), muted = cssv("--dim"), axis = cssv("--axis"); g.setTransform(dp, 0, 0, dp, 0, 0);
+  g.font = "11px ui-monospace,Menlo,monospace"; g.fillStyle = muted; g.textAlign = "center"; g.textBaseline = "top";
+  const d = (R.objs || []).map(o => o[2]); R.bins = null;
+  if (!d.length) { g.fillText(R.objs ? "물체 없음" : "—", W / 2, H / 2 - 6); return; }
+  const mn = Math.min(...d), mx = Math.max(...d), step = niceStep(Math.max(mx - mn, 1) / 10), lo = Math.floor(mn / step) * step,
+    nb = Math.max(1, Math.ceil((mx - lo) / step + 1e-9)), cnt = new Array(nb).fill(0);
+  for (const v of d) cnt[Math.min(nb - 1, Math.floor((v - lo) / step))]++;
+  const L = 34, Rm = 8, T = 14, B = 20, pw = W - L - Rm, ph = H - T - B, top = Math.max(...cnt), bw = pw / nb, w = Math.min(24, bw - 2);
+  g.fillStyle = axis; g.fillRect(L, T + ph, pw, 1);
+  g.textAlign = "right"; g.textBaseline = "middle"; g.fillStyle = muted; g.fillText(String(top), L - 5, T); g.fillText("0", L - 5, T + ph);
+  g.textAlign = "center"; g.textBaseline = "top";
+  const every = Math.ceil(nb / Math.max(2, Math.floor(pw / 50)));
+  for (let k = 0; k <= nb; k += every) g.fillText(String(+(lo + k * step).toFixed(3)), L + k * bw, T + ph + 5);
+  g.fillStyle = cssv("--s1");
+  R.bins = {L, bw, lo, step, cnt};
+  cnt.forEach((n, k) => { if (!n) return; const h = n / top * ph, x = L + k * bw + (bw - w) / 2, y = T + ph - h;
+    g.beginPath(); g.roundRect ? g.roundRect(x, y, w, h, [Math.min(4, w / 2, h), Math.min(4, w / 2, h), 0, 0]) : g.rect(x, y, w, h); g.fill(); });
+  g.fillStyle = muted; g.textAlign = "right"; g.fillText("µm", W - Rm, T - 12);
+}
+$("rHist").addEventListener("pointermove", e => {
+  const b = R.bins, el = $("rTip"); if (!b) return;
+  const k = Math.floor((e.clientX - $("rHist").getBoundingClientRect().left - b.L) / b.bw);
+  if (k < 0 || k >= b.cnt.length) { el.style.display = "none"; return; }
+  el.textContent = ""; const v = document.createElement("b"); v.textContent = b.cnt[k] + "개";
+  el.append(v, ` · ${+(b.lo + k * b.step).toFixed(3)}–${+(b.lo + (k + 1) * b.step).toFixed(3)} µm`); el.style.display = "block";
+  el.style.left = Math.min(innerWidth - el.offsetWidth - 8, e.clientX + 12) + "px"; el.style.top = (e.clientY - el.offsetHeight - 10) + "px";
+});
+$("rHist").addEventListener("pointerleave", () => $("rTip").style.display = "none");
+function buildTable(box) {
+  const t = document.createElement("table"), th = t.createTHead().insertRow(), tb = t.createTBody(); t.id = "rTbl";
+  for (const h of ["시각", "개수", "평균 지름 µm", "총면적 µm²"]) { const c = document.createElement("th"); c.textContent = h; th.appendChild(c); }
+  for (let i = R.P.length - 1; i >= Math.max(0, R.P.length - 500); i--) {
+    const p = R.P[i], r = tb.insertRow(); r.dataset.i = i; r.onclick = () => selectIdx(i);
+    for (const v of [p.time, p.count ?? "—", p.mean_d_um == null ? "—" : p.mean_d_um.toFixed(1), p.total_area_um2 == null ? "—" : compact(p.total_area_um2)]) r.insertCell().textContent = v;
+  }
+  box.appendChild(t);
+  if (R.P.length > 500) { const d = document.createElement("div"); d.className = "note"; d.textContent = `최근 500장만 보입니다 · 전부는 CSV에`; box.appendChild(d); }
+}
+new ResizeObserver(() => { if (st.tab === "results") { drawCharts(); drawSizeHist(); } }).observe($("rCharts"));
+/* report: print layout and light colours first, charts redrawn at print size, then back */
+function fillReport() {
+  const info = runInfo(), P = R.P, o = info && info.opts ? (typeof info.opts === "string" ? JSON.parse(info.opts) : info.opts) : null;
+  const h = document.createElement("h1"); h.textContent = "SOL Microscope 실험 보고서";
+  const ps = [info && info.id != null ? `실험 #${info.id} · ${info.sample || "시료 이름 없음"} · ${fmtT(info.started, true)} ~ ${info.ended ? fmtT(info.ended, true) : "진행 중"} · ${fmtEvery(info.every_s)} 간격 · 사진 ${P.length}장`
+      : `수동 촬영 · 사진 ${P.length}장`,
+    o ? "분석: " + anTxt(o) + (o.an_split ? " · 붙은 물체 나누기" : "") + (o.an_track ? " · 개별 물체 추적" : "") + ` · 화소 ${o.pixel_um} µm` : "",
+    `선택한 사진: ${P[R.sel] ? P[R.sel].time : "—"} · 인쇄 ${fmtT(nowS(), true)}`].filter(Boolean);
+  const box = $("rReport"); box.textContent = ""; box.style.flexBasis = "100%"; box.appendChild(h);
+  for (const t of ps) { const p = document.createElement("p"); p.textContent = t; box.appendChild(p); }
+}
+function beforePrint() { if (st.tab !== "results") return; fillReport(); document.body.classList.add("printing"); drawCharts(); drawSizeHist(); }
+function afterPrint() { if (!printing()) return; document.body.classList.remove("printing"); drawCharts(); drawSizeHist(); }
+window.addEventListener("beforeprint", beforePrint); window.addEventListener("afterprint", afterPrint);
+$("rPdf").onclick = () => { if (!R.P.length) return toast("사진이 없는 기록입니다"); window.print(); };
+
 /* ---------- keys, resize, start */
 document.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
-  if (k === " ") { e.preventDefault(); togglePause(); } else if (k === "c") shoot(); else if (k === "f") fit();
+  if (k === "escape") { $("modal").style.display = "none"; $("drawer").classList.remove("open"); st.pend = null; st.anchor = null; draw(); return; }
+  if (k === "c") return shoot();
+  if (k === "r") return showTab("results");
+  if (st.tab === "results") {
+    if (k === "arrowleft") { play(false); selectIdx(R.sel - 1); } else if (k === "arrowright") { play(false); selectIdx(R.sel + 1); }
+    else if (k === " ") { e.preventDefault(); play(); }
+    return;
+  }
+  if (st.tab !== "live") return;
+  if (k === " ") { e.preventDefault(); togglePause(); } else if (k === "f") fit();
   else if (k === "x") $("bX").click(); else if (k === "m") $("bMeas").click();
   else if (k === "+" || k === "=") zoomAt(1.25, ...anchorScr()); else if (k === "-") zoomAt(0.8, ...anchorScr());
   else if (k === "0") fit(); else if (k === "1") oneToOne();
-  else if (k === "escape") { $("modal").style.display = "none"; st.pend = null; st.anchor = null; draw(); }
 });
 new ResizeObserver(() => {             // a zoomed view keeps its size on screen; a fitted view stays fitted
   const keep = st.zoom !== 1 && fitScale() > 0 ? scale() / dpr : 0;
@@ -481,7 +1410,10 @@ new ResizeObserver(() => {             // a zoomed view keeps its size on screen
   if (keep && fitScale() > 0) st.zoom = Math.max(zMin(), Math.min(zMax(), keep * dpr / fitScale()));
   draw();
 }).observe(cv);
-showDisp(); syncCfg(); poll(); setInterval(poll, 1000); fetchFrame(); loadGal();
+new ResizeObserver(() => { if (st.tab === "exp" && W.step === 2) drawWiz(); }).observe($("pvBig"));
+$("drawer").addEventListener("transitionend", drawHist);
+showDisp(); syncCfg(); showTab(location.hash.slice(1) || "live"); fetchFrame(); loadGal();
+poll(); setInterval(poll, 1000);
 </script>
 </body>
 </html>
