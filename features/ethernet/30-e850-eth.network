@@ -1,0 +1,12 @@
+# e850-feature ethernet: DHCP on eth0, preferred over Wi-Fi (metric 1024) when a cable is in.
+[Match]
+Name=eth0
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+RouteMetric=100
+
+[Link]
+RequiredForOnline=no

@@ -1,0 +1,49 @@
+#!/bin/sh
+# e850-feature: optional drivers and programs for an E850-96 board (linux510 docs 11.76-11.80).
+#   e850-feature list                     what the bundle has
+#   e850-feature status [name...]         installed or not, and each feature's own state
+#   e850-feature install name...          (root) copy the bundle to /opt/e850-features, then install
+#   e850-feature remove name...           (root)
+# A bundle is made on the Mac by features/host/bundle.sh and sent by features/host/deploy.sh.
+set -e
+SRC=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+ROOT=$SRC
+. "$SRC/common.sh"
+all=$(cd "$SRC" && for d in */feature.sh; do printf '%s ' "${d%/feature.sh}"; done)
+
+deploy_self() {          # the installed copy is what units and later status/remove use
+    [ "$SRC" = "$DEST" ] && return
+    rm -rf "$DEST.new"; cp -a "$SRC" "$DEST.new"; rm -rf "$DEST"; mv "$DEST.new" "$DEST"
+    ln -sf "$DEST/e850-feature" /usr/local/bin/e850-feature
+    SRC=$DEST ROOT=$DEST
+}
+
+install_one() {
+    [ -f "$SRC/$1/feature.sh" ] || die "no feature '$1' (have: $all)"
+    for n in $(sed -n 's/^# needs: //p' "$SRC/$1/feature.sh"); do
+        [ -e "$STATE/$n" ] || install_one "$n"
+    done
+    log "== install $1"
+    sh "$SRC/$1/feature.sh" install
+    mkdir -p "$STATE"; cat "$SRC/VERSION" > "$STATE/$1" 2>/dev/null || touch "$STATE/$1"
+}
+
+cmd=${1:-status}; [ $# -gt 0 ] && shift
+case $cmd in
+list)
+    for f in $all; do printf '%-9s %s\n' "$f" "$(sed -n 's/^# about: //p' "$SRC/$f/feature.sh")"; done
+    echo "bundle $(cat "$SRC/VERSION" 2>/dev/null), kernel $(cat "$SRC/KVER" 2>/dev/null)";;
+status)
+    for f in ${*:-$all}; do
+        if [ -e "$STATE/$f" ]; then echo "== $f: installed ($(cat "$STATE/$f"))"; sh "$SRC/$f/feature.sh" status || true
+        else echo "== $f: not installed"; fi
+    done;;
+install)
+    need_root; [ $# -gt 0 ] || die "install what? have: $all"
+    deploy_self
+    for f; do install_one "$f"; done;;
+remove)
+    need_root; [ $# -gt 0 ] || die "remove what? installed: $(ls "$STATE" 2>/dev/null | tr '\n' ' ')"
+    for f; do log "== remove $f"; sh "$SRC/$f/feature.sh" remove; rm -f "$STATE/$f"; done;;
+*) sed -n '2,7p' "$0"; exit 1;;
+esac

@@ -1,0 +1,7 @@
+# e850-feature ethernet: the on-board LAN9514 has no EEPROM, so smsc95xx makes a random MAC each boot.
+[Match]
+Driver=smsc95xx
+
+[Link]
+Name=eth0
+MACAddressPolicy=persistent

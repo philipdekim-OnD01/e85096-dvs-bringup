@@ -1,0 +1,83 @@
+--- a/sound/soc/samsung/exynos3830_sound.c	2026-11-21 06:32:35
++++ b/sound/soc/samsung/exynos3830_sound.c	2026-11-21 06:32:35
+@@ -1737,13 +1737,61 @@
+ 		dev_err(card->dev, "sound card register failed: %d\n", ret);
+ }
+ DECLARE_WORK(exynos_register_card_work, exynos_register_card_work_func);
++
++/*
++ * e850 (linux510 docs 11.76): exynos_dai[] is matched to the children of the sound node by position, in
++ * the order the board overlay lists them. fdtoverlay (and so our merged.dtb) adds an overlay's new nodes in
++ * reverse order, which put SIFS2 on the UAIF0 link ("No CPU DAIs support playback for stream UAIF0").
++ * Sort the children back into the overlay's order by name; unknown names keep their DT order at the end.
++ */
++static const char * const e850_kid_order[] = {
++	"rdma", "wdma", "dual", "ddma", "uaif", "spdy", "sifs", "nsrc",
++	"rdma_be", "wdma_be", "usb", "echo", "fwd",
++};
++
++static int e850_kid_key(const char *name)
++{
++	char base[16];
++	int i, n = 0, len = 0;
+ 
++	while (*name && (*name < '0' || *name > '9') && len < 11)
++		base[len++] = *name++;
++	base[len] = 0;
++	while (*name >= '0' && *name <= '9')
++		n = n * 10 + (*name++ - '0');
++	if (!strcmp(name, "_be"))
++		strcat(base, "_be");
++	for (i = 0; i < ARRAY_SIZE(e850_kid_order); i++)
++		if (!strcmp(base, e850_kid_order[i]))
++			return i * 100 + n;
++	return 10000;
++}
++
++static int e850_sorted_children(struct device_node *np, struct device_node **kids, int max)
++{
++	struct device_node *child, *t;
++	int n = 0, i, j;
++
++	for_each_child_of_node(np, child)
++		if (n < max)
++			kids[n++] = of_node_get(child);
++	for (i = 1; i < n; i++)		/* insertion sort: stable */
++		for (j = i; j > 0 && e850_kid_key(kids[j - 1]->name) > e850_kid_key(kids[j]->name); j--) {
++			t = kids[j];
++			kids[j] = kids[j - 1];
++			kids[j - 1] = t;
++		}
++	return n;
++}
++
+ static int exynos_sound_probe(struct platform_device *pdev)
+ {
+ 	struct snd_soc_card *card = &exynos_madera;
+ 	struct madera_drvdata *drvdata = card->drvdata;
+ 	struct device_node *np = pdev->dev.of_node;
+ 	struct device_node *dai;
++	struct device_node *kids[96];
++	int nkid, k;
+ 	struct snd_soc_dai_link *link;
+ 	int nlink = 0;
+ 	int i, ret;
+@@ -1813,7 +1861,9 @@
+ 	if (ret)
+ 		dev_dbg(card->dev, "Failed to parse outclk: %d\n", ret);
+ 
+-	for_each_child_of_node(np, dai) {
++	nkid = e850_sorted_children(np, kids, ARRAY_SIZE(kids));
++	for (k = 0; k < nkid; k++) {
++		dai = kids[k];
+ 		link = &exynos_dai[nlink];
+ 
+ 		if (!link->name)
+@@ -1865,6 +1915,7 @@
+ 		if (++nlink == card->num_links)
+ 			break;
+ 	}
++	/* links keep pointers to names in these nodes: the references are not dropped */
+ 
+ 	if (!nlink) {
+ 		dev_err(card->dev, "No DAIs specified\n");

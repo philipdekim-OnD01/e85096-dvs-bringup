@@ -24,6 +24,7 @@ WinLink E850-96(Samsung Exynos850 = s5e3830, Cortex-A55 8코어)에 vendor Linux
 | 지금 구워진 boot | `~/e850-logs/boot-dvs3/boot.img` = 저장소 빌드, CN4 카메라 DT를 S5KRC1S로, mode0 8192×127 + mode1 8192×32(11.18/11.26). boot-dvs2에 조용한 워치독, gadget을 기다리는 `e850-vbus`를 넣은 판(2026-11-07, 11.32). 그 전 판 `boot-dvs2`, `boot-dvs`. 알려진 정상 이미지는 `~/e850-logs/boot-nokvm/boot.img`(OV5647 DT, 1시간 부하 시험 통과) |
 | 자동 적재 모듈 | `e850-cpuhp`(hotplug, `/etc/modules-load.d`), HDMI 콘솔 색은 dpu.ko 패치(`modules/e850-hdmi/apply.sh`, 11.16). `e850-fbpal`은 더 이상 올리지 않는다 |
 | 수동 적재 | 카메라 `modprobe fimc-is && modprobe is-cis-ov5647`. `fimc_is`는 내리면 다시 올릴 수 없어 재부팅해야 한다 |
+| 골라서 넣는 기능 | `features/`(README): 보드에서 `e850-feature install ethernet audio video bt usbhost desktop`. Mac에서 `sh features/host/bundle.sh` → `sh features/host/deploy.sh philip@<IP> 기능…`. 모듈은 `/lib/modules/$(uname -r)/extra/`(depmod `search extra built-in`), 펌웨어는 Linaro 고정 커밋에서 받아 git에 넣지 않음(11.76~11.79) |
 | CPU 배치 | 장치 IRQ는 Wi-Fi(`scsc_wlbt`, CPU7, `e850-wifi.sh`, 11.69)를 빼고 모두 CPU0. DVS 디코더(캡처 주 스레드) CPU1, 렌더러 `dvs-render` CPU2, 배경 필터 `dvs-filter` CPU3(11.45), 행동 분류 `dvs-act` CPU4~6, 웹 `dvs-web` CPU7 전용. systemd가 띄우는 것은 모두 CPU0~6(`/etc/systemd/system.conf.d/e850-cpu7.conf`, 11.30) |
 
 ### 접속
@@ -90,6 +91,7 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
 - **macOS 셸:** `timeout`이 없다. BSD grep은 기본 정규식에서 `\|`를 지원하지 않으니 `-E`를 쓴다. `uart.log`를 awk나 sed로 처리할 때는 `LC_ALL=C`를 붙인다.
 - **hotplug:** `echo 0 > cpuN/online`은 `e850-cpuhp.ko`가 올라가 있을 때만 한다. 없으면 그 코어는 재부팅할 때까지 돌아오지 않는다.
 - **카메라:** `ov5647-cap.py`는 실행하는 동안 콘솔 printk를 끈다. 프레임마다 나오는 커널 메시지가 UART로 나가면 CSIS 인터럽트를 놓치기 때문이다.
+- **기능 묶음:** `exynos3830_sound`가 카드 등록에 실패한 같은 부팅에서 다시 올리면 커널 패닉(11.77). `scsc_wlan`을 rmmod 뒤 다시 올려도 패닉(11.78): 바꾼 모듈은 재부팅해야 쓰인다. 오디오는 dmix가 안 된다(SysV IPC 없음), 48 kHz로만 제 속도. BT를 켠 채 쓰려면 고친 `scsc_wlan`(bt 기능이 넣음)이 올라와 있어야 한다. 아니면 WLBT 패닉 뒤 Wi-Fi가 재부팅 전까지 안 돌아온다.
 - **USB 호스트:** 평소에는 꺼져 있어서 키보드·마우스가 없다. 허브 전원(LDO24)을 `e850-hubpwr`로 켜고 OTG `id`를 0으로 바꾸면 USB-A가 동작한다. 이때 micro-USB 케이블은 빼야 한다(11.64). 데스크톱 환경은 보류했다(GPU 사용자 공간 드라이버 없음).
 - **포트:** nginx가 80번 포트를 쓴다. Apache를 올리기 전에 사용자와 포트를 정한다.
 - **Wi-Fi:** 펌웨어가 패닉하면(`WLBT FW PANIC`) 드라이버가 펌웨어를 다시 올리고 약 6초 뒤 다시 연결한다(11.31, `e850-wifi.sh`의 `disable_recovery_handling=0`). 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`로 본다. `mx_panic`은 읽기만 해도 펌웨어가 패닉하니 `cat`하지 않는다(11.33부터 root만 읽고 쓸 수 있다, 0600). 강제 패닉 반복 시험은 `tools/board/wifi-panicloop.sh N`(root, 보드 `/var/tmp/wifi-panicloop.sh`). 2026-11-13부터 펌웨어는 Linaro Android 13 판(`R4-1_Y23W13A`, 11.47)이다. 옛 2019년 판은 3.8시간마다 Data Abort가 났다. 되돌리기는 root로 `sh /var/tmp/wifi-fwswap.sh a10`.

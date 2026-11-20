@@ -1,0 +1,25 @@
+--- a/drivers/net/wireless/scsc/mgt.c	2026-11-20 22:37:52.570705009 +0000
++++ b/drivers/net/wireless/scsc/mgt.c	2026-11-20 22:37:52.574000884 +0000
+@@ -7641,7 +7641,21 @@
+ 		}
+ 		sdev->device_state = SLSI_DEVICE_STATE_STARTING;
+ 		reinit_completion(&sdev->sig_wait.completion);
+-		SLSI_EC_GOTO(slsi_sm_wlan_service_open(sdev), err, err_done); //separate function is not required.
++		/* e850 (docs 11.78): mxman_failure_work allows service starts again only after
++		 * scsc_mx_module_reset() has probed every client; this work is queued by our probe in
++		 * there. With the BT service open it ran first, was refused (scsc_mx_service_open
++		 * -EILSEQ, returned here as -EINVAL), and Wi-Fi stayed down until reboot. A failed open
++		 * leaves the state PROBED, so it can simply be tried again: for up to 5 s.
++		 */
++		for (i = 0; i < 50; i++) {
++			err = slsi_sm_wlan_service_open(sdev);
++			if (!err)
++				break;
++			SLSI_INFO(sdev, "service open failed (%d) during recovery, retry %d\n", err, i + 1);
++			msleep(100);
++		}
++		if (err)
++			goto err_done;
+ 		sdev->cm_if.recovery_state = SLSI_RECOVERY_SERVICE_OPENED;
+ 	} else if (sdev->netdev_up_count == 0) {
+ 		sdev->mlme_blocked = false;

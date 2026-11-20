@@ -1,0 +1,11 @@
+# e850-feature usbhost: USB-A host mode (keyboard, mouse, Ethernet). Off = micro-USB ACM/ECM gadget again.
+[Unit]
+Description=E850 USB-A host mode (no micro-USB gadget while on)
+After=e850-wifi.service
+
+[Service]
+ExecStart=/bin/sh @DEST@/usbhost/usbhost.sh run
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

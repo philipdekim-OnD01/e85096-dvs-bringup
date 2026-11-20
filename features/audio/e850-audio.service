@@ -1,0 +1,12 @@
+# e850-feature audio: load the sound card once at boot and set the headphone route.
+[Unit]
+Description=E850 sound card (ABOX + AUD3004X) and headphone route
+After=local-fs.target systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh @DEST@/audio/audio.sh start
+
+[Install]
+WantedBy=multi-user.target

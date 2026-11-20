@@ -1,0 +1,24 @@
+# e850-feature desktop: X + Openbox on HDMI (tty7) as @USER@. e850-desktop start|stop.
+[Unit]
+Description=E850 X desktop on HDMI (Openbox)
+After=e850-hdmi.service systemd-user-sessions.service e850-usbhost.service
+Wants=e850-usbhost.service
+Conflicts=dvslive.service
+
+[Service]
+User=@USER@
+PAMName=login
+TTYPath=/dev/tty7
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+UnsetEnvironment=TERM
+UtmpIdentifier=tty7
+UtmpMode=user
+ExecStartPre=+/bin/chvt 7
+ExecStart=/usr/bin/startx @DEST@/desktop/session.sh -- vt7 -keeptty -nolisten tcp
+ExecStopPost=+/bin/chvt 1
+ExecStopPost=+/bin/sh -c 'systemctl -q is-enabled dvslive 2>/dev/null && systemctl start --no-block dvslive || true'
+
+[Install]
+WantedBy=multi-user.target

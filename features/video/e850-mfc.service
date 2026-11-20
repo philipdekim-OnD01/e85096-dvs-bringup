@@ -1,0 +1,12 @@
+# e850-feature video: the MFC codec driver (exynos_mfc is in autoload.deny, so load it here).
+[Unit]
+Description=E850 MFC hardware video codec
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/modprobe exynos_mfc
+
+[Install]
+WantedBy=multi-user.target

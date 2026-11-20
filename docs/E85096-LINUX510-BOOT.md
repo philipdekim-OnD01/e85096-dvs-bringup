@@ -4504,3 +4504,159 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - 센서 표시판 설치와 실제 화면.
 - 보드4에서 50M을 통합 펌웨어로.
 - 8M 모듈.
+
+### 11.75 현미경 뷰어 외부 접속: Cloudflare 임시 터널 (2026-11-20)
+
+**사용자 결정.** 보드4 뷰어를 외부에서 연다. 방식은 Cloudflare 임시 링크(계정 없음), 허용 범위는 "전체 조작, 보호 없음"이다. 뷰어에 로그인이 없다는 것을 알리고 고르게 했다. 링크를 아는 사람은 노출·LED·실험을 바꾸고, 센서 레지스터를 쓰고, 뷰어를 끌(`/quit`) 수 있다.
+
+**한 것(보드4, 사용자 philip, sudo 없음).**
+- `cloudflared` 2026.11.1 linux-arm64(GitHub 공식 배포, 37,818,397 B)를 받았다. 릴리스 노트의 sha256 `b155cec3…7c5a`와 일치했다. 위치는 `/home/philip/bin/cloudflared`다.
+- 실행: `setsid nohup ~/bin/cloudflared tunnel --no-autoupdate --url http://localhost:8090 > /var/tmp/cloudflared.log 2>&1 &`.
+- 주소는 `https://<무작위 단어>.trycloudflare.com`이다. 링크만 알면 조작할 수 있으므로 공개 저장소에는 적지 않는다. 지금 주소는 `grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /var/tmp/cloudflared.log`로 본다.
+- 확인(Mac에서 외부 경로로): 페이지 200(117 KB, 0.4 s), `/stat`(Hi-1634, 3.35 fps), `/frame.png` 200(0.8 MB, 1.1 s).
+- ICMP 프록시 경고(ping_group_range)는 무시해도 된다. HTTP 터널과 관계없다.
+
+**알아 둘 것.**
+- 보드를 재부팅하면 터널이 꺼진다. 다시 띄우면 주소가 바뀐다.
+- 임시 터널은 Cloudflare가 시험용으로 제공하는 것이라 가동 보장이 없다.
+- 터널이 켜져 있는 동안에는 영상이 Cloudflare를 거친다. 설명서의 "밖으로 나가지 않음"은 터널을 끈 상태에 대한 설명이다.
+- 끄기: 보드4에서 `pkill -f 'cloudflared tunnel'`.
+
+**메일.** 사용자 요청("작동되면 접속 주소 메일로 보내")에 따라 18:10:18에 학교 주소로 접속 주소와 위의 주의 사항을 보냈다(첨부 없음). Mail 보낸편지함에서 확인했다.
+
+### 11.76 골라서 넣는 기능 묶음 `features/`: 유선랜·오디오·영상 코덱·BT·USB 호스트·X (2026-11-21)
+
+**사용자 요청(외출 중, 모두 사전 승인).** "보드4에 다 설치하고, 옵션에 따라 X를 올리거나 말거나 하게 해 줘. 오디오, 이더넷 등의 드라이버는 다른 보드에도 다 필요하니 BT 포함, 추가할 수 있도록. 다른 보드들도 여기서 만든 드라이버를 쉽게 추가할 수 있게 깃을 구조화해 줘."
+
+**구조.** 저장소에 `features/`를 새로 만들었다. 자세한 사용법은 `features/README.md`에 있다.
+- 기능마다 디렉터리가 하나씩 있다: `usbhost`, `ethernet`, `audio`, `video`, `bt`, `desktop`. 각 디렉터리의 `feature.sh`가 `install`, `remove`, `status`를 맡는다. 첫 줄 주석에 `# about:`(설명)과 `# needs:`(의존 기능)를 쓴다.
+- 보드의 명령은 `e850-feature list | status | install 이름… | remove 이름…` 하나다. 공통 함수는 `common.sh`에 있다(`ko_install`, `unit_install`, `apt_need`, `users_to_group`).
+- Mac에서는 `features/host/bundle.sh`가 번들 `out/e850-features.tgz`(2.0 MB)를 만든다. 하는 일은 다음과 같다.
+  - Docker로 모듈 4개를 빌드하고 strip한다: `smsc95xx`, 패치한 `exynos3830_sound`, `e850-hubpwr`, 패치한 `scsc_wlan`.
+  - Linaro 펌웨어를 받는다(`fetch-fw.py`, `fw.sha256`로 확인, `out/fw-cache`에 캐시).
+  - 스크립트를 넣는다.
+
+  `features/host/deploy.sh philip@<IP> 기능…`이 scp로 보내고 sudo로 설치한다.
+- 보드에 놓이는 자리:
+
+  | 대상 | 위치 |
+  |---|---|
+  | 번들 전체 | `/opt/e850-features` |
+  | 모듈 | `/lib/modules/$(uname -r)/extra/`. `/etc/depmod.d/e850-features.conf`의 `search extra built-in` 덕분에 같은 이름이면 extra가 이긴다 |
+  | 펌웨어 | `/lib/firmware/` |
+  | 설치 기록 | `/var/lib/e850-features/<기능>` |
+- 모듈은 번들의 `KVER`가 `uname -r`과 같을 때만 넣는다.
+- 펌웨어(Samsung 바이너리)는 git에 넣지 않는다. 출처는 Linaro `device/samsung/universal3830`의 커밋 `8bfd9659`(android13-e850-96, 2025-08-15)다. 받은 파일은 `calliope_{sram,dram}{,_2}.bin`, `abox_tplg.bin`, `mixer_paths.xml`, `mfc_fw_v10.21.bin`(→ `mfc_fw.bin`)이다.
+- X(`desktop`)는 따로 설치한다. 나머지 기능만 넣으면 X 없는 가벼운 보드가 된다.
+
+**시험 순서.** 커널 모듈을 처음 올리는 일은 보드3(ACM, UART, fastboot, `/proc/last_kmsg` 있음)에서 먼저 했다. 보드4에는 확인된 것만 넣었다. 보드4는 Wi-Fi로만 닿기 때문이다.
+
+### 11.77 오디오: 카드 등록 실패는 DT 자식 순서 때문, 패치한 machine 드라이버 (2026-11-21)
+
+**관찰(보드3).**
+- 펌웨어를 넣고 `modprobe exynos3830_sound`를 하면 ABOX는 "Calliope is ready to sing"까지 간다.
+- 그런데 카드 등록이 실패했다: "No CPU DAIs support playback for stream UAIF0", "can't create pcm UAIF0 :-22".
+
+**원인.**
+- `exynos3830_sound.c`는 sound 노드의 자식을 정적 배열 `exynos_dai[]`(rdma0~11, wdma0~4, dual, ddma, uaif0~2, spdy, sifs, nsrc, *_be, usb, echo, fwd)에 **위치로** 대응시킨다.
+- 그런데 `build-bootimg.sh`의 fdtoverlay가 overlay의 새 자식 노드를 **거꾸로** 넣었다. merged.dtb의 순서는 0번 fwd … 62번 rdma0이다. 그래서 SIFS2 같은 링크가 UAIF0 자리에 들어갔다.
+
+**수정.** `modules/exynos3830-sound/`(`exynos3830-sound-order.patch`)는 자식을 이름(접두어, 번호, `_be`)으로 정렬한 뒤 대응시킨다. merged.dtb는 바꾸지 않았다.
+
+**실패와 교훈.** 등록에 실패한 같은 부팅에서 원래 모듈을 내리고 패치 모듈을 올리자 커널 패닉이 났다.
+- 증상은 `exynos_register_card_work_func`의 `__list_add_valid` BUG였다. 워치독 → fastboot → `fastboot reboot` 순으로 복구했다.
+- 기록은 `/var/tmp/last_kmsg-b3-0634.txt`에 있다.
+- 그래서 `audio.sh`는 카드 없이 모듈만 올라와 있으면 다시 시도하지 않고 "reboot"만 출력한다.
+
+**결과.** 깨끗한 부팅에서 패치 모듈을 올리자 card0 `ExynosMadera`가 생겼다.
+- 재생 장치 RDMA0~11과 `calliope_0`이 있고, 컨트롤은 780개다.
+- 경로: Android `mixer_paths.xml`의 기본값 + `route-sifs0-to-uaif0` + `dev-headset`을 쓴다. Android의 BD_MIXER/RDMA3 부분은 뺐다. 그러면 RDMA0 → SPUS OUT0 → SIFS0 → UAIF0 → AUD3004X DAC → HPOUT으로 이어진다.
+- `features/audio/mixer-path.py`가 `mixer_paths.xml`을 `amixer -s` 입력으로 바꾼다(selftest 있음).
+- 재생 시간:
+
+  | 보드 | 장치 | 입력 | 3초 분량 재생 시간 |
+  |---|---|---|---|
+  | 보드3 | `hw:0,0` | 48 kHz WAV | 3.193 s |
+  | 보드4 | `default` | 44.1 kHz | 3.33 s |
+  | 보드4 | `default` | 48 kHz | 3.19 s |
+
+  DAPM에서 HPOUTLN까지 켜졌다. **귀로 들어 보지는 못했다**(사용자 외출 중).
+
+**발견 두 가지(보드4).**
+- dmix를 쓸 수 없다: "unable to create IPC semaphore … Function not implemented". 이 커널에는 SysV IPC가 없다. 그래서 `/etc/asound.conf`의 `default`는 `plug → hw:ExynosMadera,0`이고, 한 번에 한 프로그램만 쓴다.
+- RDMA PCM은 8~384 kHz를 다 받는다고 알린다. 그러나 44.1 kHz를 넣으면 3초 분량이 2.56초에 끝났다(약 15% 빠름). `ABOX SPUS ASRC0=1`로도 같았다. 그래서 `plug`가 48 kHz S16 2채널로 바꾸게 했다.
+
+**권한.** `philip`이 `audio` 그룹에 없어서 열지 못했다. `audio`·`video` 설치가 uid 1000~59999 사용자를 각 그룹에 넣는다.
+
+**잭 메시지.** 카드가 올라올 때 `aud3004x` 잭 감지 메시지가 32줄 나오고 멈췄다(5초 동안 0줄). HDMI 소리는 아직 없다.
+
+### 11.78 BT: scsc_bt → /dev/vhci → BlueZ, 그리고 BT를 켜면 Wi-Fi 복구가 실패하던 문제 (2026-11-21)
+
+**방식.**
+- 커널의 BlueZ 연결부(`scsc_bluez.c`)는 빌드되지 않는다: `wakelock.h`가 없고, 두 번째 `module_init`이 있고, 커널 버퍼를 fops에 넘긴다.
+- 그래서 사용자 공간 브리지 `features/bt/e850-btbridge.py`를 만들었다. vendor `scsc_bt.ko`의 `/dev/scsc_h4_0`(H4 바이트 흐름)과 `hci_vhci`의 `/dev/vhci`(한 번 읽고 쓸 때 패킷 하나) 사이에서 패킷을 H4 헤더로 잘라 옮긴다(selftest 있음).
+- vhci에 `ff 00`을 먼저 써서 hci0을 바로 만든 뒤 scsc 장치를 연다. 처음에는 vhci가 1초 뒤 자동으로 만들기를 기다렸는데, 그 전에 칩이 먼저 이벤트를 보내 write가 ENODEV로 실패했다.
+
+**결과.**
+
+| 보드 | hci0 | BD 주소 | 스캔 |
+|---|---|---|---|
+| 보드3 | UP RUNNING | `9C:23:E0:0A:74:9C` | 12초에 27대 |
+| 보드4 | UP RUNNING | `9C:23:E0:0B:F4:0C` | 23대 |
+
+- BD 주소는 드라이버가 칩 고유 ID로 만든다(fastboot 일련번호와 같은 값).
+- `bt.hcf`는 Wi-Fi 펌웨어 묶음(`mx140/conf/bluetooth/`)에 이미 있다.
+- bluetoothd가 hci0을 보고 자동으로 떴다.
+- 스캔하는 동안 Wi-Fi 복구 횟수는 0, ping 손실은 0이었다.
+
+**사고(보드4).**
+- 상황: BT(`e850-bt.service`)를 켜 둔 채 desktop 패키지 278개를 Wi-Fi로 받았다. 설치는 끝까지 정상이었다(마지막 줄까지 출력, rc=0).
+- 증상: 그 직후 보드4가 Wi-Fi에서 사라졌다(ARP incomplete). 보드4는 USB가 호스트 모드이고 유선랜 케이블도 없어서 원격으로 살릴 수 없었다.
+- 사용자가 전원을 다시 넣었다. 부팅은 되지만 무선이 안 된다고 알려 왔다.
+
+**재현(보드3).** BT 브리지를 켠 채 WLBT 강제 패닉(`wifi-panicloop.sh 1`)을 일으켰다.
+- Wi-Fi가 40초 안에 돌아오지 않았고 `/proc/driver/mxman_ctrl0`도 사라졌다.
+- 로그:
+  1. `scsc_mx_service_open: error: refused due to previous f/w failure`가 나왔다.
+  2. `slsi_chip_recovery: fail at line:7644` WARNING이 났다.
+  3. 그 뒤 `slsi_net_open: Fail: called when MLME in blocked state`가 나서 wlan0을 다시 올릴 수 없었다.
+- `rmmod scsc_wlan; modprobe scsc_wlan`을 하면 커널 패닉이 난다(`mxman_wifi_kobject_ref_get` → `kobject_uevent_env` NULL). 그러니 재부팅 말고는 복구 방법이 없다.
+
+**원인(소스).**
+- `mxman_failure_work`는 서비스 시작 금지(`NOT_ALLOWED_START`)를 건 뒤 `scsc_mx_module_reset()`으로 모든 클라이언트를 remove/probe한다. 금지를 푸는 것(`ALLOWED_START_STOP`)은 그 뒤다.
+- WLAN probe가 넣은 복구 작업 `slsi_chip_recovery`는 다른 작업 큐에서 돈다. BT 서비스가 열려 있으면 BT remove가 사용자 공간이 장치를 닫을 때까지 기다리느라 순서가 밀린다. 그래서 복구 작업이 금지가 풀리기 전에 서비스를 열고 거부된다. 로그에서도 거부 바로 다음 줄이 `error:0`이었다.
+- 복구 작업은 다시 시도하지 않는다.
+
+**수정.**
+- `modules/scsc-wlan-recovery/`(`scsc-wlan-recovery.patch`, `build-module.sh`)는 `slsi_chip_recovery`가 서비스 열기에 실패하면 100 ms 간격으로 최대 50번 다시 연다.
+- `slsi_sm_wlan_service_open`은 거부를 `-EINVAL`로 바꿔 돌려준다. 그래서 처음에 `-EILSEQ`만 보던 판은 효과가 없었다. 이것은 실패한 실험이다. 고친 판은 오류면 재시도한다. 실패한 열기는 상태를 PROBED로 되돌리므로 다시 열 수 있다.
+- 빌드는 외부 모듈이다(디렉터리를 복사하고, include 경로를 절대 경로로, `scsc_wifilogger`는 제외). 패치 없이 같은 방식으로 빌드한 모듈은 트리 빌드와 함수 목록·주소가 같았다(LLVM 해시 접미사만 다름).
+
+**확인(보드3, 고친 판 `ac30b0a4`).**
+- BT를 켠 채 강제 패닉: 거부 1번, "retry 1"에서 성공했다. Wi-Fi는 8,094 ms 뒤 돌아왔고, WARNING 0, ping 정상이었다. 브리지는 EIO로 끝난다(서비스는 `Restart=on-failure`). 다시 띄우면 hci0 UP, 스캔 17대였다.
+- BT를 끈 채 강제 패닉: 8,139 ms 뒤 돌아왔고 WARNING 0이었다.
+
+**bt 기능에 넣은 것.**
+- `bt` 설치가 고친 `scsc_wlan.ko`를 `extra/`에 넣는다.
+- 실행 중인 시스템에서 다시 올리면 패닉이 나므로, 다음 부팅부터 쓰인다.
+- `e850-bt.service`의 `bt-check.sh`는 `extra/scsc_wlan.ko`가 이번 부팅 **전에** 설치된 경우에만 BT를 켠다. `/sys/module/scsc_wlan/srcversion`이 이 커널에는 없어서 이 방법으로 판정한다.
+
+### 11.79 유선랜(LAN9514)·USB 호스트·MFC (2026-11-21)
+
+**유선랜.**
+- `modules/smsc95xx`(커널 소스의 `drivers/net/usb/smsc95xx.c`를 외부 모듈로 빌드, usbnet·MII는 커널에 내장)을 만들었다.
+- LAN9514는 USB 허브 뒤에 있어서 USB 호스트 모드일 때만 보인다.
+- EEPROM이 없어 부팅마다 MAC가 무작위였다. `10-e850-eth.link`(Driver=smsc95xx, Name=eth0, MACAddressPolicy=persistent)로 고정했다.
+- `30-e850-eth.network`는 DHCP이고, RouteMetric 100으로 Wi-Fi(1024)보다 우선하며, RequiredForOnline=no다.
+- 보드4에서 `ID_NET_LINK_FILE=/etc/systemd/network/10-e850-eth.link`와 `extra/smsc95xx.ko`가 쓰이는 것을 확인했다. **케이블이 없어 링크와 DHCP는 확인하지 못했다**(carrier 0).
+
+**USB 호스트(`usbhost`).**
+- `e850-scope`가 하던 일을 따로 떼었다: `e850-hubpwr`, `gpiohold` gpa3-5, OTG `b_sess`/`id`=0.
+- 명령은 `e850-usbhost on|off`이고, 유닛 `e850-usbhost.service`는 부팅 때 켜지 않는다. 켜면 micro-USB ACM/ECM이 없어지기 때문이다.
+- `e850-scope`가 돌고 있으면 그쪽에 맡기고 아무것도 하지 않는다.
+- 보드4: 허브 0424:9514, 랜 0424:ec00, 현미경 04b4:00c3이 보였다.
+
+**MFC(`video`).**
+- `mfc_fw.bin`과 `e850-mfc.service`(`modprobe exynos_mfc`)를 넣었다.
+- 보드3·4에서 `/dev/video6` s5p-mfc-dec, `/dev/video7` s5p-mfc-enc(8·9는 secure)이 생겼다.
+- 펌웨어는 처음 열 때 올라간다. **디코딩 시험은 아직 하지 않았다.**

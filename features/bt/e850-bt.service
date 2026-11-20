@@ -1,0 +1,17 @@
+# e850-feature bt: SCSC Bluetooth -> BlueZ hci0 (e850-btbridge.py). Restarts after a WLBT firmware recovery.
+[Unit]
+Description=E850 Bluetooth (scsc_bt to BlueZ via vhci)
+After=e850-wifi.service
+Before=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+ExecCondition=/bin/sh @DEST@/bt/bt-check.sh
+ExecStartPre=/sbin/modprobe hci_vhci
+ExecStartPre=/sbin/modprobe scsc_bt
+ExecStart=/usr/bin/python3 @DEST@/bt/e850-btbridge.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
