@@ -1,0 +1,15 @@
+mfc_open: fail with -ENODEV when the node has no device yet (docs 11.80)
+
+__mfc_video_device_register() registers the node before video_set_drvdata(), and udev's v4l_id opens
+it at once. mfc_open() then took the "no mfc device" exit with ret still 0, so the open succeeded
+without a context and the close ran mfc_release() on a NULL context: kernel panic during boot.
+--- a/mfc.c
++++ b/mfc.c
+@@ -372,6 +372,7 @@ static int mfc_open(struct file *file)
+ 
+ 	if (!dev) {
+ 		mfc_pr_err("no mfc device to run\n");
++		ret = -ENODEV;
+ 		goto err_no_device;
+ 	}
+ 

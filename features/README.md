@@ -7,7 +7,7 @@ E850-96 보드(보드1~4 어느 것이든)에 기본 이미지에 없는 기능�
 | `usbhost` | USB-A 호스트 모드(키보드, 마우스, LAN9514). `e850-usbhost on\|off` | | 켜지 않음. 켜면 micro-USB ACM/ECM이 없어진다 |
 | `ethernet` | LAN9514 유선랜(`smsc95xx.ko`), 이름 `eth0`, MAC는 machine-id로 고정, DHCP | usbhost | USB 호스트가 켜지면 자동 |
 | `audio` | ABOX DSP + AUD3004X 코덱 사운드 카드, 3.5 mm 헤드폰 출력, ALSA 기본 장치(plug → 48 kHz, 한 번에 한 프로그램) | | `e850-audio.service` |
-| `video` | MFC 하드웨어 코덱(V4L2 `/dev/video6` 디코더, `/dev/video7` 인코더) | | `e850-mfc.service` |
+| `video` | MFC 하드웨어 코덱(V4L2 `/dev/video6` 디코더, `/dev/video7` 인코더). 부팅 경합을 고친 `exynos_mfc`(다음 부팅부터) | | `e850-mfc.service` |
 | `bt` | Bluetooth: `scsc_bt` → `e850-btbridge.py` → `/dev/vhci` → BlueZ `hci0` | Wi-Fi(e850-wifi) | `e850-bt.service` |
 | `desktop` | X(fbdev) + Openbox + 터미널 + Firefox + mpv, HDMI tty7. `e850-desktop start\|stop` | usbhost | 켜지 않음(무겁다) |
 
@@ -44,7 +44,7 @@ e850-usbhost on              # 키보드/마우스/유선랜 (재부팅하면 �
 | `*/e850-*.service` | `/etc/systemd/system/` |
 | 설치 기록 | `/var/lib/e850-features/<기능>` (번들 버전) |
 
-- **커널 모듈 소스**는 `modules/<이름>/`(`build-module.sh`)에 있고 `bundle.sh`가 빌드한다. 지금은 `smsc95xx`, `exynos3830-sound`(카드 등록 순서 패치), `scsc-wlan-recovery`(BT를 켠 채 Wi-Fi 복구가 실패하던 문제 패치, `bt`가 넣는다), `e850-hubpwr`.
+- **커널 모듈 소스**는 `modules/<이름>/`(`build-module.sh`)에 있고 `bundle.sh`가 빌드한다. 지금은 `smsc95xx`, `exynos3830-sound`(카드 등록 순서 패치), `scsc-wlan-recovery`(BT를 켠 채 Wi-Fi 복구가 실패하던 문제 패치, `bt`가 넣는다), `exynos-mfc`(udev가 노드를 바로 열면 부팅 중 패닉하던 경합 패치, `video`가 넣는다, 11.80), `e850-hubpwr`.
 - **펌웨어**(Samsung 바이너리)는 git에 넣지 않는다. `host/fetch-fw.py`가 Linaro Android 13 E850-96 저장소의 고정 커밋에서 받고, `host/fw.sha256`으로 확인한다.
 - 모듈은 커널 릴리스(`KVER`)가 보드의 `uname -r`과 같을 때만 설치한다.
 

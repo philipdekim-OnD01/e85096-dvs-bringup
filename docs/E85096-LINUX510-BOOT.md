@@ -4737,8 +4737,99 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 
 **실패한 시도.** 보드3을 굽지 않고 RAM으로 띄우려고 `fastboot boot`를 했다. LK는 `fb: boot`를 찍고 멈췄다(`getvar`, `reboot`에도 응답 없음). 7.3절에 이미 "동작하지 않는다"고 적혀 있던 것을 놓쳤다. 보드3은 전원을 다시 넣어야 한다.
 
-**아직 하지 못한 것.**
-- boot-nocpu로 부팅한 확인. 보드3은 2026-11-21 10:35에도 LK가 응답하지 않았다(`fastboot devices`에는 보이지만 `getvar`가 8초 안에 돌아오지 않음).
+**강의 자료.** `docs/FEATURES-LECTURE-20261121.html`(27장, 쪽마다 용어 주석, X 측정은 "미확인")과 PDF를 2026-11-21 10:38:23에 메일로 보냈다(Mail.app 보낸편지함에서 첨부 2개 확인). 커밋 1acfe6a, `features-20261121` 브랜치 push.
+
+**아직 하지 못한 것(10:40 기준, 11.81에서 이어짐).**
+- boot-nocpu로 부팅한 확인 → 11.81에서 확인.
 - 보드에서 drop-in만 있을 때의 확인(컨테이너에서는 위처럼 확인).
-- X 화면, Firefox, YouTube 측정.
+- X 화면, Firefox, YouTube 측정 → 11.81.
 - 보드4 복구.
+
+### 11.81 보드3에서 확인: boot-nocpu, MFC 부팅 경합, desktop 패키지 누락, headless Firefox (2026-11-21 19:03~)
+
+**boot-nocpu 굽기.**
+- 19:02쯤 보드3 전원이 다시 들어왔다. LK가 `Abnormal RST_STAT: 0x10000000`으로 fastboot에 들어갔고, 감시 스크립트가 19:03:02에 boot-nocpu를 구웠다.
+
+**관찰 1: 첫 부팅에서 다른 패닉(MFC).**
+- 23.46 s에 커널 패닉이 났다. EMS가 아니었다.
+- 순서:
+  1. `exynos_mfc`가 `/dev/video6`을 등록했다.
+  2. 3 ms 뒤 udev의 `v4l_id`가 그 노드를 열었다.
+  3. `mfc_open:374: no mfc device to run`이 찍혔다.
+  4. 닫을 때 `mfc_release+0x2c`에서 `fffffffffffff1b0`을 읽어 Oops가 났다.
+
+**원인(소스, `drivers/media/platform/exynos/mfc/mfc.c`).**
+- `__mfc_video_device_register()`가 `video_register_device()`를 먼저 부르고 `video_set_drvdata()`를 나중에 부른다(1075, 1083행). 그 사이에 열면 `dev`가 NULL이다.
+- `mfc_open()`은 `ret = 0`으로 시작한다. `!dev`이면 `err_no_device`로 가서 0을 돌려준다. 그래서 열기는 성공하는데 `file->private_data`가 비어 있다.
+- 닫을 때 `mfc_release()`가 `fh_to_mfc_ctx(NULL)`을 쓴다.
+
+**수정.**
+- `modules/exynos-mfc`(패치 한 줄: `!dev`이면 `ret = -ENODEV`)로 고쳤다. 열기가 실패하면 VFS는 release를 부르지 않는다.
+- `features/video`가 `extra/exynos_mfc.ko`로 넣는다. 다음 부팅부터 쓰인다.
+
+**관찰 2: eMMC.**
+- 패닉 뒤 자동 재부팅에서 `mmc0: cqhci: ... cmd error -110`이 났다. 파티션 표를 읽지 못해 initramfs 셸에 머물렀다(11.26과 같은 현상).
+- ACM에서 `reboot -f`를 하자 정상 부팅됐다.
+
+**확인(boot-nocpu, 측정).**
+- `/proc/cmdline`에 `cgroup_disable=pressure`(vendor 기본)와 `cgroup_disable=cpu`가 둘 다 있다.
+- `cgroup.controllers`는 `cpuset io memory`다(cpu 없음).
+- 로그인 세션은 tty1과 ttyGS0의 root 둘이다. `user@0.service`는 active이고, `DelegateControllers=cpu memory pids`를 요구하지만 실제 `subtree_control`은 `memory`뿐이다.
+- 부팅 2분 동안 패닉 0회(전에는 35초마다 났다). e850-mfc·e850-bt·e850-wifi는 active, Wi-Fi 복구 0회.
+- 데스크톱 세션(philip, `PAMName=login`)이 생긴 뒤에도 패닉은 없었다.
+
+**확인(고친 MFC 모듈).**
+- 시험 1(실행 중에 다시 올림):
+  - 고친 모듈을 `extra/`에 넣고, `rmmod` 뒤 `modprobe`로 다시 올렸다.
+  - 442.316 s와 442.320 s에 udev `v4l_id`가 경합 구간에 두 번 들어갔다("no mfc device to run"). 둘 다 패닉 없이 실패로 끝났다.
+- 시험 2(새 부팅): 고친 모듈로 부팅한 19:17 부팅에서도 23.86 s에 같은 구간에 들어갔고, 패닉 없이 지나갔다.
+- 정리: 이 경합은 이번 부팅 세 번 중 두 번 났다. video 기능을 넣은 보드(보드4 포함)는 vendor 모듈로 부팅할 때마다 위험하다.
+- 새 부팅에서 `modinfo -n`은 `extra/exynos_mfc.ko`이고, `/dev/video6`(디코더)과 `/dev/video7`(인코더) 열기에 성공했다.
+
+**실패한 시험: MFC를 내리기.**
+- `/dev/video6~11`을 계속 여는 프로그램을 돌리면서 `rmmod exynos_mfc`를 했다. 그러자 `chrdev_open` → `try_module_get`에서 해제된 모듈 주소를 읽어 패닉했다(497.9 s).
+- 내린 뒤 다시 올린 모듈에서는 `Driver 'mfc-core' is already registered`가 나고 `There is no main core`라서 열기가 EINVAL로 실패한다.
+- 결론: `exynos_mfc`는 내리지 않는다. 바꾼 모듈은 재부팅해서 쓴다.
+
+**MFC로 디코딩: ffmpeg로는 안 된다(관찰과 소스).**
+- 시험용으로 보드3에만 ffmpeg 5.1.9를 깔았다. video 기능에는 넣지 않았다. `h264_v4l2m2m` 등 디코더가 보인다.
+- ffmpeg가 장치를 고르는 과정:
+  - ffmpeg는 `/dev`를 읽는 순서대로 장치를 고른다. 처음에는 보안 디코더 `/dev/video8`(`s5p-mfc-dec-secure`)을 골라 실패했다.
+  - 보안 노드를 0600으로 바꾸자(임시 chmod) `/dev/video6`을 골랐다.
+- 그래도 `VIDIOC_REQBUFS`가 EINVAL이었다.
+  - vendor 드라이버는 큐를 `VB2_USERPTR | VB2_DMABUF`로만 만든다.
+  - `mfc_dec_v4l2.c:820`은 `V4L2_MEMORY_MMAP`을 "Not supported memory type"으로 거부한다.
+  - ffmpeg의 v4l2m2m은 MMAP 버퍼만 쓴다.
+- MFC를 쓰려면 Android처럼 DMABUF를 넘기는 클라이언트가 필요하다. 만들지 않았다.
+- CPU 디코딩(ffmpeg, libx264 ultrafast로 만든 testsrc2 10 s, 30 fps, 8코어):
+
+| 해상도 | 실제 시간 | CPU 시간(user + sys) |
+|---|---|---|
+| 720p | 0.41 s | 2.25 s |
+| 1080p | 0.76 s | 4.70 s |
+
+**desktop 기능의 패키지 누락(관찰).**
+- `e850-desktop start`가 `ExecStartPre=/bin/chvt 7`에서 status 203/EXEC로 실패했다. `chvt`는 `kbd` 패키지에 있는데 설치되지 않았다. 09:05에는 이 줄에 닿기 전에 EMS 패닉이 나서 드러나지 않았다.
+- `xserver-xorg-legacy`도 없었다. 그래서 `/etc/X11/Xwrapper.config`(`needs_root_rights=yes`)를 읽는 setuid `Xorg.wrap`이 없다.
+- 두 패키지를 `PKGS`에 넣었다. Debian 12 컨테이너에서 `/bin/chvt`와 `-rwsr-sr-x /usr/lib/xorg/Xorg.wrap`이 생기는 것을 확인했다.
+- 보드3에 깔려면 root가 필요하다. 그런데 usbhost가 켜져 ACM(root 셸)이 끊긴 상태라 깔지 못했다.
+  - 사람이 없으면 root로 돌아갈 길이 없다(ssh root 막힘, philip sudo는 비밀번호).
+  - UART로 BREAK와 sysrq를 보냈지만 반응이 없었다. ttySAC0를 여는 프로세스(getty)가 없으면 커널이 수신을 켜지 않는 것으로 본다(가설).
+- 교훈: usbhost를 켜는 시험은 root를 다시 얻을 길(USB를 빼도 되는 보드, 또는 sudo)이 있을 때 한다.
+
+**headless Firefox로 YouTube(측정).**
+- Firefox ESR 153.7, `--headless --marionette`, philip, X 없음. `/var/tmp/ff-yt.py`, Big Buck Bunny(`aqz-KE-bpKQ`), 음소거.
+- CPU 사용률은 `/proc/stat`의 8코어 전체 기준이다.
+
+| 화질 | 재생 | 프레임 | 드롭 | 보인 fps | CPU |
+|---|---|---|---|---|---|
+| 480p(854×480) | 30 s에 30.9 s | 914 | 0 | 30.5 | 35% |
+| 720p60(1280×720) | 30 s에 30.9 s | 1845 | 9 (0.5%) | 61.2 | 46% |
+| 1080p60(1920×1080) | 30 s에 31.5 s | 1811 | 239 (13%) | 52.4 | 70% |
+
+- 끝난 뒤 온도(`thermal_zone0`)는 480p 56℃, 720p 67℃, 1080p 82℃였다.
+- 판단: 720p60까지는 CPU만으로 제 속도다. 1080p60은 프레임이 빠진다.
+
+- 화면에 내보내는 비용(Xorg fbdev ShadowFB 복사)은 빠져 있다.
+- **관찰: 두 번째 재생에서 멈춤.** Firefox 하나에서 YouTube 재생을 두 번째로 시작하면, 두 번 다 자식 프로세스 하나가 SIGSEGV로 죽었다. 그리고 페이지 이동이 300 s 시간 초과로 끝났다(720p, 1080p 첫 시도). 화질마다 Firefox를 새로 띄워 쟀다. headless 모드에서만 나는지는 모른다.
+

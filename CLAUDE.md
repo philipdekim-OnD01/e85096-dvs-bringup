@@ -21,7 +21,7 @@ WinLink E850-96(Samsung Exynos850 = s5e3830, Cortex-A55 8코어)에 vendor Linux
 | 부트 이미지 | `tools/linux510/build-bootimg.sh`: boot.img v2 = Image + initramfs(1단계 모듈, busybox init) + DTB(SoC dtb + ERD3830 overlay, CPU `reg`를 `cluster<<8 \| core`로 고침) |
 | 명령줄 핵심 | `cpuidle.off=1`(C2에 들어가면 코어가 깨지 않음, 11.12), `panic=0`, `clocksource=arch_sys_counter`, `loglevel=8 ignore_loglevel`, `vt.default_*`(흰 글씨), `root=PARTLABEL=userdata` |
 | rootfs | Debian 12 arm64, `userdata`(mmcblk0p24) ext4. `tools/linux510/build-rootfs.sh` |
-| 지금 구워진 boot | `~/e850-logs/boot-dvs3/boot.img` = 저장소 빌드, CN4 카메라 DT를 S5KRC1S로, mode0 8192×127 + mode1 8192×32(11.18/11.26). boot-dvs2에 조용한 워치독, gadget을 기다리는 `e850-vbus`를 넣은 판(2026-11-07, 11.32). 그 전 판 `boot-dvs2`, `boot-dvs`. 알려진 정상 이미지는 `~/e850-logs/boot-nokvm/boot.img`(OV5647 DT, 1시간 부하 시험 통과) |
+| 지금 구워진 boot | 보드3은 `~/e850-logs/boot-nocpu/boot.img`(= boot-dvs3 + `cgroup_disable=cpu`, 2026-11-21, 11.80~11.81). 그 밖의 보드는 `~/e850-logs/boot-dvs3/boot.img` = 저장소 빌드, CN4 카메라 DT를 S5KRC1S로, mode0 8192×127 + mode1 8192×32(11.18/11.26). boot-dvs2에 조용한 워치독, gadget을 기다리는 `e850-vbus`를 넣은 판(2026-11-07, 11.32). 그 전 판 `boot-dvs2`, `boot-dvs`. 알려진 정상 이미지는 `~/e850-logs/boot-nokvm/boot.img`(OV5647 DT, 1시간 부하 시험 통과) |
 | 자동 적재 모듈 | `e850-cpuhp`(hotplug, `/etc/modules-load.d`), HDMI 콘솔 색은 dpu.ko 패치(`modules/e850-hdmi/apply.sh`, 11.16). `e850-fbpal`은 더 이상 올리지 않는다 |
 | 수동 적재 | 카메라 `modprobe fimc-is && modprobe is-cis-ov5647`. `fimc_is`는 내리면 다시 올릴 수 없어 재부팅해야 한다 |
 | 골라서 넣는 기능 | `features/`(README): 보드에서 `e850-feature install ethernet audio video bt usbhost desktop`. Mac에서 `sh features/host/bundle.sh` → `sh features/host/deploy.sh philip@<IP> 기능…`. 모듈은 `/lib/modules/$(uname -r)/extra/`(depmod `search extra built-in`), 펌웨어는 Linaro 고정 커밋에서 받아 git에 넣지 않음(11.76~11.79) |
@@ -97,6 +97,11 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
   - 기본 rootfs에는 이 패키지가 없다. desktop 패키지(`dbus-user-session`)가 들인다.
   - 막는 법: 부트 명령줄의 `cgroup_disable=cpu`(`build-bootimg.sh`, `~/e850-logs/boot-nocpu`), 또는 `/etc/systemd/system/user@.service.d/`에 `Delegate=pids memory`(desktop 기능이 넣음).
   - 패키지를 apt로 들이기 전에 `apt-get -s install …`로 `libpam-systemd`가 끼는지 본다.
+- **MFC(`exynos_mfc`, 11.81):**
+  - 내리지 않는다. 열려 있는 동안 `rmmod`하면 패닉한다. 내린 뒤 다시 올리면 코어가 붙지 않는다.
+  - vendor 판은 udev `v4l_id`와의 부팅 경합으로 패닉한다. `features/video`가 고친 판을 넣는다.
+  - ffmpeg `*_v4l2m2m`은 MMAP 버퍼만 쓰는데, 이 드라이버는 USERPTR/DMABUF만 받는다. 그래서 디코딩이 되지 않는다.
+- **usbhost를 켜면 ACM root 셸이 끊긴다.** ssh의 philip은 sudo 비밀번호가 필요하고, UART는 입력을 받지 않는다(sysrq도 안 됨, 11.81). root가 다시 필요할 일은 usbhost를 켜기 전에 끝낸다.
 - **`fastboot boot`(RAM 부팅):** 이 LK에서는 `fb: boot`를 찍고 멈춘다(7.3, 11.80). 전원을 다시 넣어야 하니 쓰지 않는다.
 - **USB 호스트:** 평소에는 꺼져 있어서 키보드·마우스가 없다. 허브 전원(LDO24)을 `e850-hubpwr`로 켜고 OTG `id`를 0으로 바꾸면 USB-A가 동작한다. 이때 micro-USB 케이블은 빼야 한다(11.64). 데스크톱 환경은 보류했다(GPU 사용자 공간 드라이버 없음).
 - **포트:** nginx가 80번 포트를 쓴다. Apache를 올리기 전에 사용자와 포트를 정한다.

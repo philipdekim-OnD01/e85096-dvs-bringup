@@ -5,7 +5,8 @@
 # No GPU: the Mali userspace is Android-only, so X draws with the CPU on /dev/fb0 (docs 11.80).
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd); . "$ROOT/common.sh"; H=$DEST/desktop
-PKGS="xserver-xorg-core xserver-xorg-video-fbdev xserver-xorg-input-libinput xinit xauth x11-xserver-utils
+# kbd: chvt in e850-desktop.service; xserver-xorg-legacy: the setuid Xorg.wrap that reads Xwrapper.config (11.80)
+PKGS="xserver-xorg-core xserver-xorg-legacy xserver-xorg-video-fbdev xserver-xorg-input-libinput xinit xauth kbd x11-xserver-utils
       openbox lxterminal fonts-nanum firefox-esr mpv"
 case $1 in
 install)
