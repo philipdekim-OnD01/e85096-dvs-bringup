@@ -13,7 +13,10 @@ all=$(cd "$SRC" && for d in */feature.sh; do printf '%s ' "${d%/feature.sh}"; do
 
 deploy_self() {          # the installed copy is what units and later status/remove use
     [ "$SRC" = "$DEST" ] && return
-    rm -rf "$DEST.new"; cp -a "$SRC" "$DEST.new"; rm -rf "$DEST"; mv "$DEST.new" "$DEST"
+    rm -rf "$DEST.new"; cp -a "$SRC" "$DEST.new"
+    chown -R root:root "$DEST.new"   # units run these as root: the unpacking user must not own them (11.81)
+    chmod 755 "$DEST.new"/*/*.sh "$DEST.new"/e850-feature
+    rm -rf "$DEST"; mv "$DEST.new" "$DEST"
     ln -sf "$DEST/e850-feature" /usr/local/bin/e850-feature
     SRC=$DEST ROOT=$DEST
 }

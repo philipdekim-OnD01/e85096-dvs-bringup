@@ -4833,3 +4833,36 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - 화면에 내보내는 비용(Xorg fbdev ShadowFB 복사)은 빠져 있다.
 - **관찰: 두 번째 재생에서 멈춤.** Firefox 하나에서 YouTube 재생을 두 번째로 시작하면, 두 번 다 자식 프로세스 하나가 SIGSEGV로 죽었다. 그리고 페이지 이동이 300 s 시간 초과로 끝났다(720p, 1080p 첫 시도). 화질마다 Firefox를 새로 띄워 쟀다. headless 모드에서만 나는지는 모른다.
 
+
+**강의 자료 2판.** 28장(이 절의 MFC 경합 쪽 추가, X·MFC·정리 쪽 갱신)과 PDF를 2026-11-21 19:45:59에 메일로 보냈다(보낸편지함에서 첨부 2개 확인). 커밋 e3bc16e.
+- 메일에 "micro-USB를 뺐다 꽂거나"라고 썼는데, usbhost 상태는 소프트웨어 설정이라 케이블로는 풀리지 않는다고 본다. 전원을 다시 넣어야 한다.
+
+**X 화면 확인(21:10~, 사용자가 보드3 터미널에서 sudo).**
+- 사용자가 ssh(philip)로 `sudo apt-get install -y --no-install-recommends kbd xserver-xorg-legacy`를 했다. `Xorg.wrap`이 `-rwsr-sr-x`로 생겼다.
+- `e850-desktop start`는 `/usr/local/bin/e850-desktop: Permission denied`로 실패했다.
+  - 원인: 저장소의 `desktop.sh`, `session.sh`, `usbhost.sh`, `audio.sh`가 실행 권한(git mode 100644) 없이 들어가 있었다. 셋은 심볼릭 링크(`e850-desktop`, `e850-usbhost`, `e850-audio`)로, `session.sh`는 xinit이 직접 실행한다.
+  - `/opt/e850-features`의 소유자도 root가 아니었다(묶음을 푼 사용자, 보드3은 Mac의 uid 502). root로 도는 서비스가 일반 사용자가 고칠 수 있는 스크립트를 실행하는 셈이다.
+- 수정(저장소):
+  - 네 파일을 755로 바꿨다.
+  - `e850-feature`의 `deploy_self`가 복사한 뒤 `chown -R root:root`, `chmod 755 */*.sh`를 한다.
+- 보드3에는 사용자가 같은 것을 손으로 했다(`chown -R root:root /opt/e850-features && chmod 755 /opt/e850-features/*/*.sh`). 그다음 `sudo systemctl start e850-desktop`으로 켰다.
+- 결과(관찰): Xorg가 root로(`Xorg :0 vt7 -keeptty -nolisten tcp`), Openbox, LXTerminal이 떴다. 패닉 0회.
+  - `fbshot`으로 HDMI 프레임버퍼에 바탕(#24323f)과 터미널 창이 그려진 것을 확인했다.
+  - Xorg 로그의 (WW)는 없는 글꼴 디렉터리, fbdev 옛 탐색, VGA arbiter뿐이다. (EE)는 없다.
+- X 안의 Firefox(창 모드, 플레이어는 페이지 안 기본 크기)로 YouTube를 쟀다. 화질마다 Firefox를 새로 띄웠다.
+
+| 화질 | 프레임 | 드롭 | 보인 fps | CPU | headless 때 |
+|---|---|---|---|---|---|
+| 480p30 | 908 | 11 (1%) | 29.9 | 31% | 드롭 0, 35% |
+| 720p60 | 1828 | 150 (8%) | 55.9 | 55% | 드롭 0.5%, 46% |
+
+- 720p 재생 중 `top`: RDD(디코더) 프로세스 156%, Firefox 본체 111%, Xorg 22%, 페이지 프로세스 22%.
+- 판단:
+  - 화면까지 그리면 480p는 제 속도다.
+  - 720p60은 8%가 빠진다. GPU 합성이 없어 프레임 복사가 모두 CPU 몫이다.
+  - 1080p는 X 안에서 재지 않았다(headless에서도 13% 드롭).
+- X는 켜 둔 상태로 두었다(usbhost가 켜져 ACM은 없다). 끄려면 보드에서 `e850-desktop stop`(sudo).
+
+**남은 것.**
+- 보드4: 케이블을 옮겨 boot-nocpu를 굽고, `last_kmsg`로 원인을 확인한다. 그다음 묶음(고친 MFC와 패키지 목록)을 다시 배포한다.
+- 보드3의 ffmpeg는 시험용으로 깐 것이다.
