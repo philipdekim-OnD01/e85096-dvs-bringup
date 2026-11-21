@@ -4866,3 +4866,98 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 **남은 것.**
 - 보드4: 케이블을 옮겨 boot-nocpu를 굽고, `last_kmsg`로 원인을 확인한다. 그다음 묶음(고친 MFC와 패키지 목록)을 다시 배포한다.
 - 보드3의 ffmpeg는 시험용으로 깐 것이다.
+
+### 11.82 GPU: vendor kbase 위에서 오픈소스 Mesa(panfrost)로 그리기 (2026-11-22, 보드3)
+
+사용자 지시(2026-11-22 05시): "보드4는 저녁 6시에 정리할 테니 3에 집중해, GPU를 우선 살려".
+
+**출발점(관찰).**
+- 커널 드라이버는 이미 있다. 보드3에서 `mali_kbase`가 올라와 있고 `/dev/mali0`(crw-rw-rw-), `gpuinfo` = `Mali-G52 1 cores r0p0 0x7212`.
+  - `modinfo`: `r38p1-01eac0 (UK version 11.35)`. 소스는 `drivers/gpu/arm/b_r38p1`, uapi는 `include/uapi/gpu/arm/b_r38p1`.
+  - DVFS 표는 1001/865/754/598/433/377 MHz.
+- 없는 것은 glibc용 사용자 공간 GL 드라이버다. Mali 라이브러리는 Android(bionic)용뿐이다.
+- DT의 GPU 노드(`/sys/firmware/devicetree/base/mali@11500000`)에 `dma-coherent`가 없다. GPU와 CPU 캐시가 일관되지 않다.
+
+**방법: Mesa panfrost + kbase drm-shim.**
+- Icecream95의 `kbase-g52` 브랜치(gitlab.freedesktop.org/icecream95/mesa, 커밋 `87d63f238f`, 2022-06, Mesa 22.2-devel, MIT)를 쓴다.
+  - Mesa의 `drm-shim`(LD_PRELOAD)이 가짜 `/dev/dri/renderD128`을 만든다. panfrost ioctl을 kbase ioctl로 바꾼다.
+  - 커널은 바꾸지 않는다. root도 필요 없다.
+- 처음 찾은 panfork(gitlab.com/panfork/mesa)는 저장소가 비워져 있었다(README만 남음).
+- 브랜치가 쓰는 ioctl을 커널 uapi와 컴파일러로 대조했다(`tools/gpu/abi-check.c`).
+  - 대조한 것: VERSION_CHECK, SET_FLAGS, JOB_SUBMIT, GET_GPUPROPS, MEM_ALLOC, MEM_FREE, MEM_SYNC, atom/event 크기, 메모리 플래그. 모두 같았다.
+  - MEM_IMPORT만 다르다(shim 40바이트, 커널 24바이트). shim은 쓰지 않는다. dma-buf를 가져오려면 고쳐야 한다.
+- 빌드: Mac Docker의 arm64 Debian 12 이미지 `e850-mesa-build:1`.
+  - 옵션: gallium panfrost만, LLVM 없음, EGL/GLES2/GBM, x11 플랫폼.
+  - 결과는 `mesa-kbase.tgz` 5.5 MB다. 보드에서는 `~/gpu/`에 풀어 일반 사용자로 쓴다.
+
+**고친 것(시험 순서, 모두 `tools/gpu/mesa-kbase-g52-e850.patch`).**
+
+| # | 증상(관찰) | 원인 | 고침 |
+|---|---|---|---|
+| 1 | `eglInitialize` 실패. panfrost를 시도하지 않고 swrast를 찾음. `drmGetDevices2` = 0개, 직접 open은 됨(드라이버 panfrost 1.1) | 브랜치가 `HAS_XSTAT 1`을 고정했다. glibc 2.33부터 `stat`/`stat64`가 실제 심볼이다. Debian 12 libdrm은 `stat64@GLIBC_2.33`을 부르므로 가로채지 못했다 | glibc 버전으로 고른다(`drm_shim.c`) |
+| 2 | panfrost가 올라온 뒤 Segmentation fault. 앞에 `kinstr_prfcnt_setup: Invalid argument` | 개발용 성능 카운터 덤프가 설정 실패를 무시하고 `MAP_FAILED` 영역을 읽었다 | `PAN_KBASE_PERF=1`일 때만 쓴다(`perf.c`) |
+| 3 | 모든 atom이 실패. UART에 `DATA_INVALID_FAULT`, `TILE_RANGE_FAULT`, `Unhandled Page fault in AS0 at VA 0x0`, 그 뒤 `JOB_READ_FAULT` | 메모리를 `CACHED_CPU`로 잡았는데 GPU가 일관되지 않고 Mesa는 캐시를 비우지 않는다. GPU가 낡은 설명자를 읽은 것으로 판단한다 | `CACHED_CPU`·`COHERENT_LOCAL`을 뺀다(write-combine). 큰 이미지 BO만 6번에서 다시 캐시로 잡고 shim이 직접 캐시를 비운다 |
+| 4 | 오류 없이 끝나지만 도형이 지나간 타일이 0(투명 검정)이다 | 렌더 타깃이 `AFBC Tiled`였다. shim이 AFBC_FEATURES=0("지원")을 고정으로 돌려준다. 이 G52에서 AFBC 쓰기는 0이 된다(`PAN_MESA_DEBUG=noafbc`이면 그려짐) | 기본은 "AFBC 없음"(`PAN_KBASE_AFBC=1`이면 다시 켠다) |
+| 5 | 그리기마다 꼭짓점 위치가 바로 앞 그리기의 것이다(첫 그리기는 0이라 안 보임. 7번 삼각형 자리에 6번 사각형의 앞 세 꼭짓점이 그려짐) | IDVS(위치 셰이더+타일러를 한 작업으로) 때 타일러가 새 위치를 기다리지 않는다. 원인(r0p0 하드웨어인지 kbase 설정인지)은 모른다 | Bifrost(`gpu_id < 0x9000`)에서 IDVS를 끈다(`bifrost_compile.c`, `BIFROST_IDVS=1`이면 켬) |
+| 6 | X 창에 보이려고 매 프레임 `glReadPixels`를 하니 1280×720 한 장 읽기가 21 ms(`PAN_MESA_DEBUG=linear`), 113 ms(기본 tiled) | 3번 때문에 모든 메모리가 캐시 없음이다. 캐시 없는 메모리를 CPU가 읽으면 느리다 | 1~64 MB인 NOEXEC BO(이미지·버퍼)만 `CACHED_CPU`로 잡는다. 그 BO를 목록에 넣은 제출 전에 clean(`MEM_SYNC` to device), `WAIT_BO`에서 invalidate(to CPU)한다. Mesa는 GPU가 쓴 BO를 CPU가 만지기 전에 `WAIT_BO`를 부른다. `PAN_KBASE_UNCACHED=1`이면 끈다. `PAN_KBASE_STATS=1`이면 캐시 정리에 쓴 시간을 찍는다 |
+
+- 5번을 가리려고 먼저 해 본 실험(모두 결과 같음, 원인 아님):
+  - 타일러 힙을 미리 0/16/128 MB 잡아 둠
+  - `PAN_MESA_DEBUG=nocache`/`sync`/`dirty`
+  - 제출 전 `dsb sy`
+  - `CACHED_CPU`와 Mesa의 `pandecode_mem_sync`
+  - atom `core_req` = CS|T(6), CS|T|CF(14)
+  - 이 실험 스위치들은 패치에서 뺐다.
+- `PAN_MESA_DEBUG=trace`의 설명자 덤프(pandecode)로 색 마스크 15, `AFBC Tiled`, 작업 종류 `Indexed Vertex`(IDVS), 위치 버퍼 재사용(`0x7fa2a8e000`)을 확인했다.
+- 6번에서 거친 것:
+  - 처음에는 1 MB 이상이면 모두 캐시로 잡았다. 읽기는 21 → 1.5 ms로 줄었지만 그리기가 5 → 28 ms로 늘었다. `PAN_KBASE_STATS=1`로 재니 제출마다 128 MB BO를 clean하고 있었다(1080p 시험 100장에 29 GB, 2.4초).
+    - 그 BO는 타일러 힙이다. GPU만 쓰는데 `PANFROST_BO_HEAP` 없이 오고 CPU에도 매핑된다. 이 브랜치의 `pan_bo.c`가 BO 플래그를 `PAN_BO_EXECUTE`만 남기고 지우기 때문이다(`INVISIBLE`, `GROWABLE`도 사라짐).
+    - 그래서 64 MB 이하로 제한했다. Mesa 쪽 플래그 처리는 바꾸지 않았다(왜 지우는지 모름).
+  - shim에서 BO를 찾은 뒤 `drm_shim_bo_put`으로 놓았더니 double free·힙 손상이 났다. 이 함수는 참조 수가 0이 아닐 때 해제한다(뒤집힌 조건). 참조 수만 줄인다(`p_atomic_dec`).
+
+**결과(보드3, 관찰).**
+- `tools/gpu/run-test.sh`(일반 사용자, 화면 없음, EGL surfaceless, GLES2):
+  - `GL_RENDERER Mali-G52 (Panfrost)`, `OpenGL ES 3.1 Mesa 22.2.0-devel`
+  - 그리기 7가지(삼각형/사각형 × 고정색/varying, 반복)를 읽어 비교하니 모두 맞다(PASS)
+  - 1080p 전체 화면 셰이더(픽셀마다 sin·cos)가 300장에 0.92초, **322~334 fps(668~693 Mpix/s)**. 마지막 화면 가운데 값 122,128,128은 계산값 120.5,128,128과 fp16 오차 안이다.
+  - 6번(캐시 BO)을 넣은 뒤 기본값은 **103 fps**다. 한 장마다 두 번 제출(정점·타일러, 프래그먼트)하고, 그때마다 1080p 렌더 타깃 8.4 MB와 1 MB 버퍼를 clean한다. 300장에 5.5 GB, 1.29초(장당 4.3 ms)가 든다. `PAN_KBASE_UNCACHED=1`이면 322 fps로 돌아간다.
+  - 캐시 판에서도 tiled·linear 모두 PASS.
+  - GPU `time_in_state`에 1001 MHz가 잡혔다(DVFS 동작).
+- 시험 중 UART에 새 GPU 오류는 없다(3번을 고친 뒤). 보드는 멈추지 않았다.
+- 저장소의 `tools/gpu/build.sh`로 빈 디렉터리에서 클론·패치·빌드한 판(캐시 BO 포함)도 보드3에서 PASS였다. 1080p 셰이더는 99 fps(`PAN_KBASE_UNCACHED=1`이면 321 fps), gles-x11 tiled는 42~43 fps였다.
+
+**HDMI에 GPU 화면 보이기(사용자가 고른 1번: 읽어서 X 창에 그리기, root 없음).**
+- 사용자가 고른 1번 방법은 GPU가 그린 것을 CPU로 읽어 X 창에 그리는 것이다. 2번(X·Firefox를 GPU로 가속, KMS + dma-buf + DRI3)은 미뤘다.
+- `tools/gpu/gles-x11.c`의 동작:
+  - 조명을 받고 띠 무늬가 돌아가는 토러스(삼각형 9216개)를 FBO(RGBA 텍스처 + DEPTH16)에 그린다.
+  - 매 프레임 `glReadPixels`로 `XImage` 버퍼에 바로 읽고 `XPutImage`로 창에 보낸다.
+  - 프래그먼트 셰이더가 BGRA로 쓰고 정점 셰이더가 y를 뒤집는다. 그래서 읽은 바이트를 그대로 X에 넘긴다.
+  - 초마다 fps와 그리기·읽기·보내기 시간을 찍는다. 창 제목에도 fps를 보인다. 사용법은 `gles-x11 [w h 초]`.
+- MIT-SHM은 쓰지 못한다. 이 커널에 SysV IPC가 없어 `shmget`이 실패하고 `XShmAttach`가 BadAccess를 낸다. 그래서 한 장(1280×720, 3.7 MB)마다 X 소켓으로 보낸다.
+- 보드3에서 1280×720으로 잰 값(X는 CPU로 그림). 단위는 ms, fps는 초마다 찍힌 값의 범위다.
+
+| 판 | fps | 그리기 | 읽기 | X로 보내기 |
+|---|---|---|---|---|
+| 캐시 없음, 기본(tiled) | 7.7 | 재지 않음 | 113 | 재지 않음 |
+| 캐시 없음, `PAN_MESA_DEBUG=linear` | 26~27 | 5 | 21 | 11 |
+| 1 MB 이상 모두 캐시(타일러 힙 포함), linear | 24~25 | 28~29 | 1.5 | 10~11 |
+| 1~64 MB 캐시, 기본(tiled) | 42~43 | 6.2~6.5 | 6.6~6.8 | 10.4~10.7 |
+| 1~64 MB 캐시, linear | 45~54 | 6.1~8.1 | 2.0~2.3 | 10.4~11.9 |
+
+- HDMI 화면 캡처(`/var/tmp/fbshot.py`, Mac `~/e850-gpu/shot2.png`)에서 X 창 안의 토러스가 색과 조명 모두 맞게 보였다. linear 판은 20초 동안 988장을 그렸다.
+- 지금 가장 큰 몫은 X로 보내기(10~12 ms)다.
+
+**보드에 바꾼 것.** `/home/philip/gpu/`(Mesa 판, 시험 프로그램, 스크립트)만 넣었다. 시스템 파일은 바꾸지 않았다. 지우면 원래대로 돌아간다.
+
+**진행 방식.** 처음에 Claude가 ssh로 시험을 돌리려던 명령이 Claude Code 자동 권한 검사에서 거부됐다("Undermining Oversight"). 그래서 몇 번은 사용자가 보드3에서 스크립트를 돌리고 출력을 붙여 주었다. 사용자가 "직접 해도 된다"고 한 뒤로는 Claude가 ssh로 돌렸다.
+
+**아직 안 되는 것(다음).**
+- 화면에 바로 그리지 못한다. X나 Firefox를 가속하려면 다음이 필요하다.
+  - DPU용 KMS 장치. 지금은 fbdev뿐이라 `/dev/dri`가 없다.
+  - shim의 dma-buf 가져오기·내보내기(MEM_IMPORT 구조체 수정)
+  - X의 DRI3
+- shim의 제출은 동기식이다(atom 하나를 넣고 끝날 때까지 기다림). 의존성, syncobj, 여러 컨텍스트 동시 사용은 아직 없다.
+- 캐시 BO에는 알려진 빈틈이 있다. fence를 기다린 뒤 동기화 없이 매핑해 읽으면 `WAIT_BO`를 거치지 않는다. 이때는 낡은 캐시 줄을 볼 수 있다. 그런 앱은 `PAN_KBASE_UNCACHED=1`로 돌리거나 syncobj 대기에서도 invalidate하게 고쳐야 한다.
+- shim은 kbase 메모리를 풀지 않는다(`driver_bo_free`가 없어 `MEM_FREE`를 부르지 않음). Mesa BO 캐시가 재사용하므로 gles-x11 988장은 문제없었다. 오래 돌거나 크기를 자주 바꾸는 앱에서 메모리가 느는지는 재지 않았다.
+- X로 보내기를 줄이려면 fb0에 바로 쓰거나(X 없이) 2번(KMS·DRI3)으로 가야 한다.
+- AFBC와 IDVS가 왜 안 되는지는 모른다. 이 보드의 Android 판 blob이 AFBC와 IDVS를 쓰는지 확인하지 않았다.

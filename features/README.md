@@ -61,4 +61,4 @@ e850-usbhost on              # 키보드/마우스/유선랜 (재부팅하면 �
 - **bt:** 칩 안의 BT는 Wi-Fi 펌웨어(WLBT)와 같이 돈다. Wi-Fi 펌웨어가 복구되면 브리지가 끝나고 systemd가 5초 뒤 다시 띄운다.
 - **bt와 Wi-Fi 복구:** 원래 `scsc_wlan`은 BT가 열려 있으면 펌웨어 복구 뒤 Wi-Fi를 되살리지 못한다(11.78). `bt` 설치가 고친 `scsc_wlan.ko`를 `extra/`에 넣지만, 다시 올리면 패닉이 나므로 **한 번 재부팅해야** 쓰인다. 그 전까지 `e850-bt.service`는 켜지지 않는다(`bt-check.sh`).
 - **dmix 없음:** 이 커널에는 SysV IPC가 없어 ALSA dmix가 안 된다. 44.1 kHz를 그대로 내보내면 약 15% 빨라서 `asound.conf`가 48 kHz로 바꾼다.
-- **desktop:** GPU 사용자 공간 드라이버가 없어(Mali 라이브러리는 Android용뿐) CPU로 그린다. 그래서 영상은 480p 정도가 현실적이다(11.80의 측정 참고).
+- **desktop:** X는 CPU로 그린다. GPU는 `tools/gpu/`(Mesa panfrost on kbase, 11.82)로 화면 밖 렌더링만 되고, X에 붙이려면 KMS 장치와 dma-buf 공유가 더 필요하다. 그래서 영상은 480p 정도가 현실적이다(11.80의 측정 참고).

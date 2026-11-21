@@ -1,0 +1,229 @@
+diff --git a/src/drm-shim/drm_shim.c b/src/drm-shim/drm_shim.c
+index e39e9e2..0ae9247 100644
+--- a/src/drm-shim/drm_shim.c
++++ b/src/drm-shim/drm_shim.c
+@@ -90,7 +90,8 @@ int __lxstat64 (int ver, const char *__filename, struct stat64 *__stat_buf);
+ int __fxstatat64 (int ver, int __fildes, const char *__filename,
+                   struct stat64 *__stat_buf, int __flag);
+ 
+-#define HAS_XSTAT 1
++/* glibc 2.33 made stat/fstat real symbols; libdrm on Debian 12 calls stat64@GLIBC_2.33 (e850, 11.82) */
++#define HAS_XSTAT (__GLIBC__ == 2 && __GLIBC_MINOR__ < 33)
+ 
+ #if HAS_XSTAT
+ REAL_FUNCTION_POINTER(__xstat);
+diff --git a/src/panfrost/bifrost/bifrost_compile.c b/src/panfrost/bifrost/bifrost_compile.c
+index 081bd0f..1facfad 100644
+--- a/src/panfrost/bifrost/bifrost_compile.c
++++ b/src/panfrost/bifrost/bifrost_compile.c
+@@ -5217,6 +5217,11 @@ bi_should_idvs(nir_shader *nir, const struct panfrost_compile_inputs *inputs)
+         if (inputs->no_idvs || bifrost_debug & BIFROST_DBG_NOIDVS)
+                 return false;
+ 
++        /* E850 (Mali-G52 r0p0 on the vendor kbase, e850 11.82): with IDVS the tiler reads the
++         * previous draw's positions. Off on Bifrost unless BIFROST_IDVS=1. */
++        if (inputs->gpu_id < 0x9000 && !getenv("BIFROST_IDVS"))
++                return false;
++
+         /* IDVS splits up vertex shaders, not defined on other shader stages */
+         if (nir->info.stage != MESA_SHADER_VERTEX)
+                 return false;
+diff --git a/src/panfrost/drm-shim/panfrost_kbase.c b/src/panfrost/drm-shim/panfrost_kbase.c
+index f984e7f..d225067 100644
+--- a/src/panfrost/drm-shim/panfrost_kbase.c
++++ b/src/panfrost/drm-shim/panfrost_kbase.c
+@@ -29,9 +29,11 @@
+ #include <stdlib.h>
+ #include <sys/mman.h>
+ #include <sys/stat.h>
++#include <time.h>
+ 
+ #include "drm-shim/drm_shim.h"
+ #include "util/u_math.h"
++#include "util/u_atomic.h"
+ 
+ #include "drm-uapi/panfrost_drm.h"
+ 
+@@ -49,7 +51,7 @@ typedef int64_t s64;
+ #include "perf.h"
+ 
+ //#define LOG printf
+-#define LOG while (0) printf
++#define LOG(...) do { if (getenv("PAN_KBASE_LOG")) fprintf(stderr, __VA_ARGS__); } while (0)
+ 
+ #define PROP_NAME(n) [MALI_GPUPROP_ ## n] = #n
+ 
+@@ -152,6 +154,59 @@ static const char * const prop_names[] = {
+ bool drm_shim_driver_prefers_first_render_node = true;
+ 
+ static int kbase_fd = -1;
++
++/* Large image BOs are CPU-cached so glReadPixels reads at cache speed instead of ~170 MB/s
++ * uncached (e850 11.82). The GPU is not IO-coherent, so the shim cleans them before every
++ * submit that lists them and invalidates them in WAIT_BO, which Mesa calls before CPU access
++ * to a BO the GPU wrote. Up to 64 MB: the 128 MB tiler heap is GPU-only but arrives without
++ * PANFROST_BO_HEAP (this branch's pan_bo.c keeps only PAN_BO_EXECUTE), and cleaning it on
++ * every submit cost ~23 ms. The cleans cost GPU-only throughput (1080p shader test 334 -> 103 fps)
++ * but make readback 10x faster, and readback is the only way to show output without KMS.
++ * PAN_KBASE_UNCACHED=1 turns caching off, PAN_KBASE_STATS=1 prints the cache maintenance time.
++ * shortcut: a CPU read that skips WAIT_BO (unsynchronized map after a fence) can see stale lines;
++ * if an app does that, run it with PAN_KBASE_UNCACHED=1 or invalidate on syncobj wait too. */
++struct kbase_bo {
++   struct shim_bo base; /* first: drm-shim frees the struct through this pointer */
++   bool cached;
++};
++
++static double sync_s[3], sync_mb[3];
++
++static void
++print_sync_stats(void)
++{
++   fprintf(stderr, "mem_sync to device %.1f MB %.1f ms, to cpu %.1f MB %.1f ms\n",
++           sync_mb[1], sync_s[1] * 1e3, sync_mb[2], sync_s[2] * 1e3);
++}
++
++static void
++kbase_bo_sync(struct shim_bo *bo, int type)
++{
++   if (!((struct kbase_bo *)bo)->cached)
++      return;
++
++   static int stats = -1;
++   if (stats < 0) {
++      stats = !!getenv("PAN_KBASE_STATS");
++      if (stats)
++         atexit(print_sync_stats);
++   }
++   struct timespec t0, t1;
++   clock_gettime(CLOCK_MONOTONIC, &t0);
++
++   struct mali_ioctl_sync s = {
++      .handle = bo->mem_addr,
++      .user_addr = (void *)(uintptr_t) bo->mem_addr,
++      .size = bo->size,
++      .type = type,
++   };
++   if (drmIoctl(kbase_fd, MALI_IOCTL_SYNC, &s) == -1)
++      perror("ioctl(mem_sync)");
++   LOG("mem_sync %d %"PRIx64" %zu\n", type, (uint64_t) bo->mem_addr, (size_t) bo->size);
++   clock_gettime(CLOCK_MONOTONIC, &t1);
++   sync_s[type] += (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
++   sync_mb[type] += bo->size / 1048576.0;
++}
+ static uint8_t *gpuprops;
+ static unsigned gpuprops_size;
+ 
+@@ -301,7 +356,9 @@ pan_ioctl_get_param(int fd, unsigned long request, void *arg)
+       LOG("tiler features: %"PRIx64"\n", (uint64_t) gp->value);
+       return 0;
+    case DRM_PANFROST_PARAM_AFBC_FEATURES:
+-      gp->value = 0;
++      /* AFBC render targets come out as zeros on the E850 G52 (e850 11.82): report "no AFBC"
++       * unless PAN_KBASE_AFBC=1 */
++      gp->value = getenv("PAN_KBASE_AFBC") ? 0 : 1;
+       return 0;
+    default:
+       fprintf(stderr, "Unknown DRM_IOCTL_PANFROST_GET_PARAM %d\n", gp->param);
+@@ -315,7 +372,8 @@ pan_ioctl_create_bo(int fd, unsigned long request, void *arg)
+    struct drm_panfrost_create_bo *create = arg;
+ 
+    struct shim_fd *shim_fd = drm_shim_fd_lookup(fd);
+-   struct shim_bo *bo = calloc(1, sizeof(*bo));
++   struct kbase_bo *kbo = calloc(1, sizeof(*kbo));
++   struct shim_bo *bo = &kbo->base;
+    size_t size = ALIGN(create->size, 4096);
+ 
+    union mali_ioctl_mem_alloc kcreate = {
+@@ -323,10 +381,17 @@ pan_ioctl_create_bo(int fd, unsigned long request, void *arg)
+          .va_pages = DIV_ROUND_UP(size, 4096),
+          .commit_pages = DIV_ROUND_UP(size, 4096),
+          .extent = 0,
+-         .flags = MALI_MEM_PROT_CPU_RD | MALI_MEM_PROT_CPU_WR | MALI_MEM_PROT_GPU_RD | MALI_MEM_PROT_GPU_WR | MALI_MEM_COHERENT_LOCAL | MALI_MEM_CACHED_CPU | MALI_MEM_SAME_VA,
++         /* No CACHED_CPU: the E850 Mali is not IO-coherent (no dma-coherent in DT) and Mesa does not
++          * flush CPU caches, so the GPU read stale descriptors (DATA_INVALID, e850 11.82) */
++         .flags = MALI_MEM_PROT_CPU_RD | MALI_MEM_PROT_CPU_WR | MALI_MEM_PROT_GPU_RD | MALI_MEM_PROT_GPU_WR | MALI_MEM_SAME_VA,
+       }
+    };
+ 
++   kbo->cached = (create->flags & PANFROST_BO_NOEXEC) && !(create->flags & PANFROST_BO_HEAP) &&
++                 size >= (1 << 20) && size <= (64 << 20) && !getenv("PAN_KBASE_UNCACHED");
++   if (kbo->cached)
++      kcreate.in.flags |= MALI_MEM_CACHED_CPU;
++
+    if (create->flags & PANFROST_BO_HEAP) {
+       size_t align_size = 2 * 1024 * 1024 / 4096; /* 2 MB */
+ 
+@@ -430,6 +495,16 @@ pan_ioctl_submit(int fd, unsigned long request, void *arg)
+    else
+       atom.core_req = 2;
+ 
++   struct shim_fd *shim_fd = drm_shim_fd_lookup(fd);
++   const uint32_t *handles = (const uint32_t *)(uintptr_t) submit->bo_handles;
++   for (unsigned i = 0; i < submit->bo_handle_count; i++) {
++      struct shim_bo *bo = drm_shim_bo_lookup(shim_fd, handles[i]);
++      if (bo) {
++         kbase_bo_sync(bo, MALI_SYNC_TO_DEVICE);
++         p_atomic_dec(&bo->refcount); /* not drm_shim_bo_put(): it frees when the count stays non-zero */
++      }
++   }
++
+    struct mali_ioctl_job_submit ksubmit = {
+       .nr_atoms = 1,
+       .stride = sizeof(struct mali_jd_atom_v2),
+@@ -469,9 +544,23 @@ pan_ioctl_submit(int fd, unsigned long request, void *arg)
+    return 0;
+ }
+ 
++/* Submits are synchronous, so the BO is idle here: only the CPU cache needs invalidating. */
++static int
++pan_ioctl_wait_bo(int fd, unsigned long request, void *arg)
++{
++   struct drm_panfrost_wait_bo *wait = arg;
++   struct shim_bo *bo = drm_shim_bo_lookup(drm_shim_fd_lookup(fd), wait->handle);
++
++   if (bo) {
++      kbase_bo_sync(bo, MALI_SYNC_TO_CPU);
++      p_atomic_dec(&bo->refcount);
++   }
++   return 0;
++}
++
+ static ioctl_fn_t driver_ioctls[] = {
+    [DRM_PANFROST_SUBMIT] = pan_ioctl_submit,
+-   [DRM_PANFROST_WAIT_BO] = pan_ioctl_noop,
++   [DRM_PANFROST_WAIT_BO] = pan_ioctl_wait_bo,
+    [DRM_PANFROST_CREATE_BO] = pan_ioctl_create_bo,
+    [DRM_PANFROST_MMAP_BO] = pan_ioctl_mmap_bo,
+    [DRM_PANFROST_GET_PARAM] = pan_ioctl_get_param,
+diff --git a/src/panfrost/drm-shim/perf.c b/src/panfrost/drm-shim/perf.c
+index 0e3b963..02be199 100644
+--- a/src/panfrost/drm-shim/perf.c
++++ b/src/panfrost/drm-shim/perf.c
+@@ -1,6 +1,7 @@
+ #include <inttypes.h>
+ #include <stdint.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <sys/ioctl.h>
+ #include <sys/mman.h>
+ 
+@@ -40,6 +41,9 @@ union kbase_ioctl_kinstr_prfcnt_setup {
+ 
+ void frostwrap_open(int fd)
+ {
++   /* Counter dumping is a debugging aid: only with PAN_KBASE_PERF=1 (e850, 11.82) */
++   if (!getenv("PAN_KBASE_PERF"))
++      return;
+    struct prfcnt_request_item requests[] = {
+       {
+          .hdr.item_type = PRFCNT_REQUEST_TYPE_MODE,
+@@ -168,6 +172,9 @@ void frostwrap_dump(void)
+ {
+     int ret;
+ 
++    if (counter_fd < 0 || counter_area == MAP_FAILED)
++        return;
++
+     struct prfcnt_control_cmd sample_perf = {
+         .cmd = PRFCNT_CONTROL_CMD_SAMPLE_SYNC,
+     };
