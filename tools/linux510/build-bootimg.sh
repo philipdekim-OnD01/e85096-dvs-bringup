@@ -73,7 +73,10 @@ for c in 0 1 2 3 4 5 6 7; do fdtput -t x /out/merged.dtb /cpus/cpu@000$c reg 0 $
 # HDMI text console: 16x32 font (2x the 8x16 default) and white text (VT palette entry 7, the
 # default foreground, from light grey 170,170,170 to 255,255,255)
 VTPAL="vt.default_red=0,170,0,170,0,170,0,255,85,255,85,255,85,255,85,255 vt.default_grn=0,0,170,85,0,0,170,255,85,85,255,255,85,85,255,255 vt.default_blu=0,0,0,0,170,170,170,255,85,85,85,85,255,255,255,255"
-CMDLINE="console=ram keep_bootcon earlycon=exynos4210,mmio32,0x13820000 cpuidle.off=1 panic=0 fbcon=font:TER16x32 $VTPAL clocksource=arch_sys_counter clk_ignore_unused printk.devkmsg=on loglevel=8 ignore_loglevel firmware_class.path=/lib/firmware $ROOTARG"
+# cgroup_disable=cpu: the vendor scheduler (ems.ko) indexes 9-entry arrays with the cpu cgroup id
+# (css->id - 1). Once systemd creates more cpu cgroups (logind sessions, user@.service delegates
+# cpu), moving a runnable task panics in freqboost_can_attach (docs 11.80).
+CMDLINE="console=ram keep_bootcon earlycon=exynos4210,mmio32,0x13820000 cpuidle.off=1 panic=0 fbcon=font:TER16x32 $VTPAL clocksource=arch_sys_counter clk_ignore_unused printk.devkmsg=on loglevel=8 ignore_loglevel firmware_class.path=/lib/firmware cgroup_disable=cpu $ROOTARG"
 # The stock bootargs also start the watchdog at boot (s3c2410_wdt.tmr_atboot=1); without
 # Android's watchdogd nobody pings it, so it is left out here.
 fdtput -t s /out/merged.dtb /chosen bootargs "$CMDLINE"

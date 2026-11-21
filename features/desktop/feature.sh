@@ -14,6 +14,9 @@ install)
     DESKTOP_USER=${USER_NAME:-$(id -un philip 2>/dev/null || getent passwd 1000 | cut -d: -f1)}
     [ -n "$DESKTOP_USER" ] || die "no desktop user"
     echo "USER_NAME=$DESKTOP_USER" > /etc/default/e850-desktop
+    # before apt: the packages bring libpam-systemd, and the next login would panic the kernel (11.80)
+    install -D -m 644 "$H/e850-no-cpu-delegate.conf" /etc/systemd/system/user@.service.d/e850-no-cpu-delegate.conf
+    systemctl daemon-reload
     apt_need $PKGS
     install -D -m 644 "$H/10-e850-fbdev.conf" /etc/X11/xorg.conf.d/10-e850-fbdev.conf
     [ -e /etc/X11/Xwrapper.config ] && ! grep -q e850-feature /etc/X11/Xwrapper.config &&
@@ -26,6 +29,7 @@ remove)
     unit_remove e850-desktop.service; rm -f /usr/local/bin/e850-desktop /etc/X11/xorg.conf.d/10-e850-fbdev.conf
     if [ -e /etc/X11/Xwrapper.config.orig ]; then mv /etc/X11/Xwrapper.config.orig /etc/X11/Xwrapper.config
     else rm -f /etc/X11/Xwrapper.config; fi
+    # the user@ drop-in stays: libpam-systemd stays with the packages
     log "desktop: packages kept; to free the space: apt-get purge $(echo $PKGS) && apt-get autoremove";;
 status)
     sh "$H/desktop.sh" status;;

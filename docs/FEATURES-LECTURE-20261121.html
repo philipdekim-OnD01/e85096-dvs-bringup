@@ -1,0 +1,841 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E850 기능 확장 강의</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+:root { --bg:#FBFBF8; --bg2:#F2F1EB; --navy:#14213D; --ink:#1B2333; --body:#3D4757; --dim:#5F6878; --line:#D8D7CF;
+        --blue:#2a78d6; --blue-soft:#E6EFFA; --orange:#eb6834; --soft:#F3F3EF; --s:1; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #2a2d33; font-family: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+       -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.bar { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 16px;
+       background: #1d1f24; color: #e6e6e6; font-size: 13px; }
+.bar span { flex: 1 1 260px; }
+.bar button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid #6b6f78; background: #3a3e46; color: #fff; cursor: pointer; }
+.bar b { font-variant-numeric: tabular-nums; }
+#deck { padding: 16px 0 40px; counter-reset: pg; }
+.frame { width: calc(1280px * var(--s)); height: calc(720px * var(--s)); margin: 0 auto 16px; box-shadow: 0 2px 10px rgba(0,0,0,.35); overflow: hidden; }
+.slide { width: 1280px; height: 720px; transform: scale(var(--s)); transform-origin: 0 0; position: relative; overflow: hidden;
+         padding: 50px 72px 78px; background: var(--bg); color: var(--body); display: flex; flex-direction: column; gap: 18px;
+         font-size: 21px; line-height: 1.5; counter-increment: pg; outline: none; }
+.slide:focus-within { box-shadow: inset 0 0 0 3px var(--blue); }
+.slide::before { content: "김임환 · 삼성전자 DS교수실 · E850 DVS 재현 백서"; position: absolute; left: 72px; bottom: 26px; font-size: 16px; color: var(--dim); }
+.slide::after { content: counter(pg); position: absolute; right: 72px; bottom: 26px; font-size: 16px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.slide.cover::before, .slide.cover::after { content: none; }
+h1, h2, h3, p, ul, ol, pre { margin: 0; }
+h2 { font-size: 34px; line-height: 1.25; color: var(--navy); font-weight: 700; letter-spacing: -.01em; }
+h3 { font-size: 22px; line-height: 1.35; color: var(--navy); font-weight: 700; margin-bottom: 8px; }
+.eb { font-size: 16px; font-weight: 700; letter-spacing: .06em; color: var(--blue); margin-bottom: -10px; }
+ul, ol { padding-left: 1.25em; } li + li { margin-top: 8px; }
+.small { font-size: 18px; line-height: 1.5; }
+.cap { font-size: 16px; line-height: 1.45; color: var(--dim); }
+.sub { font-size: 16px; color: var(--dim); font-weight: 400; }
+b { color: var(--ink); }
+code { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-size: .86em; background: #ECEBE4; padding: 1px 5px; border-radius: 4px; }
+pre { font: 16px/1.5 "JetBrains Mono", ui-monospace, Menlo, monospace; background: #ECEBE4; color: var(--ink); padding: 10px 14px; border-radius: 8px; white-space: pre; overflow: hidden; }
+.ref { font-size: .68em; color: var(--blue); vertical-align: super; line-height: 0; margin-left: 2px; font-weight: 600; }
+table { border-collapse: collapse; width: 100%; font-size: 18px; line-height: 1.4; }
+table.t17 { font-size: 17px; } table.t18 { font-size: 18px; } table.t19 { font-size: 19px; }
+table.t20 { font-size: 20px; } table.t20 td { padding: 10px 14px; }
+.lg .card { padding: 26px 28px; } .lg .card p { font-size: 22px; line-height: 1.55; }
+.formula { display: flex; align-items: center; justify-content: center; gap: 10px; font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif; font-size: 20px; }
+.frac p { text-align: center; padding: 2px 6px; } .frac p + p { border-top: 1.5px solid var(--ink); }
+.notes p { font-size: 18px; line-height: 1.45; }
+.ctitle { font-size: 19px; font-weight: 700; color: var(--navy); }
+svg.lc { display: block; } svg.lc .lg-grid { stroke: #E2E1DB; stroke-width: 1; }
+svg.lc .lg-t { fill: var(--dim); font-size: 16px; font-family: inherit; }
+svg.lc .lg-l { fill: none; stroke: var(--blue); stroke-width: 2.5; } svg.lc .lg-d { fill: var(--blue); stroke: var(--bg); stroke-width: 2; }
+.hb { display: flex; flex-direction: column; gap: 12px; }
+.hb-leg { display: flex; gap: 24px; font-size: 17px; color: var(--body); margin-left: 200px; }
+.hb-leg i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.hb-row { display: grid; grid-template-columns: 190px 1fr; gap: 10px; align-items: center; }
+.hb-c { font-size: 18px; color: var(--ink); text-align: right; line-height: 1.3; }
+.hb-t { display: flex; flex-direction: column; gap: 3px; border-left: 2px solid #9AA3B2; padding-right: 64px; }
+.hb-b { display: flex; align-items: center; gap: 8px; height: 22px; }
+.hb-b span { display: block; flex-shrink: 0; height: 22px; border-radius: 0 4px 4px 0; }
+.hb-o { background: var(--orange); } .hb-a { background: var(--blue); }
+.hb-b em { font-style: normal; font-size: 16px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hb-ax { position: relative; height: 22px; font-size: 16px; color: var(--dim); margin-right: 64px; }
+.hb-ax span { position: absolute; transform: translateX(-50%); }
+th { background: var(--navy); color: #F5F3EE; text-align: left; padding: 8px 12px; font-weight: 600; }
+td { padding: 7px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.hl td { background: var(--blue-soft); }
+td.ai { color: var(--navy); font-weight: 700; background: var(--blue-soft); }
+.k2, .k3, .k4 { display: grid; gap: 22px; }
+.k2 { grid-template-columns: 1fr 1fr; align-items: start; } .k3 { grid-template-columns: repeat(3, 1fr); } .k4 { grid-template-columns: repeat(4, 1fr); }
+.k2.g2 { flex: 1; min-height: 0; grid-template-rows: 1fr 1fr; align-items: stretch; }
+.cols { display: grid; gap: 32px; flex: 1; min-height: 0; align-items: start; }
+.stack { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+.card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 20px 24px; }
+.card.hl { background: var(--blue-soft); border-color: #B9D2F1; }
+.card.c4 { padding: 18px 18px; font-size: 18px; line-height: 1.5; }
+.fig { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; height: 100%; }
+.fig img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.fig svg.dg { width: 100%; height: 100%; margin: 0; max-width: none; }
+.fig.strip { flex: 0 0 auto; height: 200px; }
+.banner { background: var(--navy); color: #DCE4F2; border-radius: 12px; padding: 18px 24px; font-size: 20px; }
+.banner b { color: #fff; }
+.stats > div { border-top: 4px solid var(--blue); padding-top: 10px; }
+.stats .num { font-size: 58px; font-weight: 700; color: var(--blue); line-height: 1.05; font-variant-numeric: tabular-nums; }
+.stats .num.o { color: #C4501D; } .stats > div:nth-child(2) { border-top-color: var(--orange); }
+.stats .lbl { font-size: 17px; line-height: 1.45; color: var(--body); margin-top: 6px; }
+.stats.sm .num { font-size: 40px; }
+.toc { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: repeat(4, auto); grid-auto-flow: column; gap: 22px 48px; margin-top: 10px; }
+.toc > div { display: grid; grid-template-columns: 76px 1fr; column-gap: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
+.toc b { grid-row: span 2; font-size: 30px; color: var(--blue); line-height: 1.1; }
+.toc .t { font-size: 24px; font-weight: 700; color: var(--navy); line-height: 1.3; }
+.toc .d { font-size: 17px; color: var(--dim); }
+.kv { display: grid; grid-template-columns: 82px 1fr; gap: 14px; align-items: start; font-size: 19px; }
+.kv .k, p.k { font-size: 16px; font-weight: 700; color: #fff; background: var(--blue); border-radius: 999px; padding: 2px 0; text-align: center; margin-top: 3px; }
+p.k { display: inline-block; padding: 2px 14px; align-self: flex-start; margin: 0 0 -8px; }
+.flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 12px 0; font-size: 17px; }
+.flow span { border: 1.5px solid #9AA3B2; border-radius: 8px; padding: 4px 10px; background: var(--soft); color: var(--ink); }
+.flow span.z { border-color: var(--blue); background: var(--blue-soft); }
+.flow i { font-style: normal; color: var(--dim); }
+.formula { background: var(--soft); border-radius: 8px; padding: 10px; margin: 10px 0; text-align: center; color: var(--ink); }
+.chips > div { background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: 10px; padding: 12px 16px; font-size: 17px; line-height: 1.4; }
+.chips .v { font-size: 22px; font-weight: 700; color: var(--navy); }
+.steps { font-size: 18px; line-height: 1.5; }
+.steps li + li { margin-top: 14px; }
+.ci .tk { position: relative; height: 18px; background: var(--soft); border-radius: 4px; margin-top: 4px; }
+.ci .z0 { position: absolute; left: 8.33%; top: -3px; bottom: -3px; width: 2px; background: #7D8594; }
+.ci .iv { position: absolute; top: 5px; height: 8px; border-radius: 4px; background: var(--blue); }
+.ci .pt { position: absolute; top: 1px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: var(--navy); border: 2px solid var(--bg); }
+.ci .iv-t { font-size: 16px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.ci .axis { font-weight: 400; font-size: 16px; color: #B9C3D6; margin-left: 6px; }
+.gain { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.gbar { display: flex; height: 54px; border-radius: 8px; overflow: hidden; }
+.gbar span { display: block; height: 100%; border-right: 2px solid var(--bg); }
+.gbar span:last-child { border-right: none; }
+.gs1 { background: var(--orange); } .gs2 { background: #9CC2EE; } .gs3 { background: var(--blue); }
+.glab { display: flex; font-size: 17px; line-height: 1.35; }
+.glab p { padding-right: 12px; }
+.glab b { font-size: 24px; font-variant-numeric: tabular-nums; }
+.refs { font-size: 16px; line-height: 1.4; padding-left: 2em; }
+.refs li + li { margin-top: 5px; }
+.dark { background: var(--navy); color: #C9D3E6; }
+.dark h1, .dark h2 { color: #F5F3EE; } .dark .eb { color: #8FB8EE; } .dark b { color: #fff; }
+.dark::before, .dark::after { color: #8D9AB3; }
+.cover { justify-content: center; gap: 22px; padding-left: 96px; }
+.cover h1 { font-size: 60px; line-height: 1.2; font-weight: 700; letter-spacing: -.015em; max-width: 720px; }
+.cover .sub { font-size: 24px; color: #C9D3E6; max-width: 640px; line-height: 1.5; }
+.cover .who { margin-top: 26px; border-left: 4px solid var(--orange); padding-left: 18px; }
+.cover .name { font-size: 32px; font-weight: 700; color: #F5F3EE; }
+.cover .org { font-size: 22px; color: #C9D3E6; }
+.cover .date { font-size: 17px; color: #8D9AB3; }
+.eyes { position: absolute; right: 70px; top: 50%; width: 470px; height: 310px; transform: translateY(-50%); }
+.eyes span { position: absolute; top: 0; width: 310px; height: 310px; border-radius: 50%; border: 12px solid; }
+.eyes .e1 { left: 0; border-color: rgba(42,120,214,.9); }
+.eyes .e2 { right: 0; border-color: rgba(235,104,52,.85); }
+.end { justify-content: center; }
+.end h2 { font-size: 40px; }
+.take { font-size: 23px; line-height: 1.5; max-width: 1060px; }
+.take li + li { margin-top: 16px; }
+.qa { margin-top: 18px; font-size: 26px; font-weight: 700; color: #8FB8EE; }
+body.present { background: #000; overflow: hidden; }
+body.present .bar { display: none; }
+body.present #deck { padding: 0; }
+body.present .frame { display: none; margin: 0; box-shadow: none; }
+body.present .frame.on { display: block; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+body.present .slide:focus-within { box-shadow: none; }
+.slide { padding-top: 44px; gap: 16px; }
+pre { tab-size: 4; flex-shrink: 0; font-variant-ligatures: none; }
+code { font-variant-ligatures: none; }
+.slide { word-break: keep-all; overflow-wrap: break-word; }
+th code, .dark code, .banner code { background: rgba(255,255,255,.16); color: #fff; }
+.cols > *, .k2 > * { min-width: 0; }
+table.t16 { font-size: 16px; line-height: 1.38; } table.t16 td { padding: 5px 10px; } table.t16 th { padding: 6px 10px; }
+pre.sm { font-size: 13.5px; line-height: 1.42; padding: 8px 12px; }
+pre.xs { font-size: 12.5px; line-height: 1.38; padding: 7px 12px; }
+sup.n { font-size: .6em; color: #C4501D; font-weight: 700; margin-left: 1px; line-height: 0; }
+.dark sup.n { color: #F2A27E; }
+.fn { margin-top: auto; border-top: 1px solid var(--line); padding-top: 6px; display: grid; grid-template-columns: 1fr 1fr;
+      gap: 2px 28px; font-size: 13.5px; line-height: 1.38; color: var(--dim); }
+.fn.one { grid-template-columns: 1fr; }
+.fn b { color: var(--body); }
+.fn sup.n { margin: 0 3px 0 0; }
+.tg { display: inline-block; font-size: 12.5px; font-weight: 700; line-height: 1.5; padding: 0 7px; border-radius: 999px;
+      background: var(--blue-soft); color: var(--navy); vertical-align: 2px; white-space: nowrap; }
+.tg.o { background: #FBE6DC; color: #8A3412; }
+.lane { display: grid; grid-template-columns: 1fr 34px 1fr 34px 1fr; align-items: stretch; }
+.lane > i { font-style: normal; font-size: 30px; color: var(--dim); display: flex; align-items: center; justify-content: center; }
+.lane .card { display: flex; flex-direction: column; gap: 8px; }
+.lane .card .cap { margin-top: auto; }
+table.cores td { padding: 5px 12px; vertical-align: middle; }
+.cb { display: flex; align-items: center; gap: 8px; }
+.cb span { display: block; height: 14px; background: var(--blue); border-radius: 0 3px 3px 0; }
+.cb.o span { background: var(--orange); }
+.cb em { font-style: normal; font-size: 16px; color: var(--ink); font-variant-numeric: tabular-nums; }
+i.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: var(--blue); margin-left: 6px; vertical-align: 0; }
+i.sw.o { background: var(--orange); }
+.flow span small { font-size: 13px; color: var(--dim); }
+.flow span { text-align: center; line-height: 1.3; }
+@page { size: 1280px 720px; margin: 0; }
+@media print {
+  body { background: #fff; } .bar { display: none; } #deck { padding: 0; }
+  .frame { width: 1280px !important; height: 720px !important; margin: 0; box-shadow: none; break-after: page; display: block !important;
+           position: static !important; transform: none !important; }
+  .slide { transform: none !important; } .slide:focus-within { box-shadow: none; }
+}
+
+.slide::before { content: "김임환 교수 · 삼성전자 DS 교수실 · E850-96 기능 확장 강의"; }
+svg.dg { display: block; width: 100%; height: auto; }
+.k2 { grid-template-columns: 1fr 1fr; } .k3 { grid-template-columns: 1fr 1fr 1fr; }
+.cover h1 { max-width: 660px; } .cover .sub { max-width: 620px; }
+.covsum { position: absolute; right: 64px; top: 50%; transform: translateY(-50%); width: 430px; display: flex; flex-direction: column; gap: 16px; }
+.covsum div { border-left: 3px solid #8FB8EE; padding: 2px 0 2px 16px; font-size: 16.5px; line-height: 1.55; color: #C9D3E6; }
+.covsum b { display: block; color: #fff; font-size: 15px; letter-spacing: .06em; margin-bottom: 2px; }
+.card h3 { font-size: 19px; color: var(--ink); margin-bottom: 6px; }
+.card p, .card li { font-size: 17px; line-height: 1.5; }
+.card ul { padding-left: 1.1em; }
+table.t { font-size: 16.5px; line-height: 1.35; } table.t td { padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.t th { padding: 7px 10px; font-size: 15.5px; }
+table.t td.ok { color: #1f7a3a; font-weight: 700; } table.t td.no { color: #b2401a; font-weight: 700; }
+pre.s { font-size: 14.5px; line-height: 1.45; }
+ul.b { font-size: 19px; line-height: 1.55; padding-left: 1.1em; } ul.b li + li { margin-top: 10px; }
+.flow { font-size: 15px; }
+</style>
+</head>
+<body>
+<div class="bar"><span>16:9 강의 자료. 슬라이드 글자를 눌러 바로 고칠 수 있습니다. 고친 뒤 "HTML로 저장"을 누르면 고친 판이 내려받아집니다. 발표 중 → ← 또는 화면 좌우를 눌러 넘기고, Esc로 끝냅니다.</span>
+<b id="pos"></b><button id="play0" type="button">처음부터 발표</button><button id="play" type="button">이 장부터 발표</button>
+<button id="save" type="button">HTML로 저장</button><button type="button" onclick="print()">인쇄 · PDF</button></div>
+<main id="deck">
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide dark cover">
+<p class="eb">LECTURE · 2026-11-21</p>
+<h1>E850-96 보드에 기능을 골라 넣기</h1>
+<p class="sub">유선랜 · 오디오 · 영상 코덱 · Bluetooth · USB 호스트 · X 데스크톱을, 어느 보드에든 명령 한 줄로 넣고 뺄 수 있게 만든 과정. 구조, 순서, 실패와 고친 방법까지</p>
+<div class="who"><p class="name">김임환 교수</p><p class="org">삼성전자 DS 교수실</p><p class="date">E850-96 bring-up 기록 11.76~11.80 · 2026-11-21</p></div>
+<div class="covsum">
+<div><b>문제</b>기본 이미지에는 Wi-Fi와 HDMI 콘솔만 있었다. 유선랜, 소리, BT, 키보드·마우스, 창 화면이 없었다.</div>
+<div><b>방법</b>기능마다 "드라이버 + 펌웨어 + 설정 + 서비스"를 한 묶음으로. 보드에서는 <code>e850-feature install 이름</code> 한 줄. X는 무거우니 따로.</div>
+<div><b>배운 것</b>vendor 코드의 숨은 가정 세 개. 소리 카드가 안 생기는 원인, BT를 켜면 Wi-Fi가 안 돌아오는 원인, 데스크톱 패키지를 깔면 로그인 때 커널이 죽는 원인이었다.</div>
+</div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">00 · 읽는 법</p>
+<h2>강의 순서</h2>
+<div class="toc">
+<div><b>01</b><p class="t">출발점</p><p class="d">보드와 소프트웨어 층, 무엇이 없었나</p></div>
+<div><b>02</b><p class="t">설계: 기능 묶음</p><p class="d">저장소 구조, 번들, 명령, 모듈 · 펌웨어</p></div>
+<div><b>03</b><p class="t">시험 순서</p><p class="d">위험한 일은 복구 수단이 있는 보드에서</p></div>
+<div><b>04</b><p class="t">USB 호스트와 유선랜</p><p class="d">포트 하나를 두 가지로 쓰기</p></div>
+<div><b>05</b><p class="t">오디오</p><p class="d">카드가 안 생긴 이유, 경로, 재생 속도</p></div>
+<div><b>06</b><p class="t">영상 코덱 MFC · X 데스크톱</p><p class="d">GPU 없이 그리는 화면</p></div>
+<div><b>07</b><p class="t">Bluetooth와 Wi-Fi 복구</p><p class="d">브리지, 사고, 원인, 수정</p></div>
+<div><b>08</b><p class="t">정리</p><p class="d">다른 보드에 넣기, 확인한 것과 못 한 것</p></div>
+</div>
+<p class="small">근거마다 표시를 붙였다. <span class="tg">측정</span> 보드에서 실제로 잰 값, <span class="tg">소스</span> 드라이버 소스에서 읽은 사실, <span class="tg o">미확인</span> 아직 재지 못한 것. 쪽마다 아래에 전문용어 각주<sup class="n">1</sup>가 있다.</p>
+<div class="fn one"><p><sup class="n">1</sup><b>각주</b>: 본문에 나온 전문용어를 쉬운 말로 풀어 쓴 설명. 본문의 작은 주황 숫자와 번호가 같다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">01 · 출발점 · 보드와 소프트웨어 층</p>
+<h2>칩 안에 장치는 다 있다. 문제는 그 위의 소프트웨어 층이다</h2>
+<div class="fig" style="flex: 0 0 auto; height: 330px;">
+<svg class="dg" viewBox="0 0 1136 330" font-family="Noto Sans KR, sans-serif">
+<g font-size="17">
+<rect x="0" y="0" width="1136" height="56" rx="10" fill="#E6EFFA" stroke="#B9D2F1"/>
+<text x="20" y="35" fill="#1B2333" font-weight="700">우리 서비스</text><text x="230" y="35" fill="#3D4757">dvslive(DVS 영상), e850-scope(현미경), nginx · ssh … 그리고 이번에 만든 features</text>
+<rect x="0" y="68" width="1136" height="56" rx="10" fill="#fff" stroke="#D8D7CF"/>
+<text x="20" y="103" fill="#1B2333" font-weight="700">Debian 12 rootfs</text><text x="230" y="103" fill="#3D4757">arm64 사용자 공간: systemd, ALSA, BlueZ, Xorg … (apt로 설치)</text>
+<rect x="0" y="136" width="1136" height="56" rx="10" fill="#fff" stroke="#D8D7CF"/>
+<text x="20" y="171" fill="#1B2333" font-weight="700">vendor 커널 5.10.157</text><text x="230" y="171" fill="#3D4757">Android 13 BSP. 드라이버 대부분은 모듈(.ko)이고, 일부는 일부러 안 올린다(autoload.deny)</text>
+<rect x="0" y="204" width="1136" height="56" rx="10" fill="#fff" stroke="#D8D7CF"/>
+<text x="20" y="239" fill="#1B2333" font-weight="700">부트 펌웨어</text><text x="230" y="239" fill="#3D4757">Android 10 시절 LK + BL31 그대로. fastboot로 boot 파티션을 굽는다</text>
+<rect x="0" y="272" width="1136" height="56" rx="10" fill="#14213D"/>
+<text x="20" y="307" fill="#fff" font-weight="700">Exynos 850</text>
+<text x="230" y="307" fill="#DCE4F2">CPU 8코어 · WLBT(Wi-Fi + BT) · ABOX(오디오 DSP) · MFC(영상 코덱) · DPU(HDMI) · USB OTG → LAN9514 허브</text>
+</g>
+</svg>
+</div>
+<ul class="small">
+<li>기능 하나를 쓰려면 층마다 조각이 맞아야 한다. 칩 안의 장치, 커널 드라이버<sup class="n">1</sup>, 장치가 따로 받는 펌웨어<sup class="n">2</sup>, 그리고 사용자 공간의 프로그램과 설정이다.</li>
+<li>이 보드는 Android용 BSP<sup class="n">3</sup>의 커널에 Debian을 올렸다. 그래서 Android가 하던 몫(펌웨어 파일, 소리 경로 설정, BT 연결)을 우리가 채워야 한다.</li>
+</ul>
+<div class="fn"><p><sup class="n">1</sup><b>드라이버(driver)</b>: 운영체제가 장치를 다루게 해 주는 커널 코드. 리눅스에서는 필요할 때 끼우는 모듈(.ko)로 많이 만든다.</p><p><sup class="n">2</sup><b>펌웨어(firmware)</b>: 장치 안의 작은 프로세서가 돌리는 프로그램. 드라이버가 부팅 뒤 파일에서 읽어 장치에 넣어 준다.</p><p><sup class="n">3</sup><b>BSP</b>(Board Support Package): 칩 회사가 주는 그 칩용 커널 · 드라이버 · 설정 묶음.</p><p><b>rootfs</b>: 커널이 부팅 뒤 붙이는 기본 파일 시스템. 여기서는 Debian 12.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">01 · 출발점 · 무엇이 없었나</p>
+<h2>2026-11-21 전에는 Wi-Fi와 HDMI 글자 화면만 있었다</h2>
+<table class="t">
+<tr><th>기능</th><th>필요한 조각</th><th>그 전 상태</th></tr>
+<tr><td><b>USB-A(키보드 · 마우스)</b></td><td>허브 전원(LDO24), 포트 전원 GPIO, OTG를 호스트로</td><td>현미경 서비스 안에만 있었다(보드4)</td></tr>
+<tr><td><b>유선랜</b></td><td><code>smsc95xx</code> 드라이버, 이름과 MAC 설정, DHCP</td><td>드라이버가 빌드되지 않았다</td></tr>
+<tr><td><b>소리</b></td><td>ABOX DSP 펌웨어, 토폴로지, machine 드라이버, 경로 설정(mixer<sup class="n">1</sup>), ALSA<sup class="n">2</sup> 설정</td><td>펌웨어가 없고, 드라이버는 일부러 꺼 둠</td></tr>
+<tr><td><b>영상 코덱</b></td><td>MFC 펌웨어, <code>exynos_mfc</code> 적재</td><td>펌웨어가 없음</td></tr>
+<tr><td><b>Bluetooth</b></td><td><code>scsc_bt</code>, BlueZ<sup class="n">3</sup>와 잇는 길</td><td>vendor의 BlueZ 연결부가 빌드되지 않음</td></tr>
+<tr><td><b>창 화면(X)</b></td><td>Xorg, 창 관리자, 터미널, 브라우저</td><td>설치되지 않음. GPU 사용자 공간 드라이버도 없음</td></tr>
+</table>
+<p class="small">사용자 요청: "보드4에 다 설치하고, X는 옵션에 따라 올리거나 말거나. 오디오 · 이더넷 · BT는 다른 보드에도 필요하니 쉽게 추가할 수 있게 깃을 구조화해 줘."</p>
+<div class="fn"><p><sup class="n">1</sup><b>Mixer</b>: 소리 칩 안의 스위치 · 볼륨 · 경로 선택을 바꾸는 설정 값들. 이 보드에는 780개가 있다.</p><p><sup class="n">2</sup><b>ALSA</b>: 리눅스의 기본 소리 체계. 커널 드라이버와 사용자 공간 라이브러리(alsa-lib)로 되어 있다.</p><p><sup class="n">3</sup><b>BlueZ</b>: 리눅스의 표준 Bluetooth 프로그램 묶음. 커널의 hci0 같은 장치를 통해 칩과 말한다.</p><p><b>OTG</b>: USB 포트 하나를 장치(gadget)로도, 호스트로도 쓰게 하는 규격.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">02 · 설계 · 기능 하나 = 네 조각</p>
+<h2>기능마다 "모듈 + 펌웨어 + 설정 + 서비스"를 한 디렉터리에 묶었다</h2>
+<div class="k2" style="grid-template-columns: 1.15fr 1fr;">
+<div class="stack">
+<div class="card"><h3>① 커널 모듈</h3><p>소스와 빌드 스크립트는 <code>modules/&lt;이름&gt;/</code>. vendor 소스에 고칠 점이 있으면 patch 파일로 둔다.</p></div>
+<div class="card"><h3>② 펌웨어</h3><p>Samsung 바이너리라 git에 넣지 않는다. 받는 곳(고정 커밋)과 sha256<sup class="n">1</sup>만 git에 둔다.</p></div>
+<div class="card"><h3>③ 설정 · ④ 서비스</h3><p>networkd 파일, asound.conf, Xorg 설정, systemd unit<sup class="n">2</sup>. 부팅 때 무엇을 켤지 여기서 정한다.</p></div>
+</div>
+<div class="stack">
+<div class="card hl"><h3>약속: <code>feature.sh install | remove | status</code></h3><p>모든 기능이 같은 세 동작을 한다. 그래서 공통 명령 <code>e850-feature</code>가 기능을 몰라도 부를 수 있다. 두 번 설치해도 같은 결과가 나오게(idempotent<sup class="n">3</sup>) 썼다.</p></div>
+<div class="card"><h3>X만 따로</h3><p>X와 Firefox는 패키지 278개에 메모리도 많이 쓴다. 그래서 <code>desktop</code>은 따로 설치하고, 설치해도 부팅 때 켜지 않는다(<code>e850-desktop start</code>). <span class="tg">측정</span></p></div>
+<div class="card"><h3>의존</h3><p><code>ethernet</code>과 <code>desktop</code>은 <code>usbhost</code>가 있어야 한다. <code># needs: usbhost</code>를 쓰면 먼저 설치된다.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>sha256</b>: 파일 내용으로 만든 64자리 지문. 한 바이트만 달라도 바뀐다.</p><p><sup class="n">2</sup><b>systemd unit</b>: 서비스를 언제 · 어떻게 켜고 끌지 적은 파일(.service).</p><p><sup class="n">3</sup><b>Idempotent</b>: 여러 번 해도 한 번 한 것과 결과가 같은 성질.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">02 · 설계 · 저장소 구조</p>
+<h2>git에는 소스와 스크립트만, 큰 바이너리는 받는 법만</h2>
+<div class="cols" style="grid-template-columns: 1fr 1fr;">
+<pre class="s">features/
+  README.md          사용법 · 배치 · 새 기능 넣는 법
+  e850-feature       보드의 명령 (list/status/install/remove)
+  common.sh          공통 함수 ko_install, unit_install …
+  usbhost/  feature.sh usbhost.sh e850-usbhost.service
+  ethernet/ feature.sh 10-e850-eth.link 30-e850-eth.network
+  audio/    feature.sh audio.sh mixer-path.py asound.conf
+  video/    feature.sh e850-mfc.service
+  bt/       feature.sh e850-btbridge.py bt-check.sh …
+  desktop/  feature.sh desktop.sh session.sh xorg 설정 …
+  host/     bundle.sh deploy.sh fetch-fw.py fw.sha256
+modules/
+  smsc95xx/             유선랜 (out-of-tree 빌드)
+  exynos3830-sound/     소리 machine 드라이버 + 순서 패치
+  scsc-wlan-recovery/   Wi-Fi 드라이버 + 복구 재시도 패치
+  e850-hubpwr/          USB 허브 전원 (전부터 있던 것)</pre>
+<div class="stack">
+<div class="card"><h3>왜 이렇게 나눴나</h3><ul><li><b>features/</b>: 보드에 들어가는 것. 그대로 묶어(tgz) 보낸다.</li><li><b>modules/</b>: Mac의 Docker에서 따로 빌드하는<sup class="n">1</sup> 커널 모듈. 결과(.ko)만 묶음에 들어간다.</li><li><b>host/</b>: Mac에서만 도는 도구. 묶음에는 안 들어간다.</li></ul></div>
+<div class="card"><h3>새 보드에 넣을 때</h3><p>저장소를 받고, Mac에서 <code>bundle.sh</code> → <code>deploy.sh</code>. 보드1~4가 같은 커널이라 같은 묶음을 쓴다.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>Out-of-tree 빌드</b>: 커널 소스 트리 밖의 디렉터리에서, 이미 빌드된 커널에 맞춰 모듈 하나만 빌드하는 방법(<code>make M=…</code>).</p><p><b>tgz</b>: 여러 파일을 tar로 하나로 묶고 gzip으로 줄인 파일.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">02 · 설계 · 묶음이 보드에 가는 길</p>
+<h2>Mac에서 만들고, ssh로 보내고, 보드가 제자리에 넣는다</h2>
+<div class="fig" style="flex: 0 0 auto; height: 300px;">
+<svg class="dg" viewBox="0 0 1136 300" font-family="Noto Sans KR, sans-serif" font-size="15.5">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5F6878"/></marker></defs>
+<rect x="0" y="0" width="420" height="300" rx="14" fill="#F2F1EB" stroke="#D8D7CF"/><text x="18" y="30" font-weight="700" fill="#1B2333" font-size="17">Mac · bundle.sh</text>
+<rect x="18" y="48" width="384" height="66" rx="10" fill="#fff" stroke="#D8D7CF"/><text x="32" y="74" fill="#1B2333" font-weight="700">Docker에서 모듈 4개 빌드 → strip</text><text x="32" y="98" fill="#5F6878">smsc95xx · exynos3830_sound · e850-hubpwr · scsc_wlan</text>
+<rect x="18" y="126" width="384" height="66" rx="10" fill="#fff" stroke="#D8D7CF"/><text x="32" y="152" fill="#1B2333" font-weight="700">fetch-fw.py: Linaro 고정 커밋에서 받기</text><text x="32" y="176" fill="#5F6878">fw.sha256으로 확인, out/fw-cache에 보관</text>
+<rect x="18" y="204" width="384" height="78" rx="10" fill="#fff" stroke="#D8D7CF"/><text x="32" y="230" fill="#1B2333" font-weight="700">스크립트 + KVER + VERSION</text><text x="32" y="254" fill="#5F6878">KVER = 빌드한 커널 릴리스</text><text x="32" y="274" fill="#5F6878">VERSION = git describe</text>
+<line x1="420" y1="150" x2="508" y2="150" stroke="#5F6878" stroke-width="2" marker-end="url(#ar)"/>
+<rect x="512" y="104" width="150" height="92" rx="12" fill="#14213D"/><text x="587" y="140" fill="#fff" text-anchor="middle" font-weight="700">e850-features</text><text x="587" y="162" fill="#DCE4F2" text-anchor="middle">.tgz 2.0 MB</text><text x="587" y="184" fill="#DCE4F2" text-anchor="middle" font-size="13.5">deploy.sh: scp + ssh</text>
+<line x1="662" y1="150" x2="730" y2="150" stroke="#5F6878" stroke-width="2" marker-end="url(#ar)"/>
+<rect x="734" y="0" width="402" height="300" rx="14" fill="#E6EFFA" stroke="#B9D2F1"/><text x="752" y="30" font-weight="700" fill="#1B2333" font-size="17">보드 · sudo e850-feature install …</text>
+<text x="752" y="70" fill="#1B2333" font-weight="700">/opt/e850-features/</text><text x="752" y="92" fill="#3D4757">묶음 전체 (서비스가 여기를 쓴다)</text>
+<text x="752" y="132" fill="#1B2333" font-weight="700">/lib/modules/&lt;KVER&gt;/extra/</text><text x="752" y="154" fill="#3D4757">모듈 + depmod (다음 쪽)</text>
+<text x="752" y="194" fill="#1B2333" font-weight="700">/lib/firmware/</text><text x="752" y="216" fill="#3D4757">calliope_*.bin · abox_tplg.bin · mfc_fw.bin</text>
+<text x="752" y="256" fill="#1B2333" font-weight="700">/etc/systemd/system/ · /var/lib/e850-features/</text><text x="752" y="278" fill="#3D4757">서비스 파일 · 설치 기록(묶음 버전)</text>
+</svg>
+</div>
+<p class="small">커널 릴리스가 다르면 모듈을 넣지 않는다. 모듈은 빌드한 커널에서만 올라가기 때문이다(vermagic<sup class="n">1</sup>). 지금 보드1~4는 모두 <code>5.10.157-00010-g3b6b9ca51034-dirty</code>다. <span class="tg">측정</span></p>
+<div class="fn"><p><sup class="n">1</sup><b>vermagic</b>: 모듈에 적힌 "어느 커널용인가" 표시. 커널과 맞지 않으면 적재를 거부한다.</p><p><b>strip</b>: 실행 파일에서 디버그 정보를 지워 크기를 줄이는 것. <code>scsc_wlan.ko</code>는 25 MB → 1.9 MB.</p><p><b>scp / ssh</b>: 네트워크로 파일을 복사하는 / 명령을 실행하는 암호화된 방법.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">02 · 설계 · 보드의 명령</p>
+<h2><code>e850-feature</code> 하나로 넣고, 빼고, 상태를 본다</h2>
+<div class="cols" style="grid-template-columns: 1fr 1fr;">
+<pre class="s">$ e850-feature list
+usbhost   USB-A host ports (keyboard, mouse, LAN9514 …)
+ethernet  LAN9514 Ethernet (smsc95xx) as eth0 …
+audio     ABOX + AUD3004X sound card …
+video     MFC hardware video codec …
+bt        Bluetooth (WLBT firmware via scsc_bt) …
+desktop   X desktop on HDMI (Xorg fbdev, Openbox …)
+
+$ sudo e850-feature install audio bt
+== install audio
+== install bt
+
+$ e850-feature status bt
+== bt: installed (994e5b4)
+active
+hci0:  Type: Primary  Bus: Virtual
+       UP RUNNING</pre>
+<pre class="s"># features/video/feature.sh (전부)
+#!/bin/sh
+# about: MFC hardware video codec (…)<sup class="n">1</sup>
+set -e
+ROOT=$(cd "$(dirname "$0")/.." &amp;&amp; pwd)
+. "$ROOT/common.sh"; H=$DEST/video
+case $1 in
+install)
+  install -m 644 "$ROOT/fw/video/mfc_fw.bin" \
+          /lib/firmware/; users_to_group video
+  unit_install "$H/e850-mfc.service" enable
+  systemctl start e850-mfc;;
+remove)
+  unit_remove e850-mfc.service
+  rm -f /lib/firmware/mfc_fw.bin;;
+status)
+  … /dev/videoN 이름 출력 …;;
+esac</pre>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>about / needs</b>: <code>feature.sh</code> 맨 위 주석. <code>list</code>가 about을 보여 주고, <code>install</code>이 needs에 적힌 기능을 먼저 설치한다.</p><p><b>sudo</b>: 일반 사용자가 관리자(root) 권한으로 명령 하나를 실행하는 것.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">02 · 설계 · 고친 모듈이 이기는 법</p>
+<h2>같은 이름의 모듈이 둘일 때, <code>extra/</code>가 먼저다</h2>
+<div class="k2" style="grid-template-columns: 1.1fr 1fr;">
+<div class="stack">
+<div class="card"><h3>문제</h3><p>vendor 모듈은 <code>/lib/modules/&lt;KVER&gt;/</code>에 평평하게 놓여 있다. 고친 <code>exynos3830_sound.ko</code>와 <code>scsc_wlan.ko</code>는 원래 것과 이름이 같다. 원래 파일을 덮어쓰면 되돌리기 어렵다.</p></div>
+<div class="card hl"><h3>방법</h3><p>고친 것은 <code>extra/</code>에 넣고 <code>/etc/depmod.d/e850-features.conf</code>에 한 줄을 쓴다.</p><pre class="s" style="margin-top:8px">search extra built-in</pre><p style="margin-top:8px">depmod<sup class="n">1</sup>가 목록(modules.dep)을 만들 때 extra를 먼저 본다. 빼려면 파일을 지우고 depmod만 다시 하면 된다.</p></div>
+</div>
+<div class="stack">
+<div class="card"><h3>확인 <span class="tg">측정</span></h3><pre class="s">$ modinfo -F filename smsc95xx
+/lib/modules/5.10.157-…/extra/smsc95xx.ko
+$ modinfo -F filename scsc_wlan     (보드3)
+/lib/modules/5.10.157-…/extra/scsc_wlan.ko</pre></div>
+<div class="card"><h3>주의: 이미 올라간 모듈은 그대로다</h3><p>파일을 바꿔도 이미 적재된 모듈은 바뀌지 않는다. 그리고 이 두 모듈은 <b>내렸다 다시 올리면 커널 패닉</b>이 났다(05장, 07장). 그래서 고친 판은 다음 부팅부터 쓰인다.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>depmod</b>: 모듈들이 서로 무엇을 필요로 하는지와 각 모듈 파일의 위치를 목록으로 만드는 도구. <code>modprobe</code>는 이 목록을 보고 모듈을 찾는다.</p><p><b>커널 패닉</b>: 커널이 더 진행할 수 없는 오류를 만나 멈추는 것. 이 보드에서는 워치독이 리셋하고 fastboot로 들어간다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">02 · 설계 · 펌웨어</p>
+<h2>펌웨어는 "어디서 받는지"와 "지문"만 저장소에 둔다</h2>
+<div class="k2" style="grid-template-columns: 1fr 1fr;">
+<div class="stack">
+<div class="card"><h3>출처</h3><p>Linaro가 공개한 Android 13 E850-96 장치 저장소 <code>device/samsung/universal3830</code>, 커밋 <code>8bfd9659</code>(android13-e850-96, 2025-08-15)에 고정했다. 커밋<sup class="n">1</sup>을 고정하면 몇 달 뒤 받아도 같은 파일이 온다.</p></div>
+<div class="card"><h3>git에 안 넣는 이유</h3><p>Samsung 바이너리라 다시 배포할 권리가 분명하지 않다. 대신 받는 스크립트 <code>fetch-fw.py</code>와 <code>fw.sha256</code>만 둔다.</p></div>
+</div>
+<table class="t">
+<tr><th>파일</th><th class="n">크기(B)</th><th>쓰는 곳</th></tr>
+<tr><td><code>calliope_sram.bin</code></td><td class="n">47,668</td><td>ABOX DSP 코어 1</td></tr>
+<tr><td><code>calliope_dram.bin</code></td><td class="n">293,536</td><td>ABOX DSP 코어 1</td></tr>
+<tr><td><code>calliope_sram_2.bin</code></td><td class="n">49,380</td><td>ABOX DSP 코어 2</td></tr>
+<tr><td><code>calliope_dram_2.bin</code></td><td class="n">163,488</td><td>ABOX DSP 코어 2</td></tr>
+<tr><td><code>abox_tplg.bin</code></td><td class="n">751,272</td><td>ASoC 토폴로지<sup class="n">2</sup></td></tr>
+<tr><td><code>mixer_paths.xml</code></td><td class="n">59,233</td><td>Android의 소리 경로 설정(참고용)</td></tr>
+<tr><td><code>mfc_fw.bin</code></td><td class="n">796,108</td><td>MFC v10.21 (원래 이름 mfc_fw_v10.21.bin)</td></tr>
+</table>
+</div>
+<p class="small">파일 이름은 DT의 abox 코어 노드와 드라이버 소스(<code>MFC_FW_NAME</code>)에서 찾았다. <span class="tg">소스</span> BT 설정 <code>bt.hcf</code>는 이미 깔린 Wi-Fi 펌웨어 묶음 안에 있었다.</p>
+<div class="fn"><p><sup class="n">1</sup><b>커밋(commit)</b>: git 저장소의 한 시점. 40자리 해시로 가리키면 그 시점의 파일이 정확히 정해진다.</p><p><sup class="n">2</sup><b>ASoC 토폴로지</b>: 소리 칩 안의 연결 모양(어느 블록이 어디로 이어지는지)을 커널에 알려 주는 파일.</p><p><b>DT</b>(Device Tree): 보드에 어떤 장치가 어디 붙어 있는지 커널에 알려 주는 설명 파일.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">03 · 시험 순서</p>
+<h2>위험한 첫 시도는 복구 수단이 있는 보드3에서, 확인된 것만 보드4로</h2>
+<table class="t">
+<tr><th>복구 수단</th><th>무엇을 하나</th><th>보드3</th><th>보드4</th></tr>
+<tr><td><b>USB ACM 콘솔</b><sup class="n">1</sup></td><td>네트워크가 죽어도 root 셸</td><td class="ok">있음</td><td class="no">없음 (USB가 호스트 모드)</td></tr>
+<tr><td><b>UART</b><sup class="n">2</sup></td><td>커널이 죽는 순간의 로그</td><td class="ok">있음</td><td class="no">없음</td></tr>
+<tr><td><b>fastboot</b></td><td>워치독 리셋 뒤 다시 부팅</td><td class="ok">Mac에 연결</td><td class="no">연결 안 됨</td></tr>
+<tr><td><b>/proc/last_kmsg</b></td><td>지난 부팅의 커널 로그</td><td class="ok">있음</td><td>있음</td></tr>
+<tr><td><b>Wi-Fi ssh</b></td><td>평소 작업</td><td>있음</td><td>유일한 길</td></tr>
+</table>
+<div class="k2">
+<div class="card"><h3>그래서</h3><p>커널 모듈을 처음 올리는 일(소리 카드, Wi-Fi 패닉 시험, 모듈 다시 올리기)은 보드3에서 했다. 보드3에서는 패닉이 세 번 났고 모두 원격으로 살렸다. <span class="tg">측정</span></p></div>
+<div class="card"><h3>그래도 놓친 것</h3><p>보드4에서 BT를 켠 채 Wi-Fi로 큰 다운로드를 하자 Wi-Fi가 끊겼다. 원격으로 살릴 길이 없어 사용자가 전원을 다시 넣어야 했다(07장).</p></div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>ACM</b>: USB 케이블로 보드에 터미널을 여는 방식. 보드가 USB 장치(gadget)일 때만 된다.</p><p><sup class="n">2</sup><b>UART</b>: 칩의 가장 단순한 직렬 통신 핀. 커널이 멈추기 직전까지 로그를 내보낸다.</p><p><b>워치독(watchdog)</b>: 정해진 시간 안에 신호가 없으면 보드를 리셋하는 타이머.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">04 · USB 호스트 · 포트 하나를 두 가지로</p>
+<h2>micro-USB OTG는 평소 "장치", 켜면 "호스트"가 되어 USB-A 4개가 산다</h2>
+<div class="k2" style="grid-template-columns: 1fr 1.05fr;">
+<div class="stack">
+<div class="card"><h3>평소(장치 모드)</h3><p>Mac에 꽂으면 보드가 USB 장치가 된다. ACM 콘솔과 ECM 네트워크(192.168.7.1)가 이 길로 간다. 이때 USB-A 포트(키보드 · 마우스 · 유선랜)는 죽어 있다.</p></div>
+<div class="card hl"><h3><code>e850-usbhost on</code>이 하는 일</h3><ol style="padding-left:1.2em; font-size:17px; line-height:1.55"><li><code>e850-hubpwr</code>: LAN9514 허브<sup class="n">1</sup>에 전원(LDO24)</li><li><code>gpiohold.py 3 5 0</code>: 포트 전원 GPIO<sup class="n">2</sup>를 잡아 둔다</li><li>OTG의 <code>b_sess</code>와 <code>id</code>를 0으로: 호스트 모드</li></ol><p style="margin-top:6px">끝낼 때(TERM) 거꾸로 되돌린다. 보드4의 현미경 서비스 <code>e850-scope</code>가 같은 일을 하고 있으면 손대지 않는다.</p></div>
+</div>
+<div class="stack">
+<div class="card"><h3>보드4에서 본 것 <span class="tg">측정</span></h3><pre class="s">$ lsusb
+0424:9514  LAN9514 허브
+0424:ec00  LAN9514 유선랜
+04b4:00c3  현미경 카메라 (CX3)</pre></div>
+<div class="card"><h3>부팅 때 켜지 않는 이유</h3><p>켜는 순간 micro-USB의 ACM과 ECM이 사라진다. 원격 복구 길이 없어지므로 사용자가 고르게 했다. 계속 쓰려면 <code>systemctl enable e850-usbhost</code>.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>USB 허브</b>: 포트 하나를 여러 개로 늘리는 칩. LAN9514는 허브와 유선랜이 한 칩.</p><p><sup class="n">2</sup><b>GPIO</b>: 소프트웨어로 켜고 끄는 범용 핀. 여기서는 포트 전원 스위치.</p><p><b>LDO</b>: 전압을 일정하게 내려 주는 작은 전원 회로.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">04 · 유선랜 · LAN9514</p>
+<h2>드라이버 하나, 설정 파일 두 개. 그런데 MAC가 부팅마다 바뀌었다</h2>
+<div class="k3">
+<div class="card"><h3>① 드라이버</h3><p>커널 소스의 <code>drivers/net/usb/smsc95xx.c</code>를 외부 모듈로 빌드했다. 필요한 usbnet과 MII<sup class="n">1</sup>는 커널에 이미 들어 있었다.</p></div>
+<div class="card"><h3>② 이름 · MAC</h3><p>LAN9514에 EEPROM이 없어 부팅마다 MAC<sup class="n">2</sup>가 무작위였다. 그러면 공유기가 매번 다른 주소를 준다.</p><pre class="s" style="margin-top:6px">[Match] Driver=smsc95xx
+[Link]  Name=eth0
+        MACAddressPolicy=persistent</pre><p style="margin-top:6px">persistent는 machine-id로 MAC를 만든다. 보드마다 다르고 부팅마다 같다.</p></div>
+<div class="card"><h3>③ 주소</h3><pre class="s">[Network] DHCP=yes
+[DHCPv4]  RouteMetric=100
+[Link]    RequiredForOnline=no</pre><p style="margin-top:6px">유선이 있으면 Wi-Fi(1024)보다 먼저 쓴다. 케이블이 없어도 부팅이 기다리지 않는다.</p></div>
+</div>
+<div class="k2" style="margin-top:14px">
+<div class="card"><h3>확인한 것 <span class="tg">측정</span></h3><p>보드4에서 <code>extra/smsc95xx.ko</code>가 올라가고, udev가 <code>10-e850-eth.link</code>를 적용해 이름이 <code>eth0</code>이 되었다.</p></div>
+<div class="card"><h3>못 한 것 <span class="tg o">미확인</span></h3><p>케이블이 꽂혀 있지 않아(carrier 0) 링크와 DHCP 주소 받기는 확인하지 못했다.</p></div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>usbnet / MII</b>: USB 랜 드라이버 공통 코드 / 랜 칩과 물리층 사이의 표준 접속.</p><p><sup class="n">2</sup><b>MAC 주소</b>: 장치마다 붙는 48비트 번호. 공유기는 이것으로 기기를 구별한다.</p><p><b>networkd / udev</b>: systemd의 네트워크 설정 / 장치 이름 · 권한 정하기.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">05 · 오디오 · 소리가 지나가는 길</p>
+<h2>프로그램에서 헤드폰까지 다섯 블록을 지난다. 각 블록을 mixer로 이어야 한다</h2>
+<div class="fig" style="flex: 0 0 auto; height: 250px;">
+<svg class="dg" viewBox="0 0 1136 250" font-family="Noto Sans KR, sans-serif" font-size="15.5">
+<defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5F6878"/></marker></defs>
+<rect x="0" y="62" width="150" height="96" rx="12" fill="#F2F1EB" stroke="#D8D7CF"/><text x="75" y="100" text-anchor="middle" font-weight="700" fill="#1B2333">aplay · mpv</text><text x="75" y="124" text-anchor="middle" fill="#5F6878" font-size="13.5">ALSA default</text><text x="75" y="144" text-anchor="middle" fill="#5F6878" font-size="13.5">plug → 48 kHz</text>
+<line x1="150" y1="110" x2="186" y2="110" stroke="#5F6878" stroke-width="2" marker-end="url(#ar2)"/>
+<rect x="190" y="20" width="560" height="180" rx="14" fill="#E6EFFA" stroke="#B9D2F1"/><text x="206" y="44" font-weight="700" fill="#1B2333">ABOX (오디오 DSP, 펌웨어 calliope_*.bin)</text>
+<rect x="206" y="66" width="116" height="88" rx="10" fill="#fff" stroke="#B9D2F1"/><text x="264" y="104" text-anchor="middle" font-weight="700" fill="#1B2333">RDMA0</text><text x="264" y="128" text-anchor="middle" fill="#5F6878" font-size="13.5">메모리에서 읽기</text>
+<line x1="322" y1="110" x2="346" y2="110" stroke="#5F6878" stroke-width="2" marker-end="url(#ar2)"/>
+<rect x="350" y="66" width="116" height="88" rx="10" fill="#fff" stroke="#B9D2F1"/><text x="408" y="104" text-anchor="middle" font-weight="700" fill="#1B2333">SPUS OUT0</text><text x="408" y="128" text-anchor="middle" fill="#5F6878" font-size="13.5">섞기 · 변환</text>
+<line x1="466" y1="110" x2="490" y2="110" stroke="#5F6878" stroke-width="2" marker-end="url(#ar2)"/>
+<rect x="494" y="66" width="104" height="88" rx="10" fill="#fff" stroke="#B9D2F1"/><text x="546" y="104" text-anchor="middle" font-weight="700" fill="#1B2333">SIFS0</text><text x="546" y="128" text-anchor="middle" fill="#5F6878" font-size="13.5">내부 버스</text>
+<line x1="598" y1="110" x2="622" y2="110" stroke="#5F6878" stroke-width="2" marker-end="url(#ar2)"/>
+<rect x="626" y="66" width="108" height="88" rx="10" fill="#fff" stroke="#B9D2F1"/><text x="680" y="104" text-anchor="middle" font-weight="700" fill="#1B2333">UAIF0</text><text x="680" y="128" text-anchor="middle" fill="#5F6878" font-size="13.5">I2S 출구</text>
+<text x="470" y="184" text-anchor="middle" fill="#3D4757" font-size="14">route-sifs0-to-uaif0</text>
+<line x1="750" y1="110" x2="800" y2="110" stroke="#5F6878" stroke-width="2" marker-end="url(#ar2)"/>
+<rect x="804" y="44" width="180" height="132" rx="14" fill="#fff" stroke="#D8D7CF"/><text x="894" y="80" text-anchor="middle" font-weight="700" fill="#1B2333">AUD3004X</text><text x="894" y="104" text-anchor="middle" fill="#5F6878" font-size="13.5">코덱 칩 (DAC)</text><text x="894" y="128" text-anchor="middle" fill="#5F6878" font-size="13.5">HPOUTLN까지 켜짐</text><text x="894" y="160" text-anchor="middle" fill="#3D4757" font-size="14">dev-headset</text>
+<line x1="984" y1="110" x2="1022" y2="110" stroke="#5F6878" stroke-width="2" marker-end="url(#ar2)"/>
+<rect x="1026" y="70" width="110" height="80" rx="12" fill="#14213D"/><text x="1081" y="106" text-anchor="middle" fill="#fff" font-weight="700">3.5 mm</text><text x="1081" y="128" text-anchor="middle" fill="#DCE4F2" font-size="13.5">헤드폰</text>
+</svg>
+</div>
+<div class="k2">
+<div class="card"><h3>경로를 어디서 얻었나 <span class="tg">소스</span></h3><p>Android의 <code>mixer_paths.xml</code>에서 기본값 + <code>route-sifs0-to-uaif0</code> + <code>dev-headset</code> 세 경로를 뽑았다. Android 전용(BD_MIXER, RDMA3) 부분은 뺐다. <code>mixer-path.py</code>가 이것을 <code>amixer -s</code> 입력으로 바꾼다.</p></div>
+<div class="card"><h3>부팅 때</h3><p><code>e850-audio.service</code>가 모듈을 올려 ABOX DSP<sup class="n">1</sup>에 펌웨어를 넣고, 카드가 생기면 경로를 설정한다. 그 뒤로는 <code>aplay</code> 같은 보통 ALSA 프로그램이 그대로 쓴다.</p></div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>DSP</b>: 신호 처리(소리 섞기, 표본률 바꾸기)에 특화된 프로세서. ABOX는 Exynos 안의 오디오 DSP 블록이다.</p><p><b>RDMA</b>: 메모리에 있는 소리 데이터를 읽어 오는 DMA 통로. <b>I2S</b>: 칩끼리 디지털 소리를 주고받는 직렬 규격. <b>DAC</b>: 디지털 소리를 전압으로 바꾸는 회로.</p><p><b>DAPM</b>: 쓰는 경로의 블록만 전원을 켜는 ASoC의 절전 체계. 경로가 이어졌는지 보는 데도 쓴다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">05 · 오디오 · 카드가 생기지 않은 이유</p>
+<h2>드라이버는 DT 자식 노드를 "순서"로 읽는데, 순서가 뒤집혀 있었다</h2>
+<div class="k2" style="grid-template-columns: 1fr 1.1fr;">
+<div class="stack">
+<div class="card"><h3>증상 <span class="tg">측정</span></h3><p>ABOX 펌웨어는 "Calliope is ready to sing"까지 갔다. 그런데 카드 등록이 실패했다.</p><pre class="s" style="margin-top:6px">No CPU DAIs support playback for stream UAIF0
+can't create pcm UAIF0 :-22</pre></div>
+<div class="card"><h3>원인 <span class="tg">소스</span></h3><p><code>exynos3830_sound.c</code>는 sound 노드의 자식을 정적 배열 <code>exynos_dai[]</code>(rdma0~11, wdma0~4, …, uaif0~2, …)에 <b>위치로</b> 맞춘다. 그런데 부트 이미지를 만들 때 fdtoverlay<sup class="n">1</sup>가 overlay의 새 자식들을 <b>거꾸로</b> 넣었다(merged.dtb에서 0번 fwd … 62번 rdma0). 그래서 SIFS2 같은 링크가 UAIF0 자리에 들어갔다.</p></div>
+</div>
+<div class="stack">
+<div class="card hl"><h3>수정: 이름으로 정렬한 뒤 맞춘다</h3><p><code>modules/exynos3830-sound/exynos3830-sound-order.patch</code>는 자식을 이름(접두어, 번호, <code>_be</code>)으로 정렬한 다음 배열에 맞춘다. DT는 그대로 두었다. 다른 보드의 DT도 고칠 필요가 없다.</p></div>
+<div class="card"><h3>결과 <span class="tg">측정</span></h3><p>깨끗한 부팅에서 패치한 모듈을 올리자 card0 <code>ExynosMadera</code>가 생겼다. 재생 장치 RDMA0~11과 <code>calliope_0</code>, 컨트롤 780개.</p></div>
+<div class="card"><h3>교훈</h3><p>"순서에 기대는 코드"는 도구가 바뀌면 조용히 틀린다. 오류 메시지는 UAIF0을 가리켰지만 원인은 DT를 합치는 도구에 있었다.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>fdtoverlay</b>: 기본 DT(SoC)에 보드용 DT 조각(overlay)을 덧붙여 DT 하나로 합치는 도구.</p><p><b>DAI</b>(Digital Audio Interface): 소리 데이터가 드나드는 디지털 접속점 하나. ASoC는 CPU 쪽 DAI와 코덱 쪽 DAI를 짝지어 "링크"를 만든다.</p><p><b>machine 드라이버</b>: 한 보드에서 어느 DAI를 어느 코덱에 이을지 정하는 ASoC 드라이버. 여기서는 <code>exynos3830_sound</code>.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">05 · 오디오 · 결과와 함정</p>
+<h2>재생 시간은 맞다. 그러나 한 번에 한 프로그램, 48 kHz로만</h2>
+<div class="k2" style="grid-template-columns: 1fr 1fr;">
+<div class="stack">
+<table class="t">
+<tr><th>보드</th><th>장치</th><th>입력</th><th class="n">3초 분량 재생</th></tr>
+<tr><td>보드3</td><td><code>hw:0,0</code></td><td>48 kHz WAV</td><td class="n">3.193 s</td></tr>
+<tr><td>보드4</td><td><code>default</code></td><td>44.1 kHz (변환 전)</td><td class="n no">2.56 s</td></tr>
+<tr><td>보드4</td><td><code>default</code></td><td>44.1 kHz (48k로 변환)</td><td class="n">3.33 s</td></tr>
+<tr><td>보드4</td><td><code>default</code></td><td>48 kHz</td><td class="n">3.19 s</td></tr>
+</table>
+<p class="small">44.1 kHz를 그대로 넣으면 약 15% 빨리 끝났다. 장치는 8~384 kHz를 다 받는다고 알리지만 실제로는 48 kHz로 돈다. 그래서 <code>asound.conf</code>의 plug<sup class="n">1</sup>가 늘 48 kHz S16 2채널로 바꾼다. <span class="tg">측정</span> <span class="tg o">귀로는 미확인</span></p>
+</div>
+<div class="stack">
+<div class="card"><h3>dmix가 안 된다</h3><p>여러 프로그램의 소리를 섞는 ALSA dmix<sup class="n">2</sup>는 SysV IPC 세마포어를 쓴다. 이 커널은 <code>CONFIG_SYSVIPC</code>가 꺼져 있어 "Function not implemented"가 났다. 그래서 한 번에 한 프로그램만 소리를 낸다.</p></div>
+<div class="card" style="border-color:#E8B9A6"><h3>패닉: 같은 부팅에서 다시 올리기</h3><p>등록에 실패한 같은 부팅에서 원래 모듈을 내리고 패치 모듈을 올리자 커널 패닉(<code>__list_add_valid</code> BUG)이 났다. 그래서 <code>audio.sh</code>는 카드 없이 모듈만 있으면 다시 시도하지 않고 "재부팅하라"고만 한다.</p></div>
+<div class="card"><h3>권한</h3><p><code>philip</code>이 <code>audio</code> 그룹에 없어 장치를 열지 못했다. 설치할 때 일반 사용자(uid 1000~59999)를 그룹에 넣는다.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>plug</b>: ALSA의 자동 변환 층. 프로그램이 주는 형식(표본률, 채널, 비트)을 장치가 받는 형식으로 바꾼다.</p><p><sup class="n">2</sup><b>dmix</b>: 여러 프로그램의 소리를 사용자 공간에서 섞어 장치 하나로 보내는 ALSA 플러그인. 프로세스끼리 공유 메모리와 세마포어로 맞춘다.</p><p><b>SysV IPC</b>: 프로세스끼리 공유 메모리 · 세마포어 · 메시지 큐를 쓰는 오래된 유닉스 방식.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">06 · 영상 코덱 MFC</p>
+<h2>하드웨어 코덱은 펌웨어 파일 하나로 장치가 생긴다. 쓰는 시험은 아직이다</h2>
+<div class="k2" style="grid-template-columns: 1fr 1fr;">
+<div class="stack">
+<div class="card"><h3>넣은 것</h3><ul><li><code>/lib/firmware/mfc_fw.bin</code> (Linaro의 <code>mfc_fw_v10.21.bin</code>을 드라이버가 찾는 이름으로)</li><li><code>e850-mfc.service</code>: 부팅 때 <code>modprobe exynos_mfc</code></li><li>사용자를 <code>video</code> 그룹에</li></ul></div>
+<div class="card"><h3>생긴 장치 <span class="tg">측정</span></h3><pre class="s">/dev/video6  s5p-mfc-dec   디코더
+/dev/video7  s5p-mfc-enc   인코더
+/dev/video8, 9             secure 판 (안 씀)</pre><p>보드3 · 보드4 둘 다. 펌웨어는 장치를 처음 열 때 올라간다.</p></div>
+</div>
+<div class="stack">
+<div class="card"><h3>V4L2 M2M</h3><p>MFC는 V4L2 mem2mem<sup class="n">1</sup> 장치다. 압축된 H.264를 한 버퍼에 넣으면 풀린 화면이 다른 버퍼로 나온다. ffmpeg의 <code>h264_v4l2m2m</code>, mpv의 <code>--hwdec=v4l2m2m-copy</code>가 이 길을 쓴다.</p></div>
+<div class="card" style="border-color:#E8B9A6"><h3>아직 못 한 것 <span class="tg o">미확인</span></h3><p>실제로 영상을 풀어 보는 시험. vendor 드라이버가 일반 리눅스 프로그램이 기대하는 형식(NV12 등)과 동작을 다 따르는지는 재 보지 않았다. 다음 할 일 목록에 있다.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>V4L2 mem2mem</b>: 리눅스 영상 장치 규격(V4L2) 가운데, 메모리에서 받아 처리하고 다시 메모리로 내보내는 장치(코덱, 크기 변환기) 방식.</p><p><b>MFC</b>(Multi-Format Codec): Exynos의 하드웨어 영상 압축 · 풀기 블록. H.264, HEVC 등을 CPU 대신 처리한다.</p><p><b>H.264</b>: 가장 널리 쓰이는 영상 압축 형식. YouTube도 이 형식을 준다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">06 · X 데스크톱 · 따로 설치하는 무거운 기능</p>
+<h2>GPU 드라이버 없이 CPU로 그리는 창 화면. 켤 때만 켠다</h2>
+<div class="k2" style="grid-template-columns: 1.05fr 1fr;">
+<div class="stack">
+<div class="card"><h3>구성</h3><ul><li><b>Xorg + fbdev</b><sup class="n">1</sup>: DPU가 HDMI로 내보내는 <code>/dev/fb0</code>에 그대로 그린다. ShadowFB로 CPU가 그린다.</li><li><b>Openbox</b>(창 관리자), <b>LXTerminal</b>, 나눔 글꼴</li><li><b>Firefox ESR</b>, <b>mpv</b></li><li>키보드 · 마우스: <code>usbhost</code>와 libinput</li></ul></div>
+<div class="card"><h3>왜 GPU를 못 쓰나</h3><p>칩에 Mali GPU가 있지만 사용자 공간 드라이버(OpenGL ES 라이브러리)는 Android용만 있다. Debian에서 쓸 수 있는 것이 없다.</p></div>
+</div>
+<div class="stack">
+<div class="card hl"><h3>켜고 끄기</h3><pre class="s">$ e850-desktop start   # tty7에 X, dvslive 멈춤
+$ e850-desktop stop    # tty1 글자 화면, dvslive 다시
+$ e850-desktop enable  # 부팅 때 켜기 (원하면)</pre><p>systemd unit이 <code>Conflicts=dvslive.service</code>라 DVS 화면과 동시에 돌지 않는다. 끄면 tty1로 돌아가고 dvslive를 다시 띄운다.</p></div>
+<div class="card" style="border-color:#E8B9A6"><h3>시험 상태 <span class="tg o">미확인</span></h3><p>패키지와 설정은 보드4 · 보드3에 설치됐다. 보드3에서 X를 켜자 커널 패닉이 났다(07장 뒤쪽). 원인을 고쳤지만 보드에서 확인하기 전이라 X, Firefox, YouTube는 아직 재지 못했다.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>fbdev</b>: 화면 메모리(framebuffer)에 직접 그리는 가장 단순한 X 드라이버. 가속은 없다.</p><p><b>X(Xorg)</b>: 리눅스의 전통적인 창 화면 서버. 프로그램은 X에 그려 달라고 요청한다.</p><p><b>tty</b>: 리눅스의 가상 터미널. HDMI 화면에서 tty1은 글자 콘솔, tty7은 X가 쓴다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">07 · Bluetooth · 사용자 공간 브리지</p>
+<h2>vendor의 연결부가 빌드되지 않아, 파이썬 프로그램 하나로 BlueZ에 이었다</h2>
+<div class="fig" style="flex: 0 0 auto; height: 230px;">
+<svg class="dg" viewBox="0 0 1136 230" font-family="Noto Sans KR, sans-serif" font-size="15.5">
+<defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5F6878"/></marker><marker id="ar3b" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#5F6878"/></marker></defs>
+<rect x="0" y="40" width="190" height="130" rx="14" fill="#14213D"/><text x="95" y="86" text-anchor="middle" fill="#fff" font-weight="700">WLBT 칩</text><text x="95" y="110" text-anchor="middle" fill="#DCE4F2" font-size="13.5">Wi-Fi + BT 한 펌웨어</text><text x="95" y="132" text-anchor="middle" fill="#DCE4F2" font-size="13.5">bt.hcf (이미 있던 파일)</text>
+<line x1="194" y1="105" x2="236" y2="105" stroke="#5F6878" stroke-width="2" marker-end="url(#ar3)" marker-start="url(#ar3b)"/>
+<rect x="240" y="40" width="200" height="130" rx="14" fill="#fff" stroke="#D8D7CF"/><text x="340" y="82" text-anchor="middle" font-weight="700" fill="#1B2333">scsc_bt.ko</text><text x="340" y="106" text-anchor="middle" fill="#5F6878" font-size="13.5">/dev/scsc_h4_0</text><text x="340" y="128" text-anchor="middle" fill="#5F6878" font-size="13.5">H4 바이트 흐름</text><text x="340" y="150" text-anchor="middle" fill="#5F6878" font-size="13.5">(경계 없음)</text>
+<line x1="444" y1="105" x2="486" y2="105" stroke="#5F6878" stroke-width="2" marker-end="url(#ar3)" marker-start="url(#ar3b)"/>
+<rect x="490" y="20" width="250" height="170" rx="14" fill="#E6EFFA" stroke="#B9D2F1"/><text x="615" y="56" text-anchor="middle" font-weight="700" fill="#1B2333">e850-btbridge.py</text><text x="615" y="82" text-anchor="middle" fill="#3D4757" font-size="13.5">poll로 양쪽을 기다림</text><text x="615" y="106" text-anchor="middle" fill="#3D4757" font-size="13.5">H4 헤더로 패킷 자르기</text><text x="615" y="130" text-anchor="middle" fill="#3D4757" font-size="13.5">01 명령 · 02 ACL · 03 SCO</text><text x="615" y="152" text-anchor="middle" fill="#3D4757" font-size="13.5">04 이벤트 · 05 ISO</text><text x="615" y="176" text-anchor="middle" fill="#5F6878" font-size="12.5">e850-bt.service (Restart=on-failure)</text>
+<line x1="744" y1="105" x2="786" y2="105" stroke="#5F6878" stroke-width="2" marker-end="url(#ar3)" marker-start="url(#ar3b)"/>
+<rect x="790" y="40" width="160" height="130" rx="14" fill="#fff" stroke="#D8D7CF"/><text x="870" y="82" text-anchor="middle" font-weight="700" fill="#1B2333">hci_vhci</text><text x="870" y="106" text-anchor="middle" fill="#5F6878" font-size="13.5">/dev/vhci</text><text x="870" y="128" text-anchor="middle" fill="#5F6878" font-size="13.5">읽기 · 쓰기 한 번에</text><text x="870" y="150" text-anchor="middle" fill="#5F6878" font-size="13.5">패킷 하나</text>
+<line x1="954" y1="105" x2="996" y2="105" stroke="#5F6878" stroke-width="2" marker-end="url(#ar3)" marker-start="url(#ar3b)"/>
+<rect x="1000" y="40" width="136" height="130" rx="14" fill="#F2F1EB" stroke="#D8D7CF"/><text x="1068" y="86" text-anchor="middle" font-weight="700" fill="#1B2333">BlueZ</text><text x="1068" y="110" text-anchor="middle" fill="#5F6878" font-size="13.5">hci0</text><text x="1068" y="132" text-anchor="middle" fill="#5F6878" font-size="13.5">bluetoothctl</text>
+</svg>
+</div>
+<div class="k3">
+<div class="card"><h3>왜 브리지인가 <span class="tg">소스</span></h3><p>커널 안의 <code>scsc_bluez.c</code>는 빌드되지 않는다. 없는 헤더(<code>wakelock.h</code>), 두 번째 <code>module_init</code>, 커널 버퍼를 사용자 함수에 넘기는 코드가 있다.</p></div>
+<div class="card"><h3>첫 실패와 고침</h3><p>vhci가 1초 뒤 hci0을 스스로 만들기를 기다렸더니, 그 전에 칩의 이벤트가 와서 write가 ENODEV<sup class="n">1</sup>로 실패했다. vhci에 <code>ff 00</code>을 먼저 써서 hci0을 바로 만들게 했다.</p></div>
+<div class="card"><h3>결과 <span class="tg">측정</span></h3><p>보드3: hci0 UP RUNNING, 12초 스캔에 27대. 보드4: 23대. 스캔하는 동안 Wi-Fi 복구 0번, ping 손실 0.</p></div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>ENODEV</b>: "그런 장치가 없다"는 리눅스 오류 번호. 여기서는 hci0이 아직 만들어지지 않았다는 뜻.</p><p><b>H4</b>: BT 칩과 호스트가 주고받는 가장 단순한 형식. 바이트 하나로 종류(명령 · 데이터 · 이벤트)를 알리고 헤더에 길이가 있다.</p><p><b>vhci</b>: 사용자 프로그램이 가짜 BT 장치를 만들게 해 주는 커널 드라이버. BlueZ는 진짜 칩과 구별하지 않는다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">07 · 사고 · 보드4가 사라졌다</p>
+<h2>BT를 켠 채 큰 다운로드를 하자 보드4가 Wi-Fi에서 사라졌다. 보드3에서 재현했다</h2>
+<div class="k2" style="grid-template-columns: 1fr 1.1fr;">
+<div class="stack">
+<div class="card"><h3>보드4에서 일어난 일 <span class="tg">측정</span></h3><ol style="padding-left:1.2em; font-size:17px; line-height:1.55"><li><code>e850-bt.service</code>가 켜진 상태</li><li>desktop 패키지 278개를 Wi-Fi로 받아 설치. 마지막 줄까지 정상(rc=0)</li><li>직후 Wi-Fi에서 사라짐(ARP incomplete)</li><li>USB는 호스트 모드, 유선 케이블 없음 → 원격으로 살릴 길 없음</li><li>사용자가 전원을 다시 넣음. 부팅은 되지만 무선이 안 됨</li></ol></div>
+<div class="card"><h3>첫 가설 (뒤에 뒤집힘)</h3><p>Wi-Fi 펌웨어(WLBT)는 원래 가끔 패닉<sup class="n">1</sup>하고, 드라이버가 6초쯤 뒤 되살린다(11.31). BT가 열려 있을 때 그 되살리기가 실패하는 것 아닐까. 이 가설로 실제 버그를 하나 찾았지만, 보드4의 원인은 따로 있었다(07장 끝).</p></div>
+</div>
+<div class="stack">
+<div class="card hl"><h3>재현(보드3): BT 브리지를 켠 채 강제 패닉</h3><pre class="s">scsc_mx_service_open: error: refused due to
+    previous f/w failure
+slsi_chip_recovery: fail at line:7644   (WARNING)
+slsi_net_open: Fail: called when MLME in
+    blocked state</pre><p style="margin-top:6px">Wi-Fi가 40초 안에 돌아오지 않았고 <code>/proc/driver/mxman_ctrl0</code>도 사라졌다. BT를 끄고 하면 늘 돌아왔다.</p></div>
+<div class="card" style="border-color:#E8B9A6"><h3>살리는 방법도 없다</h3><p><code>rmmod scsc_wlan; modprobe scsc_wlan</code>은 커널 패닉(<code>mxman_wifi_kobject_ref_get</code>). 이 상태는 재부팅으로만 풀린다. 보드3은 워치독 → fastboot → <code>fastboot reboot</code>로 살렸다.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>펌웨어 패닉</b>: 칩 안의 펌웨어가 스스로 오류를 감지하고 멈추는 것. 드라이버가 알아채고 펌웨어를 다시 올린다(복구).</p><p><b>MLME</b>: Wi-Fi 드라이버에서 연결 · 해제 같은 관리 동작을 맡는 부분. "blocked"면 복구가 끝나지 않아 막힌 상태다.</p><p><b>ARP incomplete</b>: 그 IP에 대한 MAC 주소 응답이 없다는 뜻. 그 기기가 망에 없다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">07 · 원인 · 두 작업의 경주</p>
+<h2>복구 작업이 "열기 금지"가 풀리기 전에 서비스를 열고, 다시 시도하지 않았다</h2>
+<div class="fig" style="flex: 0 0 auto; height: 270px;">
+<svg class="dg" viewBox="0 0 1136 270" font-family="Noto Sans KR, sans-serif" font-size="15">
+<defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5F6878"/></marker></defs>
+<text x="0" y="22" font-weight="700" fill="#1B2333">mxman_failure_work</text>
+<rect x="190" y="6" width="170" height="30" rx="6" fill="#F6D9CC"/><text x="275" y="26" text-anchor="middle" fill="#1B2333" font-size="13.5">NOT_ALLOWED_START</text>
+<rect x="366" y="6" width="520" height="30" rx="6" fill="#F2F1EB" stroke="#D8D7CF"/><text x="626" y="26" text-anchor="middle" fill="#1B2333" font-size="13.5">scsc_mx_module_reset(): 모든 클라이언트 remove → probe</text>
+<rect x="892" y="6" width="200" height="30" rx="6" fill="#D5EBDB"/><text x="992" y="26" text-anchor="middle" fill="#1B2333" font-size="13.5">ALLOWED_START_STOP</text>
+<text x="0" y="86" font-weight="700" fill="#1B2333">BT remove</text>
+<rect x="366" y="70" width="440" height="30" rx="6" fill="#E6EFFA" stroke="#B9D2F1"/><text x="586" y="90" text-anchor="middle" fill="#1B2333" font-size="13.5">사용자 공간(브리지)이 장치를 닫을 때까지 기다림</text>
+<text x="0" y="150" font-weight="700" fill="#1B2333">slsi_chip_recovery</text>
+<text x="0" y="170" fill="#5F6878" font-size="13">(다른 작업 큐)</text>
+<rect x="430" y="134" width="150" height="30" rx="6" fill="#fff" stroke="#D8D7CF"/><text x="505" y="154" text-anchor="middle" fill="#1B2333" font-size="13.5">WLAN probe가 넣음</text>
+<line x1="580" y1="149" x2="626" y2="149" stroke="#5F6878" stroke-width="2" marker-end="url(#ar4)"/>
+<rect x="630" y="134" width="200" height="30" rx="6" fill="#B2401A"/><text x="730" y="154" text-anchor="middle" fill="#fff" font-size="13.5">service_open → 거부</text>
+<text x="842" y="154" fill="#B2401A" font-size="13.5" font-weight="700">끝. 다시 안 함</text>
+<line x1="730" y1="40" x2="730" y2="130" stroke="#B2401A" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="738" y="120" fill="#B2401A" font-size="13">이 시점엔 아직 금지</text>
+<rect x="0" y="196" width="1136" height="70" rx="12" fill="#F2F1EB" stroke="#D8D7CF"/>
+<text x="18" y="224" fill="#1B2333" font-weight="700">BT가 꺼져 있으면</text><text x="200" y="224" fill="#3D4757">remove가 바로 끝나 금지가 먼저 풀리고, 복구 작업의 열기가 성공한다. 그래서 그동안 문제가 안 보였다.</text>
+<text x="18" y="252" fill="#1B2333" font-weight="700">로그 근거</text><text x="200" y="252" fill="#3D4757">거부 메시지 바로 다음 줄에 서비스 쪽의 <tspan font-family="JetBrains Mono, monospace">error:0</tspan>. 금지가 풀린 것은 거부 직후였다.</text>
+</svg>
+</div>
+<p class="small">두 작업은 서로 다른 작업 큐<sup class="n">1</sup>에서 돈다. 근거는 vendor 소스(<code>mxman.c</code>, <code>mgt.c</code>)를 읽은 것과 보드3 로그의 순서다. <span class="tg">소스</span> <span class="tg">측정</span> BT remove가 왜 꼭 그만큼 늦는지는 재지 않았다.</p>
+<div class="fn"><p><sup class="n">1</sup><b>작업 큐(workqueue)</b>: 커널이 나중에 할 일을 넣어 두는 줄. 줄이 다르면 서로 순서가 보장되지 않는다.</p><p><b>경쟁 조건(race condition)</b>: 두 작업의 순서에 따라 결과가 달라지는 버그. 보통은 운 좋게 맞는 순서로 돌아 숨어 있다.</p><p><b>remove / probe</b>: 드라이버가 장치를 놓는 / 다시 잡는 함수. 펌웨어 복구 때 모든 드라이버가 이 둘을 거친다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">07 · 수정 · 다시 시도하기</p>
+<h2>열기에 실패하면 100 ms마다 최대 50번 다시 연다</h2>
+<div class="cols" style="grid-template-columns: 1.05fr 1fr;">
+<pre class="s">/* mgt.c, slsi_chip_recovery() */
+-  SLSI_EC_GOTO(slsi_sm_wlan_service_open(sdev),
+-               err, err_done);
++  /* mxman_failure_work forbids service start until
++   * every client is reset; with BT open that ends
++   * after we get here, so retry a while. */
++  for (i = 0; i &lt; 50; i++) {
++      err = slsi_sm_wlan_service_open(sdev);
++      if (!err)
++          break;
++      SLSI_INFO(sdev, "service open failed (%d)"
++                " during recovery, retry %d\n",
++                err, i + 1);
++      msleep(100);
++  }
++  if (err)
++      goto err_done;</pre>
+<div class="stack">
+<div class="card" style="border-color:#E8B9A6"><h3>실패한 첫 판</h3><p>거부의 오류 번호 <code>-EILSEQ</code><sup class="n">1</sup>일 때만 다시 시도했다. 그런데 <code>slsi_sm_wlan_service_open</code>이 그것을 <code>-EINVAL</code>로 바꿔 돌려준다. 그래서 아무 일도 하지 않았다. 지금 판은 어떤 오류든 다시 시도한다. 실패한 열기는 상태를 PROBED로 되돌리므로 다시 열어도 된다. <span class="tg">소스</span></p></div>
+<table class="t">
+<tr><th>보드3, 강제 패닉</th><th>결과</th><th class="n">Wi-Fi 복귀</th></tr>
+<tr><td>원래 모듈, BT 켬</td><td class="no">안 돌아옴</td><td class="n">—</td></tr>
+<tr><td>고친 모듈, BT 켬</td><td class="ok">거부 1번, retry 1에서 성공</td><td class="n">8,094 ms</td></tr>
+<tr><td>고친 모듈, BT 끔</td><td class="ok">WARNING 0</td><td class="n">8,139 ms</td></tr>
+</table>
+<p class="small">BT 브리지는 복구 때 끝나고 5초 뒤 다시 뜬다(hci0 UP, 스캔 17대). <span class="tg">측정</span></p>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>-EINVAL / -EILSEQ</b>: 커널 함수가 돌려주는 음수 오류 번호("잘못된 인자", "잘못된 순서").</p><p><b>msleep</b>: 커널 코드가 밀리초 동안 잠드는 함수.</p><p><b>패치</b>: 고친 차이만 적은 파일. <code>-</code>는 지운 줄, <code>+</code>는 넣은 줄.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">07 · 진짜 원인 · 로그인하면 커널이 죽었다</p>
+<h2>X를 켜자 보드3이 죽었고, 그 뒤로는 부팅할 때마다 35초에 죽었다</h2>
+<div class="k2" style="grid-template-columns: 1.05fr 1fr;">
+<div class="stack">
+<div class="card"><h3>UART에 남은 것 <span class="tg">측정</span></h3><pre class="s">Internal error: BRK handler: f2005512
+pc : freqboost_can_attach+0x1bc [ems]
+ cpu_cgroup_can_attach ← cgroup_attach_task
+ ← cgroup_procs_write      (Comm: systemd, PID 1)
+Kernel panic - not syncing</pre><p style="margin-top:6px"><code>0x5512</code>는 UBSAN<sup class="n">1</sup>의 "배열 범위 초과" 함정이다. systemd가 프로세스를 cgroup<sup class="n">2</sup>에 넣는 순간 vendor 스케줄러 모듈 <code>ems</code>가 죽었다.</p></div>
+<div class="card"><h3>소스 <span class="tg">소스</span></h3><pre class="s">dst_bg = css->id - 1;          /* cgroup 번호 */
+bg->group[dst_bg].tasks += 1;  /* 배열 크기 9 */</pre><p style="margin-top:6px">Android의 cpu cgroup 9개만 생각한 코드다.</p></div>
+</div>
+<div class="stack">
+<div class="card hl"><h3>왜 이제야</h3><ol style="padding-left:1.2em; font-size:17px; line-height:1.5"><li>기본 rootfs에는 <code>libpam-systemd</code>가 없다. 로그인해도 세션이 안 생기고 cpu 컨트롤러가 꺼져 있다(보드1 확인).</li><li>desktop 패키지가 <code>dbus-user-session</code> → <code>libpam-systemd</code>를 들였다.</li><li>이제 로그인마다 <code>user@UID.service</code>가 생기고 cpu를 위임받는다. 사용자 slice들이 CPUWeight를 켜서 cpu cgroup이 9개를 넘는다.</li></ol></div>
+<div class="card" style="border-color:#E8B9A6"><h3>보드4는?</h3><p>같은 패키지를 설치한 직후 사라졌다. 다음 로그인에서 패닉 → 워치독 → fastboot에서 멈춤 → Wi-Fi에서 사라짐. 이것일 가능성이 크다. <span class="tg o">보드4 로그로 미확인</span></p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>UBSAN</b>: 배열 범위 초과 같은 잘못을 실행 중에 잡는 컴파일러 검사. 이 커널은 잡으면 멈춘다.</p><p><sup class="n">2</sup><b>cgroup</b>: 프로세스를 묶어 CPU · 메모리를 나누는 커널 기능. systemd가 서비스 · 로그인마다 만든다.</p><p><b>PAM / logind</b>: 로그인 절차 모듈 / 로그인 세션 관리 서비스.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">07 · 수정 · cpu 컨트롤러를 끈다</p>
+<h2>두 겹으로 막았다: 커널 명령줄과 systemd 설정</h2>
+<div class="k2" style="grid-template-columns: 1fr 1fr;">
+<div class="stack">
+<div class="card hl"><h3>① 부트 명령줄 <code>cgroup_disable=cpu</code><sup class="n">1</sup></h3><p>cpu 컨트롤러가 꺼지면 모든 태스크가 루트(id 1)에 있어 EMS 번호가 늘 0이다. 이 시스템은 cgroup CPU 가중치를 쓰지 않는다.</p><p style="margin-top:6px"><code>build-bootimg.sh</code>에 넣었고, 지금 이미지(boot-dvs3)에는 DTB의 bootargs만 고친 판을 만들었다.</p></div>
+<div class="card"><h3>② desktop 설치가 apt 전에</h3><pre class="s"># /etc/systemd/system/user@.service.d/
+#   e850-no-cpu-delegate.conf
+[Service]
+Delegate=
+Delegate=pids memory</pre><p style="margin-top:6px">새 이미지를 굽지 않은 보드용. 컨테이너 시험: 로그인 하나에 cpu cgroup 13개 → 1개. <span class="tg">측정</span></p></div>
+</div>
+<div class="stack">
+<div class="card" style="border-color:#E8B9A6"><h3>실수: <code>fastboot boot</code></h3><p>굽지 않고 RAM으로 띄우려 했다. 이 LK에서는 안 된다는 것이 기록 7.3절에 이미 있었다. LK가 멈춰 보드3 전원을 다시 넣어야 했다. 기록을 먼저 찾아봤어야 했다.</p></div>
+<div class="card"><h3>교훈</h3><ul><li>패키지 하나(<code>libpam-systemd</code>)가 커널의 숨은 가정을 깨울 수 있다.</li><li>그럴듯한 첫 가설로 실제 버그를 찾았어도, 그것이 그 사고의 원인이라는 보장은 없다. 사고 보드의 로그(<code>/proc/last_kmsg</code>)가 먼저다.</li></ul></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>cgroup_disable=</b>: 부팅 때 지정한 cgroup 컨트롤러를 아예 끄는 커널 인자.</p><p><b>Delegate=</b>: systemd가 서비스에게 cgroup 컨트롤러 관리를 넘겨주는 설정. 빈 값으로 목록을 지운 뒤 다시 쓴다.</p><p><b>drop-in</b>: 원래 unit 파일을 고치지 않고 덧붙이는 설정 조각(<code>*.service.d/*.conf</code>).</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">08 · 정리 · 다른 보드에 넣기</p>
+<h2>저장소만 있으면 어느 보드든 같은 세 줄이다</h2>
+<div class="k2" style="grid-template-columns: 1.1fr 1fr;">
+<div class="stack">
+<pre class="s"># Mac (저장소 루트, Docker Desktop 켜 둠)
+sh features/host/bundle.sh
+    # → out/e850-features.tgz (모듈 빌드 + 펌웨어 확인)
+sh features/host/deploy.sh<sup class="n">1</sup> philip@&lt;보드 IP&gt; \
+    ethernet audio video bt       # X 없이 가볍게
+sh features/host/deploy.sh philip@&lt;보드 IP&gt; desktop
+
+# 보드
+e850-feature status
+sudo systemctl reboot     # bt를 처음 넣었으면 한 번</pre>
+<div class="card"><h3>bt를 처음 넣은 보드는 재부팅 한 번</h3><p>고친 <code>scsc_wlan.ko</code>는 다음 부팅부터 쓰인다(다시 올리면 패닉). 그 전에는 <code>bt-check.sh</code>가 BT를 켜지 않는다. 원래 모듈에 BT를 켜면 07장의 사고가 다시 난다.</p></div>
+</div>
+<div class="stack">
+<div class="card hl"><h3>새 기능을 만들 때</h3><ol style="padding-left:1.2em; font-size:17px; line-height:1.55"><li><code>features/&lt;이름&gt;/feature.sh</code>: 맨 위에 <code># about:</code>(와 <code># needs:</code>), <code>install | remove | status</code></li><li><code>. "$ROOT/common.sh"</code>로 <code>ko_install</code>, <code>unit_install</code>, <code>apt_need</code>를 쓴다</li><li>새 모듈은 <code>modules/&lt;이름&gt;/build-module.sh</code>, 그리고 <code>bundle.sh</code>의 <code>MODS</code>에</li><li>펌웨어는 <code>fetch-fw.py</code>의 <code>FILES</code>에. <code>fw.sha256</code>에 지문이 더해진다</li></ol></div>
+<div class="card"><h3>커널을 바꾸면</h3><p>KVER이 달라져 모듈 설치가 거부된다. 새 커널로 <code>bundle.sh</code>를 다시 돌리면 된다. 소스 패치는 그대로 쓰인다.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>deploy.sh</b>: 묶음을 scp로 보드의 <code>/var/tmp</code>에 보내고, ssh로 <code>sudo e850-feature install …</code>을 실행하는 Mac 스크립트. 보드의 sudo 비밀번호는 사람이 친다.</p><p><b>KVER</b>: 묶음을 만들 때 쓴 커널 릴리스 문자열. 보드의 <code>uname -r</code>과 같아야 한다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">08 · 정리 · 확인한 것과 못 한 것</p>
+<h2>장치가 "생긴" 것과 "쓸 수 있는" 것은 다르다</h2>
+<table class="t">
+<tr><th>기능</th><th>확인한 것 <span class="tg">측정</span></th><th>못 한 것 <span class="tg o">미확인</span></th></tr>
+<tr><td><b>usbhost</b></td><td>허브 · 랜 · 현미경이 USB에 보임(보드4)</td><td>키보드 · 마우스를 꽂아 입력</td></tr>
+<tr><td><b>ethernet</b></td><td><code>extra/smsc95xx.ko</code> 적재, 이름 <code>eth0</code>, link 파일 적용</td><td>케이블 링크, DHCP 주소</td></tr>
+<tr><td><b>audio</b></td><td>카드 생성, 경로 HPOUTLN까지, 3초 분량 3.19 s</td><td>귀로 듣기, HDMI 소리, 녹음</td></tr>
+<tr><td><b>video</b></td><td><code>/dev/video6</code> 디코더 · <code>video7</code> 인코더 생성</td><td>실제 디코딩 · 인코딩</td></tr>
+<tr><td><b>bt</b></td><td>hci0 UP, 스캔 23~27대, 복구 수정 시험(8.1 s)</td><td>짝짓기(페어링<sup class="n">1</sup>), 오디오 · 입력 장치 연결</td></tr>
+<tr><td><b>desktop</b></td><td>설치(보드4 · 3), 패닉 원인과 수정, drop-in 컨테이너 시험</td><td>보드에서 수정 확인, X, Firefox, YouTube</td></tr>
+<tr><td><b>보드4 무선</b></td><td>사용자가 전원을 다시 넣음, 부팅됨</td><td>원인 확인(07장의 패닉으로 추정, <code>last_kmsg</code> 필요)</td></tr>
+</table>
+<p class="small">보드3에는 같은 기능을 모두 넣고 재부팅해 확인했다: Wi-Fi, BT, 소리 카드, MFC가 함께 올라오고 Wi-Fi 복구 횟수 0. <span class="tg">측정</span></p>
+<div class="fn"><p><sup class="n">1</sup><b>페어링(pairing)</b>: BT 기기 둘이 처음 만날 때 키를 나눠 서로를 기억하는 절차. 스캔보다 한 단계 더 가야 한다.</p><p><b>HDMI 소리</b>: HDMI 선으로 화면과 함께 보내는 소리. 이 보드는 LT8912B 브리지를 거치는데 소리 경로는 아직 잇지 않았다.</p></div>
+</section></div>
+
+<div class="frame"><section contenteditable="true" spellcheck="false" class="slide">
+<p class="eb">08 · 정리 · 배운 것과 남은 일</p>
+<h2>vendor 코드의 숨은 가정 세 개가 이번 작업의 대부분이었다</h2>
+<div class="k2" style="grid-template-columns: 1fr 1fr;">
+<div class="stack">
+<div class="card"><h3>배운 것</h3><ul><li><b>순서에 기대는 코드</b>: vendor 소리 드라이버<sup class="n">1</sup>는 DT 자식의 위치를 믿었다. DT 합치는 도구가 순서를 바꾸자 조용히 틀렸다.</li><li><b>Android에서만 맞는 순서</b>: Wi-Fi 복구는 BT 사용자가 늘 빨리 닫는다고 가정했다. Debian의 브리지는 그렇지 않았다.</li><li><b>다시 올리기는 안전하지 않다</b>: 두 모듈 모두 rmmod 뒤 다시 올리면 패닉. 그래서 "다음 부팅부터"를 설계에 넣었다.</li><li><b>Android의 cgroup 수</b>: 스케줄러 모듈 <code>ems</code>는 cpu cgroup이 9개뿐이라고 믿었다. 패키지 하나가 그 가정을 깼다.</li><li><b>복구 길이 먼저</b>: 원격 복구 수단이 없는 보드에서 놓쳤다.</li></ul></div>
+</div>
+<div class="stack">
+<div class="card hl"><h3>남은 일</h3><ol style="padding-left:1.2em; font-size:17px; line-height:1.55"><li>보드3 전원 재투입 → <code>cgroup_disable=cpu</code> 이미지 확인</li><li>보드4: USB 케이블로 같은 이미지, <code>last_kmsg</code>로 원인 확인, 고친 묶음 배포</li><li>X · Firefox · YouTube 측정(480p · 720p 프레임 수)</li><li>MFC 디코딩, 헤드폰, 유선랜</li><li>보드1 · 보드2에도 X 없이 설치</li></ol></div>
+<div class="card"><h3>기록</h3><p>저장소 <code>docs/E85096-LINUX510-BOOT.md</code> 11.76~11.80, <code>features/README.md</code>, <code>docs/BRINGUP_STATUS.md</code>.</p></div>
+</div>
+</div>
+<div class="fn"><p><sup class="n">1</sup><b>vendor 드라이버</b>: 칩 회사가 만들어 BSP에 넣은 드라이버. 리눅스 본가(mainline)에 들어가지 않아 다른 환경에서 시험된 적이 적다.</p><p><b>mainline</b>: Linus Torvalds가 관리하는 리눅스 본래 소스. 여기 들어간 드라이버는 많은 사람이 검토한다.</p></div>
+</section></div>
+</main>
+<script>
+(() => {
+  const root = document.documentElement, frames = [...document.querySelectorAll('.frame')], slides = [...document.querySelectorAll('.slide')];
+  const pos = document.getElementById('pos');
+  let cur = 0;
+  const presenting = () => document.body.classList.contains('present');
+  const fit = () => root.style.setProperty('--s', presenting() ? Math.min(innerWidth / 1280, innerHeight / 720) : Math.min(1, (root.clientWidth - 32) / 1280));
+  const show = i => { cur = Math.max(0, Math.min(frames.length - 1, i)); frames.forEach((f, j) => f.classList.toggle('on', j === cur)); pos.textContent = (cur + 1) + ' / ' + frames.length; };
+  const nearest = () => { let best = 0, d = Infinity; frames.forEach((f, j) => { const r = f.getBoundingClientRect(), dd = Math.abs(r.top + r.height / 2 - innerHeight / 2); if (dd < d) { d = dd; best = j; } }); return best; };
+  const edit = on => slides.forEach(s => s.setAttribute('contenteditable', on ? 'true' : 'false'));
+  function enter(from) { if (document.activeElement) document.activeElement.blur(); document.body.classList.add('present'); edit(false); show(from); fit();
+    if (root.requestFullscreen) root.requestFullscreen().catch(() => {}); }
+  function exit() { document.body.classList.remove('present'); edit(true); fit(); frames[cur].scrollIntoView({ block: 'center' });
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); }
+  document.getElementById('play').onclick = () => enter(nearest());
+  document.getElementById('play0').onclick = () => enter(0);
+  addEventListener('keydown', e => {
+    if (!presenting()) return;
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(e.key)) { show(cur + 1); e.preventDefault(); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) { show(cur - 1); e.preventDefault(); }
+    else if (e.key === 'Home') show(0); else if (e.key === 'End') show(frames.length - 1); else if (e.key === 'Escape') exit();
+  });
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && presenting()) exit(); });
+  document.getElementById('deck').addEventListener('click', e => { if (presenting()) show(cur + (e.clientX > innerWidth / 2 ? 1 : -1)); });
+  addEventListener('resize', fit); fit(); pos.textContent = frames.length + '장';
+  document.getElementById('save').onclick = () => {
+    if (presenting()) exit();
+    frames.forEach(f => f.classList.remove('on'));
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['<!doctype html>\n' + root.outerHTML], { type: 'text/html' }));
+    a.download = 'FEATURES-LECTURE-20261121.html'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+})();
+</script>
+</body>
+</html>

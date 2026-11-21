@@ -92,6 +92,12 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
 - **hotplug:** `echo 0 > cpuN/online`은 `e850-cpuhp.ko`가 올라가 있을 때만 한다. 없으면 그 코어는 재부팅할 때까지 돌아오지 않는다.
 - **카메라:** `ov5647-cap.py`는 실행하는 동안 콘솔 printk를 끈다. 프레임마다 나오는 커널 메시지가 UART로 나가면 CSIS 인터럽트를 놓치기 때문이다.
 - **기능 묶음:** `exynos3830_sound`가 카드 등록에 실패한 같은 부팅에서 다시 올리면 커널 패닉(11.77). `scsc_wlan`을 rmmod 뒤 다시 올려도 패닉(11.78): 바꾼 모듈은 재부팅해야 쓰인다. 오디오는 dmix가 안 된다(SysV IPC 없음), 48 kHz로만 제 속도. BT를 켠 채 쓰려면 고친 `scsc_wlan`(bt 기능이 넣음)이 올라와 있어야 한다. 아니면 WLBT 패닉 뒤 Wi-Fi가 재부팅 전까지 안 돌아온다.
+- **`libpam-systemd`를 깔면 커널 패닉(11.80):**
+  - 로그인마다 `user@UID.service`가 cpu 컨트롤러를 위임받는다. 그러면 cpu cgroup이 9개를 넘고, vendor `ems.ko`가 9칸 배열 밖을 써서 패닉한다(UBSAN `BRK 0x5512`, `freqboost_can_attach`).
+  - 기본 rootfs에는 이 패키지가 없다. desktop 패키지(`dbus-user-session`)가 들인다.
+  - 막는 법: 부트 명령줄의 `cgroup_disable=cpu`(`build-bootimg.sh`, `~/e850-logs/boot-nocpu`), 또는 `/etc/systemd/system/user@.service.d/`에 `Delegate=pids memory`(desktop 기능이 넣음).
+  - 패키지를 apt로 들이기 전에 `apt-get -s install …`로 `libpam-systemd`가 끼는지 본다.
+- **`fastboot boot`(RAM 부팅):** 이 LK에서는 `fb: boot`를 찍고 멈춘다(7.3, 11.80). 전원을 다시 넣어야 하니 쓰지 않는다.
 - **USB 호스트:** 평소에는 꺼져 있어서 키보드·마우스가 없다. 허브 전원(LDO24)을 `e850-hubpwr`로 켜고 OTG `id`를 0으로 바꾸면 USB-A가 동작한다. 이때 micro-USB 케이블은 빼야 한다(11.64). 데스크톱 환경은 보류했다(GPU 사용자 공간 드라이버 없음).
 - **포트:** nginx가 80번 포트를 쓴다. Apache를 올리기 전에 사용자와 포트를 정한다.
 - **Wi-Fi:** 펌웨어가 패닉하면(`WLBT FW PANIC`) 드라이버가 펌웨어를 다시 올리고 약 6초 뒤 다시 연결한다(11.31, `e850-wifi.sh`의 `disable_recovery_handling=0`). 복구 횟수는 `/proc/driver/mxman_ctrl0/mx_recovery_count`로 본다. `mx_panic`은 읽기만 해도 펌웨어가 패닉하니 `cat`하지 않는다(11.33부터 root만 읽고 쓸 수 있다, 0600). 강제 패닉 반복 시험은 `tools/board/wifi-panicloop.sh N`(root, 보드 `/var/tmp/wifi-panicloop.sh`). 2026-11-13부터 펌웨어는 Linaro Android 13 판(`R4-1_Y23W13A`, 11.47)이다. 옛 2019년 판은 3.8시간마다 Data Abort가 났다. 되돌리기는 root로 `sh /var/tmp/wifi-fwswap.sh a10`.

@@ -4613,6 +4613,7 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - 상황: BT(`e850-bt.service`)를 켜 둔 채 desktop 패키지 278개를 Wi-Fi로 받았다. 설치는 끝까지 정상이었다(마지막 줄까지 출력, rc=0).
 - 증상: 그 직후 보드4가 Wi-Fi에서 사라졌다(ARP incomplete). 보드4는 USB가 호스트 모드이고 유선랜 케이블도 없어서 원격으로 살릴 수 없었다.
 - 사용자가 전원을 다시 넣었다. 부팅은 되지만 무선이 안 된다고 알려 왔다.
+- **정정(11.80):** 이 사고의 원인은 아래의 Wi-Fi 복구 문제가 아니라 desktop 패키지가 들인 `libpam-systemd` 때문에 생긴 커널 패닉(EMS cgroup 배열 넘침)일 가능성이 크다. 보드3에서 같은 패키지를 설치한 뒤 로그인할 때마다 패닉이 났다. 보드4의 로그는 아직 보지 못했다. 아래 Wi-Fi 복구 경쟁은 보드3에서 따로 재현하고 고친 실제 버그다.
 
 **재현(보드3).** BT 브리지를 켠 채 WLBT 강제 패닉(`wifi-panicloop.sh 1`)을 일으켰다.
 - Wi-Fi가 40초 안에 돌아오지 않았고 `/proc/driver/mxman_ctrl0`도 사라졌다.
@@ -4660,3 +4661,84 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - `mfc_fw.bin`과 `e850-mfc.service`(`modprobe exynos_mfc`)를 넣었다.
 - 보드3·4에서 `/dev/video6` s5p-mfc-dec, `/dev/video7` s5p-mfc-enc(8·9는 secure)이 생겼다.
 - 펌웨어는 처음 열 때 올라간다. **디코딩 시험은 아직 하지 않았다.**
+
+### 11.80 X 데스크톱, 그리고 로그인하면 커널이 죽는 문제(EMS cgroup 배열 넘침) (2026-11-21)
+
+**desktop 기능.**
+- `features/desktop/`는 Xorg(fbdev, `/dev/fb0`, ShadowFB), Openbox, LXTerminal, 나눔 글꼴, Firefox ESR, mpv를 설치한다(`--no-install-recommends`로 278개, 받기 243 MB, 설치 뒤 901 MB).
+- `e850-desktop.service`는 tty7에서 `startx`를 띄운다. `Conflicts=dvslive.service`, `Wants=e850-usbhost`이고 부팅 때 켜지 않는다.
+- **USB:** `e850-desktop start`를 하면 `e850-usbhost`도 켜져 micro-USB ACM이 끊긴다. 설계대로이니 그 뒤로는 ssh로 다룬다.
+
+**보드3 준비.**
+- 보드3의 파일 시스템은 3 GB(남은 공간 217 MB)였다. 그래서 보드4·보드1과 같이 `resize2fs /dev/mmcblk0p24`로 54 GB로 늘렸다(마운트한 채, dmesg `resized filesystem to 14148084`).
+- 첫 설치는 apt 목록이 낡아서 실패했다. `firefox-esr 153.6.0esr-1~deb12u2`를 받으려다 security 저장소에서 404가 났다. 그래서 `common.sh`의 `apt_need`가 설치 전에 `apt-get update`를 하게 했다.
+- 두 번째 설치는 RC=0이었다. 첫 시도와 두 번째 시도 모두 BT(`e850-bt`)를 켠 채 받았다(첫 시도에서 171 MB를 12초에 받음). Wi-Fi 복구 횟수는 0이었다.
+
+**관찰: X를 켜자 커널 패닉(보드3).**
+- `systemctl start e850-desktop` 다음 순서로 일이 일어났다.
+  1. USB가 호스트 모드로 바뀌었다(ACM 끊김).
+  2. 4초 뒤 커널 패닉이 났다(UART `~/e850-logs/uart-board3.log`):
+     ```
+     Internal error: BRK handler: f2005512 [#1] PREEMPT SMP
+     pc : freqboost_can_attach+0x1bc/0x1c4 [ems]
+      ems_hook_cpu_cgroup_can_attach ← cpu_cgroup_can_attach ← cgroup_migrate_execute
+      ← cgroup_attach_task ← cgroup_procs_write ← vfs_write      (Comm: systemd, PID 1)
+     ```
+  3. 워치독이 리셋했고, LK가 `Abnormal RST_STAT`로 보고 fastboot에 멈췄다.
+- `fastboot reboot` 뒤에도 부팅마다 35초쯤 같은 패닉이 났다(2번 연속). 그 시점은 ACM의 root 자동 로그인이다.
+- `BRK 0x5512`는 clang UBSAN 함정이다. 0x55xx가 UBSAN이고, 0x12 = 18이 배열 범위 초과다.
+
+**원인(소스).**
+- `kernel/sched/ems/freqboost.c`의 `freqboost_can_attach`는 `dst_bg = css->id - 1`로 `bg->group[]`을 쓴다.
+- `main.c`의 `cpuctl_task_group_idx`도 `css->id - 1`을 돌려준다. 이 값으로 여러 배열(`tex.enabled[]` 등)을 읽는다.
+- 배열 크기는 `ems.h`의 `CGROUP_COUNT`로 9다(Android의 root, foreground, background, top-app, rt, system, system-background, nnapi-hal, camera-daemon).
+- 그래서 cpu 컨트롤러가 켜진 cgroup이 9개를 넘고, 실행 대기 중인 태스크가 그런 cgroup으로 옮겨지면 배열 밖을 쓴다.
+
+**왜 이제야 났나.**
+- 기본 rootfs에는 `libpam-systemd`가 없다. 보드1에서 확인했다:
+  - `libpam-systemd`가 설치되어 있지 않다.
+  - `loginctl` 세션이 0개다.
+  - 루트 cgroup의 `subtree_control`은 `memory`뿐이다. cpu 컨트롤러가 어디에도 켜져 있지 않다.
+- desktop 패키지(`dconf-service` 등)가 `dbus-user-session`을 들이고, `dbus-user-session`은 `libpam-systemd`를 필요로 한다(Debian 12 컨테이너에서 같은 패키지로 확인).
+- 그 뒤로는 로그인(ACM 자동 로그인, ssh)마다 다음이 일어난다.
+  1. logind 세션과 `user@UID.service`가 생긴다.
+  2. Debian 12의 `user@.service`는 `Delegate=pids memory cpu`다.
+  3. 사용자 관리자의 `app.slice`·`session.slice`(CPUWeight=100)와 `background.slice`(CPUWeight=30)가 cpu 컨트롤러를 켠다.
+  4. cpu cgroup이 9개를 넘는다.
+
+**가설로 남은 것.**
+- **보드4 사고:** 11.78의 보드4 사고(desktop 설치 직후 사라짐, 전원을 다시 넣어도 무선 없음)도 이것으로 본다. 같은 패키지를 깔았고, 설치 직후 다음 로그인에서 패닉 → 워치독 → fastboot에 멈춘다. 그러면 Wi-Fi에서 사라진다. 보드4의 `/proc/last_kmsg`로 확인해야 한다.
+  - 보드4에는 ACM 자동 로그인이 없다(scope가 USB를 호스트 모드로 바꾼다). 그래도 `sudo`가 `common-session`의 `pam_systemd`를 거치면서 root의 `user@0.service`를 띄울 수 있다. 설치 뒤 deploy 스크립트가 다음 `sudo`를 부른 때가 그 시점일 수 있다. 확인하지 않은 추측이다.
+- **Wi-Fi 복구 경쟁:** 11.78의 Wi-Fi 복구 경쟁은 이와 별개로 보드3에서 재현하고 고친 실제 버그다.
+
+**수정.**
+- `tools/linux510/build-bootimg.sh`의 명령줄에 `cgroup_disable=cpu`를 넣었다.
+  - cpu 컨트롤러가 꺼지면 모든 태스크의 cpu css는 루트(id 1)라서 EMS 번호는 늘 0이다.
+  - 이 시스템은 cgroup의 CPUWeight를 쓰지 않는다.
+- `features/desktop/`는 apt보다 먼저 `/etc/systemd/system/user@.service.d/e850-no-cpu-delegate.conf`(`Delegate=`, `Delegate=pids memory`)를 넣는다. 새 부트 이미지를 굽지 않은 보드를 위한 것이다.
+- 지금 쓸 이미지는 `~/e850-logs/boot-nocpu/boot.img`다.
+  - boot-dvs3에서 DTB `/chosen bootargs`에 `cgroup_disable=cpu`만 더했다.
+  - 헤더 id(SHA1)는 다시 계산했다. 같은 계산이 boot-dvs3의 id를 그대로 재현하는 것을 확인했다.
+  - 저장소 스크립트로 다시 빌드한 판(`boot-dvs4`)은 쓰지 않는다. 커널은 같지만 initramfs의 모듈 여러 개(scsc_wlan, fimc-is 등)가 boot-dvs3과 달라서다. Docker 볼륨이 그 사이 바뀌었다.
+
+**확인(Docker 컨테이너, 사용자 공간만).**
+- Debian 12 arm64 컨테이너에서 systemd 252.39를 PID 1로 띄웠다(`--privileged --cgroupns=private`, 컨트롤러 `cpuset cpu io memory hugetlb pids rdma`). `systemd libpam-systemd dbus-user-session`를 깔고 `systemctl start user@1001.service`로 로그인 하나를 흉내 냈다.
+- cpu css 수는 루트 1개에 부모의 `subtree_control`에 cpu가 있는 cgroup 수를 더해 셌다.
+
+| | drop-in 없음 | drop-in 있음 |
+|---|---|---|
+| cpu css 수 | 13 | 1 (루트만) |
+| `user@1001`의 `subtree_control` | `cpu memory pids` | `memory pids` |
+| `DelegateControllers` | `cpu memory pids` | `memory pids` |
+
+- 로그인 하나로 13개가 된다. 9칸 배열을 넘기기에 충분하다. drop-in을 넣으면 cpu 컨트롤러가 어디에도 켜지지 않는다.
+- 커널 쪽(`cgroup_disable=cpu`로 부팅한 보드)은 아직 확인하지 못했다.
+- 저장소의 유닛 중 `CPUWeight`·`CPUQuota`·`CPUShares`를 쓰는 것은 없다. 그래서 cpu 컨트롤러를 꺼도 기존 서비스의 동작은 바뀌지 않는다고 본다.
+
+**실패한 시도.** 보드3을 굽지 않고 RAM으로 띄우려고 `fastboot boot`를 했다. LK는 `fb: boot`를 찍고 멈췄다(`getvar`, `reboot`에도 응답 없음). 7.3절에 이미 "동작하지 않는다"고 적혀 있던 것을 놓쳤다. 보드3은 전원을 다시 넣어야 한다.
+
+**아직 하지 못한 것.**
+- boot-nocpu로 부팅한 확인. 보드3은 2026-11-21 10:35에도 LK가 응답하지 않았다(`fastboot devices`에는 보이지만 `getvar`가 8초 안에 돌아오지 않음).
+- 보드에서 drop-in만 있을 때의 확인(컨테이너에서는 위처럼 확인).
+- X 화면, Firefox, YouTube 측정.
+- 보드4 복구.

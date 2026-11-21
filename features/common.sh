@@ -32,6 +32,7 @@ apt_need() {               # install the packages that are missing (needs the ne
     for p; do dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || miss="$miss $p"; done
     [ -z "$miss" ] && return 0
     log "apt-get install$miss"
+    apt-get update -q      # an old package list asks for superseded security debs (404 on board3, 2026-11-21)
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $miss
 }
 
