@@ -1,0 +1,22 @@
+#!/bin/sh
+# e850-x [stop]: start the GPU desktop (X :1 on vt8, x-kms.sh) from the text console, or stop it (11.90).
+# Start locks the GPU (1001 MHz), memory bus and INT at their top clock; stop releases them.
+# HDMI tty1 logs in as root at boot; from ssh: sudo e850-x. Ctrl+Alt+F1 goes back to the prompt.
+# Board files in /var/tmp/e850-kms (load.sh, e850-kms.ko, x-kms.sh, xorg-kms.conf, kenv; 11.86).
+D=/var/tmp/e850-kms
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+G=/sys/devices/platform/11500000.mali
+if [ "$1" = stop ]; then
+    pkill -f "Xorg :1 vt8"
+    echo 0 > $G/dvfs_min_lock
+    for x in mif int; do f=$(ls -d /sys/class/devfreq/*_$x); tr ' ' '\n' < "$f/available_frequencies" | sort -n | head -1 > "$f/min_freq"; done
+    exit 0
+fi
+systemctl stop dvslive 2>/dev/null   # the DVS view draws on the same framebuffer
+# memory bus (MIF) and INT at their top clock: dvslive set them so at boot, and every GPU number of
+# 11.82-11.89 was measured that way
+for x in mif int; do f=$(ls -d /sys/class/devfreq/*_$x); cat "$f/max_freq" > "$f/min_freq"; done
+# GPU at its top clock: kbase collects no utilization, so DVFS would keep it at 377-433 MHz (11.88, 11.90)
+echo 1001000 > $G/dvfs_min_lock
+sh "$D/load.sh" >/dev/null
+exec sh "$D/x-kms.sh"

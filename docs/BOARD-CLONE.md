@@ -139,3 +139,34 @@ python3 tools/host/acm.py "cat /etc/machine-id; systemctl is-system-running; sys
 
 - 파일시스템은 3 GiB로 만들어지고, 파티션은 54 GiB다. 복제한 뒤 대상에서 `sudo resize2fs /dev/mmcblk0p24`를 한다. 마운트된 채로 늘어나서 재부팅은 필요 없다. 2026-11-19에 보드4와 보드1에서 했다. 둘 다 54 GB가 됐고 49 GB가 남았다(E85096-LINUX510-BOOT.md 11.67). 보드4는 늘리기 전에 100% 차 있었다. 보드2와 보드3은 늘리지 않았다.
 - 두 보드를 동시에 USB로 쓰려면 한쪽의 gadget 주소와 일련번호를 바꿔야 한다. 아직 하지 않았다.
+
+## 11. 데스크톱 보드 이미지 (보드3, 2026-11-23)
+
+보드3을 원본으로 받은 이미지다. GPU 데스크톱(`e850-x`), 패널·메뉴·파일 관리자, 한글 입력, BT 스피커 출력, Wi-Fi·BT 설정 창, zram이 들어 있다(E85096-LINUX510-BOOT.md 11.89~11.91). 방법은 위 4~8장과 같고, 여기에는 다른 점만 적는다.
+
+| 항목 | 값 |
+|---|---|
+| 이미지 디렉터리 | `~/e850-logs/clone-20261123/`(Mac). `rootfs.tar`(원본 그대로), `rootfs.simg`, `part.simg.*`, `manifest.md5`, `build.log`. **비밀 값(사용자 비밀번호 해시, ssh 키, Wi-Fi 비밀번호, BT 링크 키)이 들어 있다.** 저장소나 외부로 옮기지 않는다 |
+| boot | **`~/e850-logs/boot-nocpu/boot.img`**(md5 `25643a9a3f6b62b18db07cd895a7c410`, 명령줄에 `cgroup_disable=cpu`). 이 rootfs에는 `libpam-systemd`가 있어, 다른 boot로는 로그인할 때 커널 패닉이 난다(11.80) |
+| 파일시스템 | 8 GiB(`BLOCKS=2097152`), 라벨 `rootfs`, UUID `de77216b-a7d7-4c77-9fec-51c801b1fb77`(원본과 같음). 원본 사용량 약 5.2 GB(apt 캐시는 비우고 받음) |
+
+**대상마다 이미지를 새로 만든다.** `build-clone.sh`가 만들 때마다 machine-id를 새로 넣기 때문이다. 같은 `part.simg.*`를 두 보드에 구우면 machine-id가 같아져 DHCP 주소가 겹친다. `rootfs.tar`는 다시 받을 필요가 없다.
+
+```sh
+D=~/e850-logs/clone-20261123
+rm -f $D/rootfs.simg $D/part.simg.*
+docker run --rm --privileged -e BLOCKS=2097152 -v "$PWD/tools/linux510:/t:ro" -v $D:/x ubuntu:22.04 sh /t/build-clone.sh > $D/build.log 2>&1
+grep -c -i warning $D/build.log                       # 0
+python3 tools/linux510/resparse.py --split-mib 700 $D/rootfs.simg $D/part.simg
+fastboot -s <대상> flash boot ~/e850-logs/boot-nocpu/boot.img
+for f in $D/part.simg.*; do ~/e850-logs/fbmini flash userdata $f || break; done   # 하나라도 실패하면 reboot하지 않는다(7장)
+~/e850-logs/fbmini reboot
+```
+
+**구운 뒤 원본(보드3)과 다른 점과 할 일.**
+- **ACM 콘솔이 없다.** `e850-usbhost`가 부팅 때 켜져서 micro-USB는 gadget이 아니다. 확인은 Wi-Fi ssh(`ssh -o HostKeyAlias=192.168.0.236 philip@<대상 주소>`, sudo 비밀번호는 원본과 같다)나 HDMI root 프롬프트(USB 키보드)로 한다. 8장의 `acm.py` 명령은 ssh에서 `sudo`로 바꿔 한다. ACM이 필요하면 `sudo e850-usbhost off`(다음 부팅까지) 또는 `sudo systemctl disable e850-usbhost`. fastboot(LK)는 이와 상관없이 micro-USB로 된다.
+- 파일시스템을 늘린다: `sudo resize2fs /dev/mmcblk0p24`(10장).
+- **DVS 센서가 있는 보드:** dvslive가 꺼져 있다. `sudo systemctl enable --now dvslive`로 켠다. 그러면 HDMI는 DVS 화면이 차지하고, `e850-x`를 치면 dvslive를 멈추고 데스크톱을 띄운다.
+- **BT 스피커는 다시 페어링한다.** 페어링 정보는 원본 어댑터 주소(`/var/lib/bluetooth/9C:23:E0:0A:74:9C/`) 아래에 있어 새 보드에서는 쓰이지 않는다. 절차는 `features/README.md`의 "BT 스피커"다. 그 전에는 `~/.asoundrc`(philip, 기본 출력 = BT) 때문에 소리가 나지 않는다. 헤드폰 잭으로 쓰려면 그 파일을 지운다.
+- 그대로 오는 것: philip의 `netdev`·`bluetooth` 그룹, wpa_supplicant 제어 소켓(netdev) 설정, zram(1.8 GB, lz4), GPU(`~/gpu/mesa-kbase`, `/var/tmp/e850-kms`의 `e850-kms.ko`), `/usr/local/bin/e850-x`, `/etc/motd`의 안내 한 줄, Firefox 프로필(사용자 기본 프로필과 `~/.config/mozilla/firefox/gpu`, 시험 프로필 `/var/tmp/ffprof*`), `/var/tmp`의 녹화와 시험 파일(약 2 GB).
+- 확인 순서: HDMI에 root 프롬프트 → USB 키보드로 `e850-x` → 패널·메뉴·한/영 → `ssh`로 `systemctl --failed`, `cat /proc/swaps`, `id philip`.

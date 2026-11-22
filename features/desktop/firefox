@@ -1,0 +1,8 @@
+#!/bin/sh
+# /usr/local/bin/firefox from e850-feature desktop. On the GPU X (:1, x-kms.sh) Firefox uses its own profile:
+# the normal desktop (:0) may have the default profile open, and a second firefox on that profile only opens
+# a window over there, on the other screen (11.89).
+case ${DISPLAY%.*} in
+:1) P=$HOME/.config/mozilla/firefox/gpu; mkdir -p "$P"; exec firefox-esr --profile "$P" "$@";;
+esac
+exec firefox-esr "$@"

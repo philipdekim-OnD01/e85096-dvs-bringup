@@ -5424,3 +5424,189 @@ A의 단계와 어려움:
 - `/var/tmp/ff-yt.py`: 재생 전에 0 s로 감는다(`seekTo(0)`).
 - 시험 파일: `/var/tmp/soakmon.sh`, `/var/tmp/textpage.py`, `/var/tmp/textpage.html`, `/var/tmp/ytdur.py`, `/var/tmp/ytwatch.py`, `/var/tmp/locsoak.py`, `/var/tmp/loop.html`, `/var/tmp/loop720.webm`, `/var/tmp/shot-1188*.ppm`. 로그는 `/var/tmp/yt-*.txt`, `/var/tmp/ffk-*.log`, `/var/tmp/soakmon*.log`.
 - GPU 클럭 고정은 풀었다. 시험 Firefox는 내렸다.
+
+### 11.89 GPU X 데스크톱: 메뉴·파일 관리자·한글 입력, 그리고 BT 스피커(JBL Flip 6) (2026-11-23, 보드3)
+
+사용자가 GPU X(:1)를 쓰면서 세 가지를 요청했다. Firefox가 왜 안 보이는지, 오디오가 깔렸는지와 한글, 메뉴·파일 관리자, 그리고 BT 스피커 연결이다.
+
+**1. :1 터미널에서 띄운 Firefox가 안 보이던 것.**
+- 관찰: :1 LXTerminal에서 `firefox &`를 치면 창 없이 `[1]+ Done`(종료 코드 0)으로 끝났다. 그때 :0(vt7)에서 사용자 Firefox(PID 185165)가 기본 프로필을 잡고 있었다(`luhburbr.default-esr/lock -> 127.0.1.1:+185165`). :1 터미널의 환경에는 GPU Mesa 변수(`LD_PRELOAD` 등)도 없었다.
+- 해석: 새 firefox가 같은 프로필로 떠 있는 Firefox에 "창 하나 열기"를 넘기고 끝났다. 창은 :0에 생겼을 것이다(보지 않았다).
+- 바로 한 일: `sh /var/tmp/e850-kms/kenv firefox-esr --new-instance --profile /var/tmp/ffprof-kms`로 띄워 :1에 창이 뜬 것을 화면 캡처로 봤다.
+- 고정: `features/desktop/firefox` → `/usr/local/bin/firefox`. :1에서는 `~/.config/mozilla/firefox/gpu` 프로필을 쓴다. 메뉴와 패널 단추도 이 wrapper를 쓰게 `/usr/local/share/applications/firefox-esr.desktop`의 `Exec`를 바꿨다(`XDG_DATA_DIRS`에서 `/usr/local/share`가 먼저다). 확인: :1 세션 환경으로 실행하니 `firefox-esr --profile …/gpu`가 떴고, 두 번째 실행은 그 Firefox에 새 창으로 열렸다.
+
+**2. 오디오 상태.** audio 기능이 설치돼 있다(카드 `ExynosMadera`, `e850-audio` active). 출력은 3.5 mm 헤드폰 잭뿐이고 HDMI 소리는 없다(11.77). dmix가 안 돼 한 번에 한 프로그램만 쓴다. 이때 장치는 :1 Firefox가 열고 있었다.
+
+**3. 메뉴·파일 관리자·한글 입력.**
+- 설치(보드3, apt `--no-install-recommends`, 새 패키지 64개): `lxpanel pcmanfm mousepad gpicview xarchiver galculator lxtask fcitx5 fcitx5-hangul fcitx5-frontend-gtk3`. 먼저 `apt-get -s`로 봤고 `libpam-systemd`는 새로 끼지 않았다(이미 있고, 보드3은 `cgroup_disable=cpu`). 한글 글꼴은 `fonts-nanum`이 이미 있다.
+- `features/desktop/session.sh`(:0과 :1이 같이 쓴다):
+  - 세션마다 `dbus-run-session`으로 따로 버스를 띄운다. fcitx5는 버스마다 하나만 돌고, :0과 :1이 같은 사용자로 동시에 돈다.
+  - `GTK_IM_MODULE=fcitx` 등 입력기 변수와 `XDG_MENU_PREFIX=lxde-`(메뉴 파일 `lxde-applications.menu`)를 넣는다.
+  - 배경(`xbg`, 없으면 단색), `fcitx5 -d`, `lxpanel --profile e850`, `lxterminal`, `openbox`를 띄운다.
+- 패널 `features/desktop/lxpanel.panel` → `/etc/xdg/lxpanel/e850/panels/panel`: 시작 메뉴, 파일 관리자·터미널·Firefox 단추, 작업 표시줄, CPU, 트레이(fcitx5), 시계. Debian 기본 패널은 `lxde-common`의 실행기를 가리켜서 쓰지 않았다.
+- fcitx5 `/etc/xdg/fcitx5/profile`(`keyboard-us` + `hangul`), `config`(한/영: Ctrl+Space, 한/영 키, 오른쪽 Alt).
+- `modules/e850-kms/x-kms.sh`: :1도 이 `session.sh`를 GPU Mesa 환경(`kenv`와 같은 `LD_PRELOAD` 등)으로 띄운다. 그래서 :1의 모든 프로그램이 shim을 싣는다. 메뉴나 터미널에서 띄운 Firefox도 GPU로 그린다.
+- 보드 반영: 저장소 `features/desktop/`와 `common.sh`를 `/opt/e850-features/`에 올리고 `feature.sh install`을 실행했다. 이것은 서비스를 다시 읽기만 하고 :0을 재시작하지 않는다. 그다음 `x-kms.sh`로 :1만 다시 띄웠다.
+- 확인한 것:
+  - 화면 캡처에 패널, 파일 관리자, 한/영 표시 `en`이 보였다.
+  - D-Bus `InputMethodGroupInfo`로 보니 그룹에 `keyboard-us`와 `hangul`이 있다. `immodules.cache`에 fcitx가 있고, :1 터미널 환경에 `GTK_IM_MODULE=fcitx`가 있다.
+  - 사용자가 패널 단추로 Firefox를 띄워 YouTube를 봤다(gpu 프로필, shim 실림).
+- 확인하지 못한 것: 실제 한글 타자(보드에 xdotool이 없어 사용자 확인이 필요하다). :0은 다시 띄우지 않아 새 세션이 아직 적용되지 않았다. 패널 시계는 보드 시간대(UTC)로 나온다.
+
+**4. BT 스피커(JBL Flip 6).**
+- `bluez-alsa-utils`와 `libasound2-plugin-bluez`(4.0.0)를 설치했다.
+  - `bluealsa.service`는 `status=217/USER`("Failed to set up user namespacing: Invalid argument")로 실패했다. 커널에 `CONFIG_USER_NS`가 없는데 유닛이 `PrivateUsers=true`를 쓴다.
+  - drop-in `PrivateUsers=no`(`features/bt/bluealsa-no-userns.conf`)를 넣자 떴고, A2DP SBC 엔드포인트를 등록했다.
+- 20초 스캔에서 오디오 클래스 장치는 `JBL Flip 6`(`E8:26:CF:1C:1D:DA`, Class 0x240414) 하나였다.
+- 실패 1: `pair` → `AuthenticationRejected`.
+  - btmon을 보니 보드의 IO Capability Reply가 `No Bonding`이었고, 스피커가 `Pairing Not Allowed (0x18)`로 답했다.
+  - 원인: 컨트롤러가 `Pairable: no`였다. bondable이 꺼져 있으면 커널이 No Bonding으로 요청한다.
+- 실패 2: `bluetoothctl pairable on` 뒤에는 `Dedicated Bonding`으로 나갔다. 그래도 4 ms 만에 같은 0x18이 왔다.
+  - 해석(가설): 스피커가 페어링 모드가 아니었다. 사용자가 버튼을 누른 뒤에 성공했다.
+- 성공:
+  - 사용자에게 페어링 모드를 부탁했고, `/var/tmp/bt-pairloop.sh`가 약 30초마다 다시 시도했다.
+  - 네 번째 시도(17:56:17 UTC)에서 `Pairing successful`이 나왔고, trust와 connect도 성공했다. `Paired/Bonded/Connected: yes`.
+  - bluealsa PCM은 `A2DP (SBC): S16_LE 2 channels 48000 Hz`다.
+- 출력:
+  - `~/.asoundrc`(philip)로 기본 장치를 `bluealsa`로 돌렸다(가장 최근에 연결된 장치). 지우면 헤드폰 잭으로 돌아간다.
+  - `aplay Front_Center.wav`(1.43초)가 1.92초에 rc 0으로 끝났다(전송 열기·비우기 포함). 귀로 들렸는지는 사용자 확인이 필요하다.
+- Firefox:
+  - 사용자가 띄운 :1 Firefox는 `.asoundrc`를 만들기 약 20초 전에 떴다. 그래서 헤드폰 잭(`/dev/snd/pcmC0D0p`)을 열었고, bluealsa 모듈이 올라오지 않았다(`/proc/PID/maps`).
+  - alsa-lib은 설정을 프로세스 안에 한 번만 읽는다. 다시 띄워야 BT로 나간다.
+- 이 동안 Wi-Fi 펌웨어 복구 횟수 0.
+- 메모리: Firefox 두 개(:0 사용자, :1 gpu)와 데스크톱 두 개가 떠 있어 `available` 254 MB였다.
+
+**판단.**
+- :1 GPU X가 메뉴·파일 관리자·한글 입력을 갖춘 데스크톱이 됐다.
+- BT 스피커는 이 Python vhci 브리지 위에서 A2DP 연결까지 된다.
+- 남은 제약:
+  - BT와 잭 모두 한 번에 한 프로그램만 쓴다(bluez-alsa 4.0은 섞기 없음, dmix 없음).
+  - 스피커가 꺼져 있으면 기본 장치가 열리지 않는다.
+  - 새 장치를 페어링할 때는 `pairable on`이 필요하다. 부팅 뒤 유지되는지는 보지 않았다(`/var/lib/bluetooth/…/settings`가 비어 있다).
+
+**다음 후보.**
+- 사용자가 한글 타자와 BT 소리를 확인한다.
+- 재부팅 뒤 스피커가 다시 붙는지 본다.
+- 메모리를 아끼려면 :0 데스크톱을 끈다(사용자 결정).
+
+**보드에 바꾼 것(보드3).**
+- apt 패키지 70개: 위의 데스크톱·입력기 64개와 bluez-alsa 6개. 로그는 `/var/tmp/apt-1189.log`.
+- `/opt/e850-features/common.sh`와 `desktop/`를 새 판으로 바꿨다. 예전 판은 `/var/tmp/common.sh.bak1189`, `/var/tmp/desktop.bak1189/`에 있다. `feature.sh install`이 다음을 만들었다:
+  - `/etc/xdg/lxpanel/e850/`, `/etc/xdg/fcitx5/{profile,config}`
+  - `/usr/local/bin/firefox`, `/usr/local/share/applications/firefox-esr.desktop`
+  - `user@.service.d/e850-no-cpu-delegate.conf`(저장소 판)
+- `/var/tmp/e850-kms/x-kms.sh`를 새 판으로 바꿨다(예전 판 `x-kms.sh.1188`). X :1은 이것으로 다시 띄웠다.
+- `/etc/systemd/system/bluealsa.service.d/e850-no-userns.conf`.
+- BT: `pairable on`, JBL Flip 6 페어링·신뢰(`/var/lib/bluetooth`).
+- `~/.asoundrc`(philip, 기본 출력 BT).
+- `/var/tmp/bt-pairloop.sh`, `/var/tmp/btmon-1189*.snoop`.
+
+### 11.90 보드3: 부팅하면 프롬프트, `e850-x`로 GPU 데스크톱, 성능 상태 (2026-11-23)
+
+**요청.** 재부팅하면 프롬프트가 뜨고, 거기서 명령 하나로 X가 뜨게 한다. 그리고 성능 최적화가 되어 있는지 묻는다.
+
+**바꾸기 전(관찰).**
+- tty1은 root 자동 로그인(`getty@tty1` drop-in `--autologin root`)이다.
+- `e850-usbhost`가 disabled였다. 부팅 뒤 USB 키보드가 동작하지 않는다.
+- `dvslive`가 enabled였다. 부팅 때 HDMI에 DVS 화면을 그린다(보드3은 센서가 없다).
+- X는 둘 다 손으로 띄웠다(`e850-desktop` disabled, GPU X는 `load.sh` + `x-kms.sh`).
+- `dvslive.sh`는 시작할 때 MIF·INT·CAM devfreq를 최대로 고정한다. 그래서 지금 부팅의 MIF는 1539 MHz, INT는 667 MHz에 고정이었다(min = max). **11.82~11.89의 보드3 GPU 측정은 모두 이 고정 상태에서 했다.** dvslive를 끄면 MIF와 INT는 interactive governor가 정한다.
+
+**바꾼 것.**
+- `modules/e850-kms/e850-x` → 보드 `/usr/local/bin/e850-x`. root가 아니면 `sudo`로 다시 실행한다. 하는 일:
+  1. `systemctl stop dvslive`
+  2. MIF·INT `min_freq = max_freq`(측정 때와 같은 상태)
+  3. `load.sh`(e850-kms)
+  4. `x-kms.sh`
+- 끄기는 `e850-x stop`(`Xorg :1 vt8` 종료)이다. 프롬프트로 돌아가기는 Ctrl+Alt+F1이다.
+- `systemctl enable e850-usbhost`: 부팅 때 USB-A 호스트(키보드·마우스)가 켜진다. 대신 micro-USB ACM/ECM이 없어서 관리는 Wi-Fi ssh로 한다.
+- `systemctl disable dvslive`(보드3만).
+- `/etc/motd` 끝에 `GPU desktop: e850-x …` 한 줄(영문: HDMI 콘솔 글꼴에 한글이 없다).
+- 재부팅 확인은 아래에 적는다.
+
+**성능 상태(관찰과 측정, 2026-11-23).**
+- CPU: 두 클러스터 모두 schedutil, 546 MHz~2.0 GHz(12단계).
+- GPU 경로: 비동기 제출, CPU가 쓴 BO만 clean, LS flush(잰 범위에서 비용 없음)(11.87~11.88). YouTube 720p60 약 58~60 fps, 로컬 AV1 720p60 30분 59.9 fps.
+- GPU 클럭: DVFS 표는 1001/865/754/598/433/377 MHz다. kbase가 사용률을 모으지 않아 377~433 MHz에 머문다. 1001 MHz 고정 시험에서 드롭이 1~6%로 줄고 flush 대기가 절반이 됐다(11.88). 고정은 지금 걸려 있지 않다.
+- 메모리: 3.5 GB에 스왑이 없다. 커널에 zram(lzo-rle, lz4, zstd)은 있지만 설정하지 않았다. 데스크톱 두 개와 Firefox 두 개가 떠 있을 때 `available`은 254 MB였다.
+- 아직 안 한 것: 전체 화면에서 페이지 전환이 일어날 때의 30 fps 상한(11.85)은 전체 화면 영상으로 재지 않았다. 1080p60은 AV1 소프트웨어 디코딩이 병목이다(11.88). MFC는 MMAP을 받지 않아 쓰지 못한다(11.81).
+
+**사용자 결정(같은 날).** GPU 클럭 고정과 zram은 하기로 했다. 재부팅 확인은 답이 없어서 하지 않았다.
+
+**GPU 클럭 고정.**
+- `e850-x`가 `dvfs_min_lock`을 1001000으로 건다. `e850-x stop`은 GPU 고정을 풀고(0), MIF·INT `min_freq`를 가장 낮은 값으로 되돌린다.
+- 확인: `dvfs_min_lock_status` `[1:1001000]`. GPU가 놀 때 `clock`은 0이다(전원이 꺼진다).
+- 쉬는 동안 온도는 LITTLE0 57 °C, LITTLE1 56 °C, G3D 53 °C였다. 부하에서는 재지 않았다.
+
+**zram.**
+- `zram-tools`를 설치하고 `/etc/default/zramswap`에 `ALGO=lz4`, `PERCENT=50`을 넣었다. 그 결과 `/dev/zram0`은 1,825,280 KiB, 우선순위 100이다.
+- desktop 기능이 같은 일을 한다.
+
+**메뉴가 비던 것(고장과 고침).**
+- 관찰: 사용자가 HDMI root 프롬프트에서 `e850-x`를 쳤다(18:28:59). 그 뒤 패널에 시작 메뉴 단추와 작업 표시줄만 남고 실행 단추가 사라졌다. `menu-cached`도 떠 있지 않았다.
+- 원인: lxpanel 환경에 root 로그인 변수가 그대로 들어가 있었다(`XDG_RUNTIME_DIR=/run/user/0`, `XDG_SESSION_ID=1`, `MAIL=/var/mail/root`, `PWD=/root`). philip이 `/run/user/0`에 쓸 수 없어서 `menu-cached`가 소켓을 만들지 못했다. `LANG`도 없었다.
+- 고침: `x-kms.sh`가 세션을 `env -i`로 띄운다. 넘기는 변수는 `DISPLAY`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG=C.UTF-8`, `PATH`와 GPU 변수뿐이다.
+- 확인: 같은 root 환경을 흉내 내어 `e850-x`를 실행했다. lxpanel 환경에 `XDG_RUNTIME_DIR`가 없고 `LANG=C.UTF-8`이었다. `menu-cached`가 `~/.cache/menu-cached-:1`로 떴다. xdotool로 시작 메뉴를 눌러 보니 보조 프로그램, 인터넷, 소리와 영상, 시스템 도구, 설정, 실행이 펼쳐졌다. 실행 단추 셋도 돌아왔다.
+
+**한글 입력 시험(xdotool).**
+- 편집기(mousepad)에서 Ctrl+Space를 누르자 fcitx5가 `keyboard-us`에서 `hangul`로 바뀌었다. `gksrmf`를 치니 "한글"이 찍혔다(화면 캡처).
+- 첫 글자 "ab"는 창 포커스가 넘어가기 전이라 터미널로 들어갔다(시험 방식 문제). 지우고 입력기를 영문으로 되돌렸다.
+
+**Wi-Fi·BT 설정과 아이콘(사용자 요청).**
+- 설치(새 패키지 38개 + `qt5-gtk-platformtheme`): `wpagui`, `blueman`. `libpam-systemd`는 끼지 않았다. `polkitd`와 `blueman-mechanism.service`가 들어왔다.
+- philip을 `netdev`와 `bluetooth` 그룹에 넣었다.
+- wpa_supplicant 설정(`/etc/wpa_supplicant/wpa_supplicant-wlan0.conf`)을 바꿨다. 원본은 `.bak1190`이다.
+  - `ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev`, `update_config=1`(GUI에서 추가한 네트워크 저장).
+  - 재시작은 `systemd-run`으로 했다. 60초 안에 `COMPLETED`가 아니면 원본으로 되돌리게 했다(`/var/tmp/wifi-1190.sh`). 7초 만에 다시 붙었다.
+- Wi-Fi 아이콘:
+  - 처음에는 lxpanel `netstatus`를 넣었다. 그러나 `/proc/net/wireless`가 0이라(이 드라이버는 WEXT 통계를 주지 않는다) 신호가 늘 0%로 나와서 뺐다. 신호는 nl80211(`iw`: -66 dBm)로만 나온다.
+  - 대신 `wpa_gui -t -q`(트레이)를 쓴다. 아이콘이 신호 막대로 나오려면 Qt가 Adwaita 아이콘을 써야 해서 `QT_QPA_PLATFORMTHEME=gtk3`을 넣었다.
+  - 확인: 트레이에 신호 막대 아이콘이 보인다.
+- 사용자가 wpa_gui(Configure 단추)로 끊기·연결을 해 봤다. 저널에 18:40:12 `DISCONNECTED reason=3 locally_generated=1`, 18:40:24 `CONNECTED`가 남았다. 그동안 ssh가 12초쯤 끊겼다.
+- BT: `blueman-applet`(트레이 아이콘, `blueman-tray`, `blueman-mechanism`)이 뜬다. 메뉴의 설정(Preferences)에 Bluetooth Manager가 있다. 기기 페어링은 blueman으로 시험하지 않았다.
+- 음량: lxpanel `volumealsa`. 팝업 막대(37%)가 `amixer`의 `JBL Flip 6 - A2DP` 47/127과 같다. `~/.asoundrc`의 `ctl.!default`(bluealsa)를 잡는다.
+- 세션(`session.sh`)에는 `QT_QPA_PLATFORMTHEME=gtk3`, `blueman-applet`, `wpa_gui -t -q`를 넣었다. 패널은 메뉴, 실행 단추, 작업 표시줄, CPU, 음량, 트레이(한/영, BT, Wi-Fi), 시계다.
+
+**화면(보드3 :1, 2026-11-23 UTC 18시대).**
+
+![GPU 데스크톱(:1)에서 시작 메뉴를 펼친 화면. 메뉴를 고친 직후, Wi-Fi·BT 아이콘을 넣기 전](img/gpu-desktop-menu-20261123.png)
+
+![패널 오른쪽: CPU, 음량(BT 스피커), 한/영, BT(blueman), Wi-Fi 신호(wpa_gui), 시계](img/gpu-desktop-tray-20261123.png)
+
+![mousepad에서 Ctrl+Space 뒤 gksrmf를 친 결과 "한글"(앞의 c는 시험 글자)](img/gpu-desktop-hangul-20261123.png)
+
+**보드에 바꾼 것(보드3, 11.90).**
+- 서비스: `e850-usbhost` enabled, `dvslive` disabled. `/etc/motd`에 한 줄.
+- `/usr/local/bin/e850-x`. `/var/tmp/e850-kms/x-kms.sh`는 `env -i` 판이다.
+- 패키지: `zram-tools`, `xdotool`(시험용), `wpagui`, `blueman`, `qt5-gtk-platformtheme` 등. 로그는 `/var/tmp/apt-1190*.log`.
+- `/etc/default/zramswap`(lz4, 50%).
+- 그룹: philip을 `netdev`, `bluetooth`에 넣었다. wpa_supplicant 설정을 바꿨다(위, 원본 `.bak1190`).
+- `/opt/e850-features/desktop/`와 `/etc/xdg/lxpanel/e850/panels/panel`은 새 판이다.
+- GPU `dvfs_min_lock` 1001000, MIF·INT 최대(`e850-x`가 걸었고 `e850-x stop`이 푼다).
+- 재부팅 확인은 아직 안 했다. 다음 부팅에 프롬프트, 키보드, `e850-x`, BT 재연결을 본다.
+
+### 11.91 데스크톱 보드 이미지 저장(보드3 → 다른 보드 복제용) (2026-11-23)
+
+**요청.** 오늘 변경을 커밋하고, 모든 과정과 이미지를 저장해서 다른 보드에 복사할 수 있게 한다.
+
+**한 것.** 복제 절차(BOARD-CLONE.md 4~5장)를 보드3에 그대로 썼다. ACM이 없어서(usbhost 켬) 원본 쪽 명령은 Wi-Fi ssh에서 `sudo`로 했다.
+- 확인: 보드3 boot 파티션 앞 64,933,888바이트의 md5가 `~/e850-logs/boot-nocpu/boot.img`와 같다(`25643a9a3f6b62b18db07cd895a7c410`).
+- 원본에서 `apt-get clean`(358 MB)을 했다. 그 밖에는 손대지 않았다. `/var/tmp` 2.0 GB(DVS 녹화 1.1 GB, 시험 Firefox 프로필 약 0.4 GB 등)도 절차대로 함께 옮긴다.
+- 받기: `systemd-run --unit=rootfs-send`(sudo), Mac `rootfs-recv.py`(Wi-Fi ssh 터널). 5,151,877,120바이트를 773초에 받았다(6.7 MB/s, 11-14의 3.7 MB/s보다 빠름). md5 `81004c2481980586bc585a8d9ae1bed8`가 원본 기록과 같다. 18:47:57~19:00:50 UTC.
+- `tar=1`. 경고는 `/sys`, 사용자가 열어 둔 Firefox gpu 프로필과 캐시 두 곳(file changed as we read it), 소켓 두 개(ignored)였다. Firefox가 열린 채로 받았으니, 복제본에서 그 프로필이 어긋날 수 있다(확인 안 함).
+- 이미지: `build-clone.sh`를 `BLOCKS=2097152`(8 GiB)로 돌렸다(51초).
+  - 경고 0, e2fsck 정상. 47,207 파일, 4.9 GB 사용.
+  - 새 machine-id는 `6f0d9b3894e235c97ecae32f79618492`다.
+  - `resparse.py --split-mib 700`으로 8조각을 만들었다(28,459 → 28,543 청크, FILL 9개를 32 MiB 이하로 나눔).
+- 저장: `~/e850-logs/clone-20261123/`(Mac, 9.5 GB). 들어 있는 것: `boot.img`(= boot-nocpu), `rootfs.tar`, `part.simg.0`~`.7`, `manifest.md5`, `build.log`, `MD5SUMS`, `README.txt`.
+  - 중간 산출물 `rootfs.simg`는 지웠다(조각과 같은 내용).
+  - 비밀 값이 들어 있어 저장소에 넣지 않았다.
+- 다른 보드에 굽는 법과 구운 뒤 할 일은 BOARD-CLONE.md 11장에 적었다:
+  - boot는 반드시 boot-nocpu를 쓴다.
+  - 대상마다 `build-clone.sh`를 다시 돌린다(machine-id).
+  - ACM이 없으니 ssh나 HDMI로 확인한다.
+  - DVS 보드는 dvslive를 다시 켠다.
+  - BT 스피커는 다시 페어링하고, `resize2fs`를 한다.
+- 오늘 화면 캡처 세 장을 `docs/img/gpu-desktop-*-20261123.png`에 넣었다(11.90).
+
+**안 한 것.** 이 이미지를 실제 다른 보드에 구워 보지는 않았다. 보드3 재부팅 확인(프롬프트, 키보드, `e850-x`, BT 재연결)도 아직이다.

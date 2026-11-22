@@ -1,0 +1,86 @@
+# lxpanel profile "e850" from e850-feature desktop (/etc/xdg/lxpanel/e850/panels/panel): start menu,
+# file manager / terminal / Firefox launchers, taskbar, volume, tray (fcitx5, blueman, wpa_gui), clock (11.89, 11.90).
+# No netstatus: the Wi-Fi driver reports no WEXT signal (/proc/net/wireless is 0), wpa_gui reads it over nl80211.
+Global {
+    edge=bottom
+    allign=left
+    margin=0
+    widthtype=percent
+    width=100
+    height=32
+    transparent=0
+    tintcolor=#000000
+    alpha=0
+    setdocktype=1
+    setpartialstrut=1
+    usefontcolor=1
+    fontcolor=#ffffff
+    usefontsize=0
+    fontsize=10
+    background=1
+    backgroundfile=/usr/share/lxpanel/images/background.png
+    iconsize=24
+}
+Plugin {
+    type = menu
+    Config {
+        image=/usr/share/lxpanel/images/my-computer.png
+        system {
+        }
+        separator {
+        }
+        item {
+            command=run
+        }
+    }
+}
+Plugin {
+    type = launchbar
+    Config {
+        Button {
+            id=pcmanfm.desktop
+        }
+        Button {
+            id=lxterminal.desktop
+        }
+        Button {
+            id=firefox-esr.desktop
+        }
+    }
+}
+Plugin {
+    type = space
+    Config {
+        Size=4
+    }
+}
+Plugin {
+    type = taskbar
+    expand=1
+    Config {
+        tooltips=1
+        IconsOnly=0
+        ShowAllDesks=0
+        UseMouseWheel=1
+        FlatButton=0
+        MaxTaskWidth=200
+        spacing=1
+    }
+}
+Plugin {
+    type = cpu
+}
+Plugin {
+    type = volumealsa
+}
+Plugin {
+    type = tray
+}
+Plugin {
+    type = dclock
+    Config {
+        ClockFmt=%m-%d %R
+        TooltipFmt=%A %x
+        BoldFont=0
+    }
+}

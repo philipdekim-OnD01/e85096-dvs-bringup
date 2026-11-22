@@ -32,7 +32,13 @@ setsid $TR env LD_LIBRARY_PATH=$L LIBGL_DRIVERS_PATH=$L/dri LD_PRELOAD=$L/libpan
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -e /tmp/.X11-unix/X1 ] && break; sleep 1; done
 [ -e /tmp/.X11-unix/X1 ] || { echo "Xorg :1 did not start; see $D/Xorg.1.log"; tail -20 "$D/Xorg.1.log"; exit 1; }
 grep -E "glamor|GL|EGL|DRI3|broken" "$D/Xorg.1.log" | head -20
-# a desktop for the user: wallpaper, Openbox, a terminal
-runuser -u $U -- env DISPLAY=:1 HOME=/home/$U sh -c \
-    '(~/.local/bin/xbg ~/.local/share/wallpaper.bgrx || xsetroot -solid black; openbox & lxterminal) >/dev/null 2>&1 &'
-echo "Xorg :1 on vt8 (Ctrl+Alt+F7 back to the normal desktop)"
+# the desktop of e850-feature desktop (panel, menu, terminal, Korean input), every program with the GPU Mesa
+# (the kenv environment), so Firefox started from the menu or the terminal renders on the GPU (11.89)
+S=/opt/e850-features/desktop/session.sh
+[ -x $S ] || { echo "$S missing: e850-feature install desktop"; exit 1; }
+# env -i: from the root console (e850-x) the session got root's XDG_RUNTIME_DIR (/run/user/0), where menu-cached
+# cannot make its socket (empty menu, no launchers), and no LANG (11.90)
+runuser -u $U -- env -i DISPLAY=:1 HOME=/home/$U USER=$U LOGNAME=$U SHELL=$(getent passwd $U | cut -d: -f7) \
+    LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin:/bin LD_LIBRARY_PATH=$L LIBGL_DRIVERS_PATH=$L/dri \
+    LD_PRELOAD=$L/libpanfrost_kbase_drm_shim.so setsid sh $S >/dev/null 2>&1 </dev/null &
+echo "Xorg :1 on vt8 (Ctrl+Alt+F1: text console, F7: the fbdev desktop if it runs; e850-x stop)"

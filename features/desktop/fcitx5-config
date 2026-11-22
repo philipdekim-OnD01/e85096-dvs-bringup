@@ -1,0 +1,6 @@
+# fcitx5 settings from e850-feature desktop (/etc/xdg/fcitx5/config): Korean/English toggle keys.
+# A US keyboard has no Hangul key, so right Alt also toggles.
+[Hotkey/TriggerKeys]
+0=Control+space
+1=Hangul
+2=Alt_R

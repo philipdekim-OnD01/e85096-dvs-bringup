@@ -37,7 +37,7 @@ WinLink E850-96(Samsung Exynos850 = s5e3830, Cortex-A55 8코어)에 vendor Linux
 | USB 네트워크(ECM) | 보드 192.168.7.1, Mac은 DHCP | `EmitRouter=no`라 Mac 인터넷은 Wi-Fi로 유지. 보드→Mac 방향이 멈출 때가 있다(11.52): UDC `soft_connect`를 끊었다 붙이면 복구된다 |
 | Wi-Fi | 192.168.0.236 | `ssh philip@192.168.0.236` 또는 `e850@`. 평소 작업은 이걸로 충분하다. 핸드폰 핫스팟 `An`이 켜져 있으면 그쪽에 먼저 붙는다(주소는 DHCP, 11.45). 그때는 `ssh -o HostKeyAlias=192.168.0.236 philip@<주소>` |
 | 보드2 (2026-11-14, 11.53) | Wi-Fi 192.168.0.168 (DHCP), UART `/dev/cu.usbserial-A5069RR4`, fastboot `000009f72c9c23e0` | 보드1의 복제본이다(machine-id만 다름, 같은 ssh 호스트 키라 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.168`). 두 보드 모두 USB 주소 192.168.7.1과 ACM 이름 `e850_96`를 쓴다. 그래서 Mac에는 한 번에 한 보드만 USB로 꽂는다. 지금 ACM에 붙은 보드는 `cat /etc/machine-id`로 구별한다(보드1 `4aeede4c…`, 보드2 `6f31c0bd…`) |
-| 보드3 (2026-11-15, 11.57) | Wi-Fi 192.168.0.234 (DHCP), fastboot `00000a749c9c23e0`, machine-id `16314a53…`. UART는 보드2에 쓰던 `A5069RR4`를 옮겨 꽂았다 | 보드1의 복제본(11-14 rootfs). **DVS 센서 없음:** dvslive는 웹만 띄우고 "센서 연결 안 됨"을 보인다. 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.234` |
+| 보드3 (2026-11-15, 11.57) | Wi-Fi 192.168.0.234 (DHCP), fastboot `00000a749c9c23e0`, machine-id `16314a53…`. UART는 보드2에 쓰던 `A5069RR4`를 옮겨 꽂았다 | 보드1의 복제본(11-14 rootfs). **DVS 센서 없음.** 2026-11-23(11.90)부터 데스크톱 보드: 부팅하면 HDMI tty1에 root 프롬프트, USB 호스트가 켜짐(ACM 없음, ssh로만 관리), dvslive 꺼짐. `e850-x`가 GPU 데스크톱(:1)을 띄운다(GPU 1001 MHz·MIF·INT 최대 고정, `e850-x stop`이 풂, Ctrl+Alt+F1). zram 1.8 GB. philip은 netdev·bluetooth 그룹이고 wpa_supplicant 제어 소켓이 netdev에 열려 있다(wpa_gui). 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.234` |
 | 보드4 (2026-11-15, 11.57) | Wi-Fi 192.168.0.244 (DHCP), fastboot `00000bf40c9c23e0`, machine-id `e0c18890…`, UART 없음 | 보드3과 같은 이미지. 2026-11-17 사용자가 DVS 센서를 달았다(dvslive 동작). 현미경 보드(11.64~11.69): 부팅 때 `e850-scope.service`가 50M 키트 뷰어 `:8090`을 띄우고 USB를 호스트 모드로 바꾼다. 그래서 평소 ACM이 없다. ACM이 필요하면 `curl http://192.168.0.244:8090/quit`(다음 부팅까지). 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.244` |
 | HDMI | LT8912B 브리지, tty1 텍스트 콘솔(16x32 글꼴) | `e850-hdmi.service` |
 
@@ -75,7 +75,7 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
   python3 tools/host/acm.py "echo $b | base64 -d | gunzip > /lib/modules/\$(uname -r)/X.ko && depmod" 30
   ```
   큰 파일은 `tools/linux510/acmpush.py`를 쓴다.
-- **userdata(768 MB 넘는 sparse) 굽기:** `fastboot flash userdata`는 쓰지 않는다. 먼저 `getvar:is-userspace`를 보내는데, LK가 거기서 멈춘다(11.53). `python3 tools/linux510/resparse.py --split-mib 700 rootfs.simg part.simg` 다음 `fbmini flash userdata part.simg.N`을 차례로 한다. `fbmini`는 `tools/linux510/fbmini.c`이고 빌드법은 7.7절에 있다. 보드를 통째로 복제하는 절차는 [docs/BOARD-CLONE.md](docs/BOARD-CLONE.md)에 있다.
+- **userdata(768 MB 넘는 sparse) 굽기:** `fastboot flash userdata`는 쓰지 않는다. 먼저 `getvar:is-userspace`를 보내는데, LK가 거기서 멈춘다(11.53). `python3 tools/linux510/resparse.py --split-mib 700 rootfs.simg part.simg` 다음 `fbmini flash userdata part.simg.N`을 차례로 한다. `fbmini`는 `tools/linux510/fbmini.c`이고 빌드법은 7.7절에 있다. 보드를 통째로 복제하는 절차는 [docs/BOARD-CLONE.md](docs/BOARD-CLONE.md)에 있다. 데스크톱 보드(보드3, GPU X·한글·BT 스피커) 이미지는 `~/e850-logs/clone-20261123/`이고 boot는 반드시 `boot-nocpu`다. 대상마다 `build-clone.sh`를 다시 돌린다(machine-id, BOARD-CLONE.md 11장).
 - **부트 이미지 굽기(허락받은 뒤):**
   1. 보드에서 `(setsid nohup /usr/local/sbin/to-fastboot >/dev/null 2>&1 </dev/null &)`를 실행한다. 워치독 데몬을 죽이면 약 20초 뒤 리셋되고, LK가 `Abnormal RST_STAT`로 보고 fastboot에 들어간다.
   2. `fastboot devices`로 보드가 보이는지 확인한다.
@@ -114,6 +114,8 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
 - **보드 `/tmp`:** 부팅 때 비워진다. 남길 파일은 `/var/tmp`에 둔다.
 - **YouTube 자동 시험:** Marionette로 띄운 Firefox에서는 재생 약 50초에 YouTube가 "Something went wrong"으로 재생을 끊는다. GPU·소프트웨어 경로 모두 같다(11.88). 측정은 30초 이내로 하고, 긴 시험은 로컬 클립(보드 `/var/tmp/loop.html`)으로 한다.
 - **`pkill -f`/`pgrep -f`를 ssh로 보낼 때:** 패턴과 같은 글자가 그 ssh 명령 줄 어디에 있어도 ssh 자신이 잡힌다(`x-kms.sh` 안의 `pkill -f "Xorg :1 vt8"` 포함, 11.88). pkill은 따로 ssh 한 번으로 보낸다.
+- **Firefox를 :0과 :1에 함께 띄울 때:** 같은 프로필로 두 번째 Firefox를 띄우면 떠 있는 Firefox에 창을 넘기고 바로 끝난다. 창은 다른 화면에 생긴다(11.89). 그래서 `/usr/local/bin/firefox`(desktop 기능)가 :1에서 `~/.config/mozilla/firefox/gpu` 프로필을 쓴다. 메뉴, 패널, 터미널의 `firefox`가 모두 이것이다. `firefox-esr`를 직접 치면 이 우회가 안 된다.
+- **ALSA 출력 바꾸기(`~/.asoundrc`):** 이미 떠 있는 프로그램은 설정을 다시 읽지 않는다. 다시 띄워야 한다(11.89). BT 스피커는 bt 기능의 bluez-alsa로 쓴다(README).
 - **`pgrep -f 'ov5647-cap.py --live'`:** ssh로 보낸 명령 줄 자신도 잡는다. live PID는 `systemctl show -p MainPID --value dvslive`로 얻는다.
 
 ## 로그와 백업 위치 (Mac)

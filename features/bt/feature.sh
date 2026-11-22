@@ -4,17 +4,21 @@
 # Also installs scsc_wlan with the recovery retry (modules/scsc-wlan-recovery, docs 11.78): with the
 # stock one a WLBT firmware panic while BT is open leaves Wi-Fi down until reboot. It is used from the
 # next boot (reloading scsc_wlan in a running system panics the kernel).
+# Audio to Bluetooth speakers: bluez-alsa (A2DP source, ALSA PCM "bluealsa"), see README (11.89).
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd); . "$ROOT/common.sh"; H=$DEST/bt
 case $1 in
 install)
-    apt_need bluez
+    install -D -m 644 "$H/bluealsa-no-userns.conf" /etc/systemd/system/bluealsa.service.d/e850-no-userns.conf
+    apt_need bluez bluez-alsa-utils libasound2-plugin-bluez
+    systemctl daemon-reload; systemctl restart bluealsa || true
     ko_install scsc_wlan
     unit_install "$H/e850-bt.service" enable
     if sh "$H/bt-check.sh" 2>/dev/null; then systemctl restart e850-bt
     else log "bt: reboot once so that the fixed scsc_wlan is loaded (until then BT stays off)"; fi;;
 remove)
     unit_remove e850-bt.service; ko_remove scsc_wlan
+    rm -rf /etc/systemd/system/bluealsa.service.d; systemctl daemon-reload
     log "bt: scsc_bt and hci_vhci stay loaded until reboot";;
 status)
     systemctl is-active e850-bt || true
