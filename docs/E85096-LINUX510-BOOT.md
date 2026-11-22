@@ -5286,3 +5286,141 @@ A의 단계와 어려움:
 - `~/.local/bin/xshot`.
 - 시험 파일: `/var/tmp/thrwait.py`, 로그 `/var/tmp/ffk*.log`, `/var/tmp/yt-*.txt`, `/var/tmp/ffk-720*.txt`.
 - Xorg :1과 그 안의 사용자 창은 그대로 두었다. 시험 Firefox는 내렸다.
+
+### 11.88 shim 비동기 제출, 새 Mesa로 X 재시작, 밤샘 시험, 렌더링 깨짐의 원인(셰이더 코어 LS 캐시) (2026-11-22, 보드3)
+
+**목표.** 11.87의 원인 2(동기 제출)를 없앤다. 사용자 지시는 "구현해, 커밋하고 전부 기록해"였다. 그다음 "알아서 밤새 테스트해"(sudo 사용 허락)라고 했다. 그래서 X 재시작과 GPU 클럭 고정도 했다. sudo 비밀번호는 명령에만 썼고 저장소에는 넣지 않았다.
+
+**1. kbase r38p1 소스에서 확인한 것(관찰).**
+- atom 번호 0은 "의존 없음"이다. 쓸 수 있는 번호는 1~255다.
+- atom 슬롯은 그 atom의 완료 이벤트를 사용자 공간이 읽어야 풀린다. 아직 쓰는 번호로 `JOB_SUBMIT`하면 슬롯이 풀릴 때까지 막힌다.
+- `pre_dep`에 `BASE_JD_DEP_TYPE_ORDER`를 걸면 앞 atom이 끝난 뒤에 시작한다. 앞 atom이 실패해도 실패가 번지지 않는다.
+- 이 커널은 `CONFIG_MALI_DMA_FENCE`가 꺼져 있다. 그래서 프로세스 사이(X와 클라이언트)에 dma-buf 암묵 동기화가 없다.
+- drm-shim은 처리 함수의 반환값을 그대로 ioctl 결과로 돌려준다. 바쁨이나 시간 초과를 알리려면 errno를 정하고 -1을 돌려줘야 한다.
+- `tools/gpu/abi-check.c`에 `pre_dep` 위치, 의존 구조체 크기, ORDER 값의 검사를 더했다(0 mismatches).
+
+**2. 구현(`tools/gpu/mesa-kbase-g52-e850.patch`).**
+- shim(`panfrost_kbase.c`):
+  - 제출마다 순번(seq)을 붙인다. atom 번호는 `1 + (seq-1) % 255`다. 한 번에 64개까지 띄우고, 넘으면 가장 오래된 것을 기다린다(throttle).
+  - 모든 atom은 바로 앞 atom에 ORDER 의존을 건다. 그래서 GPU 실행 순서는 제출 순서와 같다.
+  - 이벤트는 `event_lock`을 잡은 스레드 하나가 읽는다. 완료 표시와 순번 상태는 `job_lock`이 지킨다.
+  - BO마다 마지막으로 쓴 순번(`last_seq`)을 기억한다. `WAIT_BO`는 그 순번까지 기다린다. timeout 0이면 이미 온 이벤트만 읽고, 아직이면 `ETIMEDOUT`(바쁨)을 돌려준다. 기다린 뒤 CPU 캐시를 invalidate하는 것은 전과 같다.
+  - syncobj를 실제로 구현했다. handle→순번 표를 쓰고, `out_sync`에 그 제출의 순번을 단다. fence용 "sync file"은 eventfd이고 fd→순번 표로 찾는다. `SYNCOBJ_WAIT`는 WAIT_ALL이면 가장 큰 순번, 아니면 가장 작은 순번을 기다리고, 시간이 지나면 `ETIME`을 돌려준다.
+  - BO 해제는 그 BO의 `last_seq`가 끝날 때까지 기다린 뒤 munmap한다.
+  - `PAN_KBASE_SYNC=1`이면 예전처럼 제출마다 끝날 때까지 기다린다.
+  - `PAN_KBASE_STATS=1` 통계에 대기 종류(sync, throttle, bo, syncobj, free)별 횟수와 시간을 더했다.
+- 프로세스 사이 안전(Mesa):
+  - **첫 시도(실패):** shim에서, 가져온(공유) BO가 목록에 있는 제출은 동기로 했다. Firefox는 거의 모든 배치에 X와 공유하는 BO를 넣어서 대부분 동기로 남았다. 720p는 51.6 fps(드롭 15%), 55.7 fps(9%)였다.
+  - **최종:** Mesa `panfrost_flush`(glFlush, SwapBuffers 등)에서, 그동안 제출한 배치 가운데 `PAN_BO_SHARED` BO를 쓴 것이 있으면(`ctx->shared_pending`) 그 컨텍스트의 마지막 syncobj를 기다린다. 다른 프로세스가 보기 전에 GPU 일이 끝나 있게 된다. 그리기 사이의 제출은 비동기로 흐른다.
+
+**3. 결과(관찰).** YouTube 720p60(`aqz-KE-bpKQ`, 30 s, 매번 새 시험 Firefox, :1 GPU X):
+
+| 판 | 보인 fps / 드롭 | CPU(전체 코어) |
+|---|---|---|
+| 11.87(동기 제출, CPU가 쓴 BO만 clean) | 47.6~52.2 / 14~26% | 52~64% |
+| 비동기 + 공유 BO 제출만 동기(첫 시도) | 51.6 / 15%, 55.7 / 9% | 63%, 54% |
+| 비동기 + flush 때 대기, X는 옛 Mesa | 54.3 / 15%, 57.6 / 4%, 58.8 / 3% | 76%, 58%, 55% |
+| 같은 판, X도 새 Mesa로 다시 띄움 | 57.7 / 9%, 60.6 / 3%, 58.8 / 3%, 54.8 / 15%, 60.3 / 3%, 59.9 / 3% | 53~76% |
+| 같은 판 + GPU 1001 MHz 고정 | 60.4 / 6%, 60.5 / 1% | 68%, 56% |
+| 참고: :0 소프트웨어 WebRender(오늘) | 56.8 / 7% | 58% |
+
+- 새 Firefox의 첫 회는 나쁠 때가 많다(54.3, 57.7, 54.8). 두 번째부터는 57.6~60.6 fps로 소프트웨어 경로(56.8~58.3)와 같거나 조금 낫다.
+- Firefox GPU 프로세스 shim 통계(5초당): 제출 시간이 약 2.8 s에서 0.18~0.26 s로 줄었다. 프레임마다 한 번 꼴인 syncobj 대기(flush 대기)가 약 290번, 1.6~2.0 s다. bo 대기는 35번 이하(합 0.8 ms 이하), throttle은 가끔이다. kbase 오류 이벤트는 없었다.
+- 1080p60은 AV1 소프트웨어 디코딩이 병목이다. GPU X 기본 17.7 / 69%, 17.5 / 74%, 1001 MHz 고정 19.3 / 69%, 22.8 / 66%, :0 소프트웨어 28.5 / 54%, 21.0 / 69%. 회차마다 흔들림이 크다.
+- GLES 시험:
+  - `gles-test` 1080p 셰이더: 99.6 → 201, 177 fps.
+  - `gles-x11` EGL 720p: 약 200~269 fps(창 버퍼가 공유 BO라 flush마다 기다림). `PAN_KBASE_SYNC=1`이면 197.8 fps.
+
+**4. GPU DVFS(관찰).**
+- `utilization`은 GPU가 일하는 동안에도 늘 0이다. 클럭은 377 MHz나 0(전원 꺼짐)에 머문다. `time_in_state`도 377000만 는다.
+- Interactive governor 설정은 `highspeed_clock 377000`, `highspeed_load 75`, `dvfs_period 100`이다.
+- debugfs `/sys/kernel/debug/mali0/dvfs_utilization`은 Firefox가 GPU로 그리는 동안에도 `busy_time: 0 idle_time: 0`이다. kbase가 사용률을 아예 모으지 않는다.
+- [가설] 그래서 DVFS가 클럭을 올리지 않는다. 왜 모으지 않는지(kbase 설정, Exynos 플랫폼 코드)는 보지 않았다.
+- 시험으로 `echo 1001000 > dvfs_min_lock`(root)을 걸었다. 720p는 60.4 / 6%, 60.5 / 1%이고, flush 대기가 5초당 약 0.87 s로 절반이 됐다. 시험 뒤 `echo 0 > dvfs_min_lock`으로 풀었다(`dvfs_min_lock_status` `[1:0]`).
+
+**5. X :1 재시작과 pkill 함정(보드에 바꾼 것, 실패한 명령).**
+- 새 Mesa로 X를 다시 띄웠다: `sudo sh /var/tmp/e850-kms/x-kms.sh`.
+- `x-kms.sh`는 안에서 `pkill -f "Xorg :1 vt8"`을 한다. 내 ssh 명령 줄에 같은 글자(`pgrep -f "Xorg :1 vt8"`)가 있어서 그 ssh까지 죽었다(종료 코드 255, X는 정상으로 떴음).
+- `pkill -f "ffprof-[x]0"`도 같은 ssh 명령 안에 `--profile /var/tmp/ffprof-x0`이 있어서 그 ssh를 잡았다. 기다리는 루프가 600초 돌았다.
+- 규칙: `pkill -f`는 따로 ssh 한 번으로 보내고, 그 명령 줄에 같은 글자를 넣지 않는다.
+
+**6. 그 밖의 관찰.**
+- Firefox를 띄울 때마다 커널 WARN이 하나 난다: `v4l_querycap`(drivers/media/v4l2-core/v4l2-ioctl.c:1115), 호출자는 `v4l2test`와 `firefox-esr`. 오늘 바꾼 것보다 먼저 있었고 GPU와 관계없다.
+- UART(`~/e850-logs/uart-board3.log`): 11.87 커밋(22:21 KST) 뒤로 GPU fault는 없다. 마지막 fault는 20:21 KST(uptime 90297 s)다. 슬롯 0(fragment)에서 0x58(DATA_INVALID)과 0x5b가 Xorg 쪽에서 몰려 났다. 11.86~11.87 작업 중이었다.
+- 한 회는 `quality hd720 0x0`, 프레임 수가 음수였다. 그때 Renderer는 futex에서 쉬고 있었다(shim 교착 아님). YouTube가 재생을 끊은 경우다(8절).
+
+**7. 렌더링 깨짐의 원인: 셰이더 코어 LS 캐시(관찰, 고침).**
+11.86~11.87의 깨짐(글자가 빠지고, 터미널 글자 칸이 회색이고, 타일이 검거나 옛 내용, 창을 닫은 뒤 루트가 다시 안 그려짐, 비캐시에서 큰 흰 삼각형)은 11.86 판부터 있었다. glamor와 WebRender는 작은 사각형 여러 개를 한 번에 그린다(인스턴싱). 그래서 시험 두 개를 만들었다(EGL surfaceless, GLES 3.0).
+- `tools/gpu/gles-subtex.c`: 512² 텍스처(R8, ALPHA, RGBA8)에 작은 사각형을 `glTexSubImage2D`로 300번 올리고, 올릴 때마다 그 텍스처를 그리고, 50번마다 읽어 CPU 사본과 비교한다. **PASS**. 글리프 캐시 갱신은 맞다.
+- `tools/gpu/gles-inst.c`: 512² FBO에 8 px 칸 64×64 격자로 n개 사각형을 인스턴싱으로 그리고(인스턴스별 위치·색 속성, divisor 1), 칸마다 가운데 픽셀을 본다. strip `glDrawArraysInstanced`와 indexed `glDrawElementsInstanced`를 다 본다.
+  - **FAIL.** 인스턴스가 통째로 빠진다(가운데 픽셀만이 아니라 6×6 사각형 전체, `MAP=1`). 색이 틀린 경우는 한 번도 없다. 빠지는 수는 회마다 다르다(1~23개).
+  - 새 판, `PAN_KBASE_SYNC=1`, `PAN_KBASE_UNCACHED=1`, 11.86 판(`mesa-kbase.1186`)에서 모두 같다. 그러니 비동기 제출과 CPU 캐시 처리 때문이 아니다.
+  - n=1~300을 두 번 훑으면(`NS=1-300 PASSES=2`) 87~219 사이의 **홀수 n에서만** 빠졌다(그 범위 홀수의 대부분). 짝수 n과 85 이하, 221 이상은 모두 통과했다.
+  - `INSTID=1`(위치를 `gl_InstanceID`로 계산, 인스턴스 속성 없음)이면 덜 빠지지만 빠진다. 속성 읽기 문제가 아니다.
+  - `HIGHP=1`(색 varying을 fp32로)과 `TRI6=1`(인스턴스당 꼭짓점 6개)이면 짝수 n도 빠진다. "홀수"는 버퍼 배치 때문이다.
+  - `BIFROST_IDVS=1`이면 훨씬 많이 틀린다(n=255에서 129번 인스턴스부터 126개 빠짐, 큰 n은 색도 틀림).
+  - **같은 n을 40번 연달아 그리면 첫 번째만 빠지고 나머지 39번은 통과한다.** 타일러가 같은 주소에 있던 **앞 배치의 위치 값**을 읽는다는 뜻이다. 위치 버퍼는 색 varying 버퍼 다음에 64바이트 맞춤으로 놓인다(`ALIGN(32n, 64)`). 그래서 n이 홀수면 앞 그리기(n-1)와 위치 버퍼 시작이 인스턴스 하나만큼 어긋난다. 인스턴스 i는 앞 그리기의 i+1 자리 값을 읽고 옆 칸에 그려진다. 그 칸은 곧 인스턴스 i+1이 덮으므로 "빠짐, 색 틀림 없음"이 된다. 짝수면 앞 그리기와 배치가 같아 옛 값이 우연히 맞다. 87~219 범위의 이유는 모른다.
+- 원인을 가르려고 Mesa에 실험 코드를 넣었다. 꼭짓점 job과 타일러 job 사이에 Mali **cache flush job**(job 종류 3, genxml v7에 있지만 Mesa가 쓰지 않던 것)을 끼우고, 무엇을 flush할지는 환경 변수 `PAN_E850_FLUSH`(payload 비트)로 정한다. `NS=80-230`, 1회:
+
+| flush job | 빠진 그리기 | 기본 목록 |
+|---|---|---|
+| 없음(0) | 44 | FAIL |
+| **셰이더 코어 LS clean(1)** | **0** | **PASS** |
+| LS clean+invalidate(3) | 0 | PASS |
+| 타일러 invalidate(64) | 64 | FAIL |
+| LS clean + 타일러 invalidate(65) | 0 | PASS |
+| L2 clean(128) | 66 | FAIL |
+| L2 clean+invalidate(384) | 62 | FAIL |
+
+- **판단:** 꼭짓점 셰이더가 쓴 위치가 셰이더 코어의 load/store 캐시(write-back)에 남아 있다. 그런데 타일러는 L2에서 읽는다. 꼭짓점 job이 끝났다고 LS 캐시가 L2로 써지지 않는다(이 G52 r0p0 MP1에서). IDVS는 위치 셰이더와 타일링이 한 job 안이라 사이에 flush를 넣을 수 없다. 그래서 IDVS는 계속 끈다(고친 판에서도 `BIFROST_IDVS=1`이면 기본 목록 두 번, 그리기 80개가 모두 FAIL).
+- **고친 것:** `pan_cmdstream.c` `panfrost_emit_vertex_tiler_jobs`(v7)에서 꼭짓점 job마다 LS clean flush job을 끼운다(기본값 1). `PAN_E850_FLUSH=0`이면 끈다. 다른 값은 실험용이다.
+- 고친 판으로 `gles-inst`의 모든 변형(기본, INSTID, HIGHP, TRI6, SYNC, UNCACHED, n=1~300 두 번씩)과 `gles-subtex`가 PASS다.
+- 화면 확인(X :1을 새 Mesa로 다시 띄움, `xshot`):
+  - 같은 터미널(`ls -la /usr/bin`, dmesg, 영문 한 줄)을 `PAN_E850_FLUSH=0`으로 띄운 X와 기본값 X에서 떴다. flush가 없으면 줄이 통째로 빠지고, 글자 조각이 다른 줄에 찍히고, 메뉴 막대가 깨진다. 11.86부터 보던 깨짐 그대로다. 기본값(LS clean)에서는 모든 글자가 맞다.
+  - GPU Firefox에 글자 크기 7가지, 색 40가지 줄과 작은 색 타일 600개 페이지(`/var/tmp/textpage.html`)를 띄웠다. 모든 줄이 빠짐없이 보였다. YouTube 재생 중 화면에도 영상이 보였고, 탭·주소창 글자가 맞았다. 그 화면에서 페이지 본문은 YouTube가 아직 불러오는 중(회색 자리표시)이라 판단하지 않았다.
+- 비용(관찰): 뚜렷한 차이가 없다.
+  - `gles-test` 1080p 60프레임: flush 있음 268.5, 255.3 fps, 없음 235.1, 218.1 fps.
+  - `gles-x11` EGL 720p 8초: 있음 2,150, 2,028프레임, 없음 2,104, 2,150프레임.
+  - YouTube 720p60(새 시험 Firefox, 같은 Firefox에서 1~4회): 59.4 / 6%, 57.8 / 4%, 59.1 / 2%, 59.4 / 5%(4회째는 재생 중 화면 뜸). CPU 51~65%.
+- `run-test.sh`에 `gles-subtex`와 `gles-inst`(n=1~300)를 더했다. 고친 판에서 셋 다 PASS다.
+- [가설] compute job이 쓰고 같은 체인의 다음 job이 읽는 경우(변환 피드백, 간접 그리기)도 같은 문제가 있을 수 있다. 시험하지 않았다.
+- [모름] 메인라인 panfrost(Amlogic G52 r0p0 MP4)에서는 이런 flush 없이 dEQP 인스턴싱 시험을 통과한다. 무엇이 다른지는 모른다.
+  - kbase가 GPU 설정 레지스터에 넣은 값은 debugfs로 `quirks_gpu=0xF0000`(IDVS 묶음 크기 0xF), `quirks_sc=0x20000`(SC_TLS_HASH_ENABLE), `quirks_tiler=0`, `quirks_mmu=0`이다. 메인라인 panfrost가 G52에 넣는 값과 같다. 그러니 설정 레지스터 차이는 아니다.
+  - 남은 차이는 코어 수(1개), 하드웨어 리비전, kbase의 job 제출 방식이다. 확인하지 않았다.
+
+**8. 오래 돌리기(관찰).**
+- 첫 시도(비동기 판, flush 없음, 14:07~14:37 UTC): `ff-yt.py … hd720 1800`으로 YouTube를 한 번에 30분.
+  - 결과가 `quality hd720 0x0`, 재생 시간과 프레임 수가 음수, CPU 9%였다. **영상 재생 시험으로는 무효다.** 영상이 중간에 멈추고 Firefox는 페이지만 그렸다(5초에 제출 약 560번, flush 대기 약 40번).
+  - 그래도 30분 동안 늘어난 것은 없었다: 시험 Firefox RSS 약 792 MB, Xorg :1 RSS 200,700 kB, kbase GPU 메모리 557 MB(가끔 685). kbase 오류 이벤트도 없었다.
+- 둘째·셋째(고친 판): 같은 Firefox에서 120초 재생을 15번 하려 했다. 둘 다 1회째가 `0x0`이었다. 영상이 끝(634.6 s)에 닿았을까 해서 `ff-yt.py`가 0 s로 감고 시작하게 고쳤지만(`seekTo(0)`) 그대로였다.
+- 원인(관찰): 5초마다 플레이어 상태를 찍는 `/var/tmp/ytwatch.py`로 봤다.
+  - GPU X(:1): 재생 50.5 s까지 정상(1280×720, 프레임 증가)이다. 다음 표본(재생 약 55 s)에서 YouTube가 "Something went wrong. Refresh or try again later."를 띄웠다. `<video>`는 0×0, 플레이어 상태 -1이 된다. 광고는 아니었다(`ad-showing` 없음).
+  - 소프트웨어 경로(:0, 새 시험 Firefox, Mesa 없음)도 재생 32 s까지 정상이었다가 재생 약 50 s에 같은 오류가 났다.
+  - 그러니 **GPU 경로 문제가 아니다.** YouTube가 자동 조종(Marionette) 세션이나 로그인 안 한 재생을 1분쯤에서 끊는 것으로 본다(가설, 확인하지 않음). 30초 측정(재생 약 8~38 s 구간)은 이 전에 끝나므로 유효하다. 11.87에서 화면에 보이던 같은 오류도 이것이다.
+- 넷째(고친 판, 15:04 UTC부터): YouTube 대신 보드에서 만든 20초 AV1 720p60 클립(`/var/tmp/loop720.webm`, ffmpeg `testsrc2`+noise, SVT-AV1 preset 12, 22.9 MB, 약 9 Mbps)을 `<video loop>`로 30분 돌렸다. 새 시험 Firefox(:1 GPU X), 1분마다 프레임·드롭·CPU를 `/var/tmp/locsoak.txt`에 적었다.
+  - 결과(관찰): 30분(1분 표본 30개) 동안 108,128프레임 가운데 293프레임 드롭(0.27%), 가장 나쁜 1분이 37프레임이다. 보인 fps는 59.4~60.0(평균 59.89), CPU 32~39%였다. 멈춤이나 미디어 오류는 없었다.
+  - 메모리: 시험 Firefox RSS는 데운 뒤(9분째) 790.8 MB에서 끝 796.5 MB, Xorg :1 RSS 198,092 kB와 kbase GPU 메모리 518 MB는 그대로였다.
+  - shim 통계(5초당): 제출 약 670번, flush 대기 약 300번(프레임마다 한 번) 합 약 2.0 s. kbase 오류 이벤트 0, 같은 시간 UART에 GPU fault 없음.
+
+**판단.**
+- 원인 2(동기 제출)를 없앴다. 720p60이 47.6~52.2 fps에서 약 58~60 fps(새 Firefox의 첫 회는 더 낮을 때가 있음)가 되어 소프트웨어 경로와 같아졌다.
+- 11.86부터의 렌더링 깨짐은 이 G52의 셰이더 코어 LS 캐시 때문이었다. 꼭짓점 job이 끝나도 위치 값이 L2에 써지지 않는다. Mesa가 꼭짓점 job과 타일러 job 사이에 LS clean flush job을 넣어 고쳤다. 잰 범위에서 비용은 보이지 않았다.
+- 고친 판으로 로컬 AV1 720p60 클립을 30분 돌렸다. 평균 59.9 fps, 드롭 0.27%였고, 메모리는 늘지 않았고, 오류는 없었다.
+- 남은 것:
+  - GPU DVFS가 사용률을 모으지 않아 377 MHz에 머문다.
+  - 1080p60은 AV1 소프트웨어 디코딩이 병목이다.
+  - YouTube는 자동 시험 재생을 약 50초에서 끊는다(소프트웨어 경로도 같음). 긴 시험은 로컬 클립으로 한다.
+
+**다음 후보(하지 않음).**
+- kbase가 GPU 사용률을 모으지 않는 이유를 찾는다. 고치면 DVFS가 클럭을 올릴 것이다.
+- compute job이 쓰고 같은 체인의 다음 job이 읽는 경로(변환 피드백, 간접 그리기)를 시험한다. IDVS는 계속 끈다.
+- KMS vblank(30 fps 상한, 11.85).
+- X :1에 인증(`-auth`)을 걸고, 부팅 때 띄울지 정한다.
+
+**보드에 바꾼 것.**
+- `~/gpu/mesa-kbase`: 이번 판(비동기 제출 + LS clean flush job). 그 전 판은 `~/gpu/mesa-kbase.1188a`(비동기, flush 없음), `.1187`(11.87), `.1186`(11.86).
+- X :1을 이 판으로 다시 띄웠다(sudo `x-kms.sh`). 사용자의 :0 Firefox(vt7 데스크톱)는 건드리지 않았다.
+- `~/gpu/gles-subtex`, `~/gpu/gles-inst`, `~/gpu/run-test.sh`(새 판).
+- `/var/tmp/ff-yt.py`: 재생 전에 0 s로 감는다(`seekTo(0)`).
+- 시험 파일: `/var/tmp/soakmon.sh`, `/var/tmp/textpage.py`, `/var/tmp/textpage.html`, `/var/tmp/ytdur.py`, `/var/tmp/ytwatch.py`, `/var/tmp/locsoak.py`, `/var/tmp/loop.html`, `/var/tmp/loop720.webm`, `/var/tmp/shot-1188*.ppm`. 로그는 `/var/tmp/yt-*.txt`, `/var/tmp/ffk-*.log`, `/var/tmp/soakmon*.log`.
+- GPU 클럭 고정은 풀었다. 시험 Firefox는 내렸다.

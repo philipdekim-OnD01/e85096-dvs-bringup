@@ -15,4 +15,4 @@ fi
 docker run --rm -v e850-kernel:/k:ro -v "$W/uapi:/u" ubuntu:22.04 sh -c 'cp -r /k/include/uapi/gpu/arm/b_r38p1/* /u/'
 docker build -q -t e850-mesa-build:1 "$H" >/dev/null
 docker run --rm -v "$W:/g" -v "$W/uapi:/u:ro" -v "$H:/t:ro" e850-mesa-build:1 sh /t/build-mesa.sh
-cd "$W/out" && COPYFILE_DISABLE=1 tar --no-xattrs -czf mesa-kbase.tgz mesa-kbase gles-test gles-x11 gles-fb gles-kms && ls -l mesa-kbase.tgz
+cd "$W/out" && COPYFILE_DISABLE=1 tar --no-xattrs -czf mesa-kbase.tgz mesa-kbase gles-test gles-x11 gles-fb gles-kms gles-subtex gles-inst && ls -l mesa-kbase.tgz

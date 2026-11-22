@@ -26,6 +26,9 @@ int main(void) {
     EQ(sizeof(struct mali_jd_atom_v2), offsetof(struct base_jd_atom_v2, renderpass_id));
     EQ(offsetof(struct mali_jd_atom_v2, core_req), offsetof(struct base_jd_atom_v2, core_req));
     EQ(offsetof(struct mali_jd_atom_v2, atom_number), offsetof(struct base_jd_atom_v2, atom_number));
+    EQ(offsetof(struct mali_jd_atom_v2, pre_dep), offsetof(struct base_jd_atom_v2, pre_dep));
+    EQ(sizeof(struct mali_jd_dependency), sizeof(struct base_dependency));
+    EQ(MALI_JD_DEP_TYPE_ORDER, BASE_JD_DEP_TYPE_ORDER);
     EQ(sizeof(struct mali_jd_event_v2), sizeof(struct base_jd_event_v2));
     EQ(MALI_MEM_PROT_CPU_RD, BASE_MEM_PROT_CPU_RD);
     EQ(MALI_MEM_PROT_CPU_WR, BASE_MEM_PROT_CPU_WR);
