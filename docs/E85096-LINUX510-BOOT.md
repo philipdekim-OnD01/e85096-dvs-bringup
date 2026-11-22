@@ -4961,3 +4961,328 @@ Mac에서만 했다. 보드에 바꾼 것은 없다.
 - shim은 kbase 메모리를 풀지 않는다(`driver_bo_free`가 없어 `MEM_FREE`를 부르지 않음). Mesa BO 캐시가 재사용하므로 gles-x11 988장은 문제없었다. 오래 돌거나 크기를 자주 바꾸는 앱에서 메모리가 느는지는 재지 않았다.
 - X로 보내기를 줄이려면 fb0에 바로 쓰거나(X 없이) 2번(KMS·DRI3)으로 가야 한다.
 - AFBC와 IDVS가 왜 안 되는지는 모른다. 이 보드의 Android 판 blob이 AFBC와 IDVS를 쓰는지 확인하지 않았다.
+
+### 11.83 GPU 2번 방법(X·Firefox 가속) 조사와 설계안 (2026-11-22, 보드3)
+
+사용자 지시(2026-11-22): 2번 방법을 시작한다. 먼저 vendor dpu 드라이버가 DRM인지 fbdev인지 조사하고, 할 수 있는 길과 어려움을 정리한 설계안을 낸다. 사용자가 고르기 전에는 보드에 커널 모듈이나 부트 이미지를 넣지 않는다.
+
+**조사 결과(관찰).** 커널 소스(`e850-kernel`), 빌드 결과(`e850-out`), 보드3을 읽기만 했다.
+- dpu는 **fbdev 드라이버**다(`drivers/video/fbdev/exynos/dpu30`, `depends on FB`). DRM 코드는 없고 `/dev/dri`도 없다. mainline `exynos_drm`은 Exynos850 DECON을 지원하지 않는다.
+- 다만 Android HWC가 쓰던 `S3CFB_WIN_CONFIG` ioctl이 있다. 이 ioctl은 KMS의 atomic commit과 비슷하다.
+  - 창(window)마다 dma-buf fd와 acquire fence를 받는다. 창은 4개다(`MAX_DECON_WIN`).
+  - 커널은 `dma_buf_get` → DSIM 장치(IOMMU)로 매핑해서 그 버퍼를 바로 화면에 내보낸다(`decon_import_buffer`).
+  - 돌려주는 값은 retire fence다.
+  - `decon_set_win_config`는 static이고, `decon_drvdata`만 EXPORT되어 있다.
+- fb0는 1920×1080, 32 bpp, stride 7680이다. 메모리는 dma-heap `system-uncached`에서 잡는다(`decon_fb_alloc_memory`).
+  - `decon_pan_display`는 `info->fix.smem_start`(DPU IOMMU 주소)를 그대로 DPP 주소로 쓴다.
+- 커널(GKI)에는 DRM이 이미 들어 있다. `CONFIG_DRM`, `DRM_KMS_HELPER`, `DRM_GEM_CMA_HELPER`, `DRM_GEM_SHMEM_HELPER`가 모두 `=y`다.
+  - `Module.symvers`에서 확인한 EXPORT: `drm_simple_display_pipe_init`, `drm_gem_cma_dumb_create`, `drm_gem_cma_prime_get_sg_table`, `drm_gem_prime_export`, `drm_gem_fb_create`, `drm_gem_shmem_*`, `fb_pan_display`, `registered_fb`.
+  - `TRIM_UNUSED_KSYMS`가 없다. 그래서 외부 모듈로 KMS 드라이버를 만들 수 있다. 부트 이미지는 바꾸지 않아도 된다.
+- CMA는 236 MB이고 그중 177 MB가 비어 있다. `CONFIG_UDMABUF`와 `DRM_VKMS`는 없다.
+- `/dev/dma_heap/*`는 root 0600이다. `/dev/fb0`는 root:video 0660이고, philip은 video 그룹이다.
+- `dpu.ko`와 `mali_kbase.ko`는 initramfs에서 자동으로 올리지 않는다(`autoload.deny`). rootfs의 `e850-hdmi.service`가 `modprobe dpu`를 한다.
+- kbase r38p1:
+  - `KBASE_IOCTL_MEM_IMPORT`는 24바이트 union이다(in: flags, phandle, type, padding / out: flags, gpu_va, va_pages). shim의 40바이트 구조체는 맞지 않는다(11.82).
+  - UMM 가져오기는 CPU 매핑(`dma_buf_mmap`)을 지원한다. 캐시 동기화(`dma_buf_begin/end_cpu_access`, `BASE_MEM_IMPORT_SYNC_ON_MAP_UNMAP`)도 지원한다. `CONFIG_MALI_DMA_FENCE`는 꺼져 있다(암묵적 fence 없음).
+- Mesa(kbase-g52 브랜치):
+  - kmsro가 있다. 화면용 버퍼와 공유 버퍼(`PIPE_BIND_SCANOUT|SHARED`)는 KMS 장치의 dumb 버퍼로 잡고, PRIME으로 GPU에 가져온다(`renderonly_create_kms_dumb_buffer_for_resource`). 그래서 shim은 **가져오기만** 하면 된다. 내보내기는 처음에는 필요 없다.
+  - pipe-loader는 모르는 KMS 이름이면 kmsro로 넘어간다.
+  - DRI megadriver는 `__driDriverGetExtensions_<이름>` 진입점이 있는 이름만 연다. 목록에 `exynos`가 있다.
+- 보드3 X:
+  - `modesetting_drv.so`와 `libglamoregl.so`가 깔려 있다(xserver-xorg-core 21.1.7).
+  - 지금 X는 `Xorg.wrap`(setuid, `needs_root_rights=yes`)로 root로 돈다. setuid를 거치므로 `LD_PRELOAD`(shim)가 넘어가지 않는다.
+  - Firefox는 ESR 153이다.
+
+**길(설계안).**
+
+| 길 | 내용 | 커널 | root | X·Firefox 가속 | 어려움 |
+|---|---|---|---|---|---|
+| A | 외부 모듈로 작은 KMS 드라이버(`/dev/dri/card0`, DRM 이름 `exynos`)를 만든다. 그 위에 kmsro + Xorg modesetting/glamor(DRI3), Firefox EGL | 새 모듈 1개, `insmod`로만 | 모듈 적재, Xorg 실행 | 됨(목표) | 아래 A 항목 |
+| B | 커널을 바꾸지 않는다. GPU가 dma-heap 버퍼에 그리고, `S3CFB_WIN_CONFIG`로 그 버퍼를 바로 화면에 낸다(복사 없음) | 없음 | dma-heap 권한(udev 규칙 1개) | 안 됨. 우리 전체 화면 앱만 | 화면을 독차지한다. fb0(X·콘솔) 내용을 같은 화면의 다른 창으로 넣을 수 없다(fb0의 dma-buf fd를 얻을 ioctl이 없음) |
+| C | A의 커널·shim 위에 X 대신 Wayland(weston DRM + GL 렌더러, Firefox Wayland) | A와 같음 | A와 같음 | 됨(X가 아님) | Openbox 환경을 바꾼다. Debian 12 weston 10을 새로 깔아야 한다 |
+| D | shim이 사용자 공간에서 가짜 KMS(`card0`)를 흉내 내고, 뒤에서 `S3CFB_WIN_CONFIG`를 부른다 | 없음 | Xorg 실행 | 이론상 됨 | 권하지 않음. 흉내 낼 ioctl이 많다(자원·커넥터·CRTC·dumb·flip·vblank 이벤트 fd). Xorg가 udev로 장치를 찾는 것도 속여야 한다 |
+| E | Mesa EGL/X11을 고친다. DRI3 없이도 GPU로 그리고, 스왑할 때 읽어서 `XPutImage`로 보낸다(gles-x11 방식을 Mesa 안에) | 없음 | 없음 | Firefox만, X는 CPU 그대로 | 상한이 낮다. 720p 보내기만 10~12 ms(11.82)였다. 1080p는 약 2.25배로 추정한다(재지 않음) |
+
+A의 단계와 어려움:
+1. **shim**(커널 위험 없음):
+   - `PRIME_FD_TO_HANDLE` → `MEM_IMPORT`(UMM, 24바이트)
+   - 가져온 BO의 CPU 매핑
+   - `MEM_FREE`(지금은 메모리를 풀지 않는다. X와 Firefox는 오래 돌고 크기가 바뀌는 버퍼가 많아 꼭 필요하다)
+   - 실제 `/dev/dri`가 있을 때 `drmOpenWithType("panfrost")`가 shim의 가짜 renderD128을 찾는지 확인
+2. **KMS 모듈 `e850-kms`**:
+   - CRTC·plane·커넥터 하나씩, 1920×1080 고정, `drm_simple_display_pipe` + GEM CMA(dumb, PRIME).
+   - 화면에 내는 방법은 둘이다.
+     - (가) dpu.ko를 바꾸지 않는다. 버퍼를 DSIM 장치로 매핑해 DPU 주소를 얻는다. `lock_fb_info` 안에서 fb0의 `smem_start`를 그 주소로 바꿔 `fb_pan_display`를 부른다. 원래 주소로 다시 pan하면 콘솔이 돌아온다.
+     - (나) dpu.ko 패치(`modules/e850-hdmi/apply.sh`)로 `decon_set_win_config`를 dma_buf 포인터로 부르는 EXPORT 함수를 넣는다. fence와 여러 창을 쓸 수 있다. 다만 `e850-hdmi`가 부팅마다 올리는 모듈을 바꾸게 된다.
+     - (가)로 시작하기를 권한다.
+   - 어려움:
+     - 페이지 전환 완료 이벤트. DECON vsync 인터럽트를 바로 받을 길이 없어서 pan 뒤 vsync를 기다리거나 타이머로 대신한다.
+     - 버퍼 수명. 화면이 다음 버퍼를 잡기 전에 앞 버퍼를 풀면 안 된다.
+     - X가 끝나거나 VT를 바꿀 때 fbcon을 되돌려야 한다.
+     - PSR/hibernation 상태(지금 설정은 꺼져 있다고 봄, 확인 필요).
+   - 모듈은 부팅 때 올리지 않고 손으로 `insmod`한다. 그래서 멈추면 워치독 리셋 뒤 원래 상태로 부팅한다.
+3. **Mesa**:
+   - `-Dgallium-drivers=panfrost,kmsro`로 빌드한다. DRM 이름을 `exynos`로 하면 Mesa 코드는 바꾸지 않아도 된다(다른 이름이면 `target.c`에 진입점 한 줄).
+4. **Xorg**:
+   - `Xorg.wrap`을 거치지 않는다. systemd 유닛이 root로 `/usr/lib/xorg/Xorg`를 바로 띄우고 `LD_PRELOAD`·`LD_LIBRARY_PATH`를 준다. 세션은 philip으로 띄운다.
+   - xorg.conf: `Driver "modesetting"`, `kmsdev /dev/dri/card0`, `AccelMethod "glamor"`.
+   - 어려움:
+     - glamor가 2022년 개발 브랜치 panfrost에서 맞게 그리는지(글꼴, RENDER 경로)
+     - shim 제출이 동기식이라 생기는 속도 저하
+     - vblank 없는 KMS에서 modesetting의 Present 동작(확인 필요)
+5. **Firefox**:
+   - 환경 변수로 shim을 준다. `gfx.webrender.all` 등으로 하드웨어 WebRender를 강제하고 `about:support`로 확인한다.
+   - 어려움:
+     - Firefox 153이 요구하는 GL/GLES 판(이 Mesa는 GL 3.1, GLES 3.1, 확인 안 함)
+     - 차단 목록
+     - 샌드박스된 자식 프로세스에도 shim이 실려 `/dev/mali0`을 열려 할 때의 동작
+   - 비교 기준은 11.81의 CPU 수치다(X 안 YouTube 720p60 55.9 fps, 드롭 8%, CPU 55%).
+
+**권하는 순서(Claude 의견).**
+1. A의 1단계(shim 가져오기·해제)를 B의 시험 앱으로 먼저 검증한다.
+   - 커널은 바꾸지 않는다. 필요한 root 작업은 dma-heap 권한 한 번이다.
+   - GPU가 그린 1080p를 복사 없이 HDMI에 내면, dma-buf 가져오기·캐시·DECON 형식·fence를 KMS 모듈 전에 확인할 수 있다.
+2. 그다음 A의 2~5단계를 한다.
+- C는 A가 끝난 뒤 X 대신 고를 수 있다. D는 권하지 않는다. E는 커널 없이 Firefox만 조금 낫게 할 때의 대안이다.
+
+**보드에 바꾼 것.** 없다. 보드3에서는 읽기 명령만 썼다(`ls /dev`, sysfs, `lsmod`, `/proc/meminfo`). Mac에서는 UART 기록기(`~/e850-logs/uart-board3.log`)를 띄웠다.
+
+### 11.84 B단계: GPU가 fb0 메모리에 바로 그리기(복사 없음), shim의 dma-buf 가져오기와 메모리 해제 (2026-11-22, 보드3)
+
+사용자 지시(2026-11-22): 11.83의 추천대로 B 다음 A로 간다.
+
+**B를 바꾼 이유(관찰, DECON 소스).**
+- 사용자 공간 `S3CFB_WIN_CONFIG`는 쓰지 않는다. `decon_update_regs`는 새 프레임을 올린 뒤 `decon_acquire_old_bufs`/`decon_release_old_bufs`로 앞 프레임 버퍼를 푼다(detach, unmap, `dma_buf_put`).
+  - win_config를 한 번도 하지 않은 상태에서 "앞 프레임 버퍼"는 기본 창의 `dma_buf_data[0]`, 곧 fb0 메모리다.
+  - 이 메모리를 잡고 있는 참조는 그것 하나뿐이다. 그래서 첫 win_config에서 fb0 메모리가 풀리고 DPU IOMMU 매핑도 사라진다. 그런데 fbcon은 남은 vmap(`screen_base`)으로 계속 쓴다.
+  - Android에서는 fb0가 부팅 화면용이라 문제가 없었다. vendor에도 fb 버퍼를 따로 두는 `CONFIG_FB_TEST`(`fb_buf_data`) 판이 있지만 꺼져 있다.
+- 11.83의 가정 하나를 고친다. `CONFIG_EXYNOS_HIBERNATION=y`, `CONFIG_EXYNOS_WINDOW_UPDATE=y`다. LT8912B는 DSI video 모드라 hibernation이 실제로 쓰이는지는 확인하지 않았다.
+- 대신 쓴 방법:
+  - 작은 모듈 `modules/e850-fbbuf`가 fb0 버퍼의 dma-buf fd만 꺼내 준다(`/dev/e850-fbbuf`, ioctl 하나). DECON 상태는 바꾸지 않고 참조를 하나 늘릴 뿐이다.
+  - GPU는 그 fd를 가져와 fb0 메모리에 바로 그린다. 화면 전환은 fbcon과 같은 `FBIOPAN_DISPLAY`로 한다. A의 (가) 방식이 쓸 경로와 같다.
+  - 모듈은 부팅 때 올리지 않는다. root로 `sh /var/tmp/e850-fbbuf/load.sh`를 실행한다.
+
+**모듈에서 겪은 것.**
+- 첫 판은 ioctl이 ENODEV였다. fb0 확인을 `info->fbops->fb_mmap == decon_mmap`으로 했기 때문이다. 이 커널은 `CONFIG_CFI_CLANG=y`라 두 모듈이 같은 함수의 주소를 서로 다른 점프 테이블 주소로 본다. 그래서 구조 검사(`win->fbinfo == info`, 버퍼 크기 ≥ `smem_len`)로 바꿨다.
+- load.sh가 `chmod`한 뒤 udev가 새 노드에 기본 모드 0600을 다시 씌웠다(그룹은 video로 남음). 그래서 `udevadm settle` 뒤에 권한을 준다.
+
+**shim 수정(`tools/gpu/mesa-kbase-g52-e850.patch`).**
+- `DRM_IOCTL_PRIME_FD_TO_HANDLE`: kbase `MEM_IMPORT`(UMM, r38p1의 24바이트 union).
+  - 64비트 프로세스는 SAME_VA 영역 cookie를 받는다(`kbase_mem_from_umm`의 `shared_zone`). 그 cookie를 mmap하면 GPU VA = CPU VA가 된다. CPU 매핑은 kbase가 `dma_buf_mmap`으로 만든다.
+  - 같은 버퍼는 같은 handle을 돌려준다. 버퍼는 dma-buf inode 번호로 가린다. 이 번호는 `dma-buf.c:490`의 전용 카운터라 버퍼마다 다르다.
+- `GET_BO_OFFSET`가 아무것도 안 하던 것을 BO의 GPU VA를 돌려주게 고쳤다(Mesa의 import가 쓴다).
+- BO 해제(`driver_bo_free`):
+  - 할당한 BO와 가져온 BO 모두 cookie에서 만든 매핑을 munmap한다. kbase는 그 매핑이 닫힐 때 영역을 푼다(`free_on_close`). 지금까지 shim은 GPU 메모리를 한 번도 풀지 않았다.
+- 참조 수:
+  - `drm_shim_bo_put`의 조건이 뒤집혀 있었다. 0이 되면 남기고 0이 아니면 풀었다.
+  - `MMAP_BO`의 lookup은 참조를 돌려주지 않았다.
+  - 그래서 handle이 참조 하나를 갖고, lookup마다 get/put하도록 바로잡았다.
+
+**결과(보드3, 관찰).**
+- 새 shim으로 회귀 시험:
+  - `run-test.sh` PASS, 1080p 셰이더 99.6 fps(11.82와 같음)
+  - `gles-x11` 1280×720 41~43 fps(같음)
+- 해제 확인: 일회용 시험으로 텍스처를 크기를 바꿔 가며 200번 만들고·그리고·지웠다.
+  - VmSize는 첫 20번 뒤 약 375 MB에서 더 늘지 않았다.
+  - shim 로그에 해제 10건, 오류는 없었다.
+- `tools/gpu/gles-fb`(일반 사용자, X가 떠 있는 상태):
+  - fb0 dma-buf(16,588,800바이트 = 1920×2160×4)를 가져와 EGLImage(XRGB8888, pitch 7680)로 FBO에 붙이고 토러스를 그린다.
+
+| 방식 | fps | 그리기 | pan |
+|---|---|---|---|
+| 한 장(보이는 화면에 바로, 찢김 있음) | 116~164 | 6.1~8.6 ms | 없음 |
+| 두 장(`yres_virtual` 2160, `FBIOPAN_DISPLAY`로 전환) | 29.6~30.0 | 10.4~11.7 ms | 21.8~22.9 ms |
+
+- fb0 캡처에서 색(주황·파랑 띠, 배경)과 위아래 방향이 맞았다. gles-x11 장면과 같다.
+- 두 장 방식이 30 fps에서 멈추는 이유: `decon_pan_display`는 레지스터를 쓴 뒤 vsync와 shadow 갱신 완료를 기다린 다음에야 돌아온다(평균 22 ms). 그리기와 전환 대기가 겹치지 않아 한 장에 두 프레임 주기가 걸린다.
+- 끝날 때 `yres_virtual`과 pan(0,0)을 되돌렸다. `xrefresh` 뒤 X 화면도 돌아왔다. 시험 동안 UART에 GPU·sysmmu·DECON 오류는 없었다.
+
+**A에 주는 뜻.** pan 경로(DPU 주소만 바꿔 다시 그리기)는 동작한다. KMS 모듈의 페이지 전환은 pan을 worker에서 하고, 끝나면 vblank 이벤트를 보낸다. 그러면 X가 기다리는 동안 다음 프레임을 그릴 수 있다. 동기식으로 하면 30 fps가 상한이다.
+
+**보드에 바꾼 것.**
+- `e850-fbbuf` 모듈이 올라가 있다(다음 재부팅까지). `/dev/e850-fbbuf`는 root:video 0660이다(load.sh가 줌, 재부팅하면 없어짐). 파일은 `/var/tmp/e850-fbbuf/`에 있다.
+- `~/gpu/`의 Mesa를 새 빌드로 바꿨다. 이전 판은 `~/gpu/mesa-kbase.1182`다.
+- 시스템 파일은 바꾸지 않았다.
+
+### 11.85 A단계(1): KMS 장치 `e850-kms`와 GPU 페이지 전환 (2026-11-22, 보드3)
+
+**만든 것.**
+- `modules/e850-kms`: vendor fbdev DECON 위에 얹은 작은 KMS 장치(`/dev/dri/card0`, DRM 이름 `exynos`).
+  - CRTC 하나, XRGB8888 primary plane 하나, HDMI 커넥터 하나(fb0 모드 1920×1080만).
+  - 버퍼는 GEM CMA 헬퍼로 DSIM 장치에서 잡는다. DPU에서 IOMMU가 있는 장치는 DSIM 하나라 `paddr`가 곧 DPU 주소다. 적재할 때 DSIM의 IOMMU 도메인이 DMA 형인지 확인한다.
+  - 화면 전환은 fb0의 `smem_start`를 잠깐 DRM 버퍼 주소로 바꾸고 `decon_pan_display`를 부른다(11.84에서 확인한 pan 경로). 돌아오면 vblank 이벤트를 보낸다.
+  - DRM master가 빠지거나 pipe가 꺼지면 fb0 버퍼를 다시 보인다. 텍스트 콘솔이나 fbdev X가 돌아온다.
+  - Mesa DRI megadriver에 `exynos` 이름의 kmsro 진입점이 이미 있어서 이 이름을 썼다.
+- Mesa를 `-Dgallium-drivers=panfrost,kmsro`로 다시 빌드했다(`tools/gpu/build-mesa.sh`). kmsro는 화면용 버퍼를 KMS 장치의 dumb 버퍼로 잡고 panfrost(shim)로 가져온다. 그래서 shim에는 가져오기(11.84)만 있으면 된다. 회귀: `run-test` 115 fps, `gles-fb` 한 장 167 fps.
+- `tools/gpu/gles-kms.c`: `dumb`(커널만: dumb 버퍼 두 장, 색 막대와 움직이는 흰 사각형, 매 프레임 페이지 전환)와 기본(GBM + EGL 창 표면에 토러스, kmscube 방식). 장면은 `tools/gpu/torus.h`로 gles-x11·gles-fb와 함께 쓴다.
+
+**결과(보드3, 관찰).** 사용자가 root로 `sh /var/tmp/e850-kms/load.sh`를 했다. X(fbdev)와 Firefox가 떠 있는 상태에서 philip으로 돌렸다.
+- 적재: `[drm] Initialized exynos 1.0.0 20261122 for 13070000.dsim on minor 0`, card0는 root:video 0660.
+
+| 시험 | fps | 그리기 | 전환 | 화면(사용자 확인) |
+|---|---|---|---|---|
+| `gles-kms dumb 5` | 30.0 | 0.1 ms | 33.0~33.3 ms | 색 막대 8개와 움직이는 흰 사각형, 끝난 뒤 X 데스크톱으로 돌아옴 |
+| `gles-kms 10`(Mali, GBM) | 30.0 | 8.3~10.5 ms | 22.8~25.0 ms | 주황·파랑 띠가 도는 토러스, 끝난 뒤 X 데스크톱으로 돌아옴 |
+
+- GPU 시험: `Mali-G52 (Panfrost), OpenGL ES 3.1 Mesa 22.2.0-devel, gbm drm`, 300프레임(9,216 삼각형). kmsro가 card0 dumb 버퍼를 panfrost로 가져와 그렸다.
+- 두 시험 동안 dmesg에 DRM·DECON·sysmmu 오류가 없다. 같은 때 찍힌 `v4l_querycap` WARNING은 사용자가 띄운 Firefox(PID 185165)가 V4L2 장치를 살피며 낸 것이다(11.81과 같음).
+
+**30 fps 상한(관찰과 가설).**
+- [관찰] 그리기가 0.1 ms인 dumb 시험도 전환 하나에 33 ms가 걸린다. 그리기 + 전환은 어느 시험이든 33 ms로 맞춰진다. 11.84에서 "그리기와 대기가 겹치지 않아서"라고 본 것은 틀렸다. pan 자체가 연달아 부르면 두 프레임 주기를 쓴다.
+- [소스] `decon_pan_display`(decon_dsi.c)는 DPP 설정 → `decon_reg_update_req_window` → `decon_reg_start` 다음 `decon_wait_for_vsync`, 이어서 `decon_reg_wait_update_done_and_mask`(shadow 갱신 완료)를 기다린다.
+- [가설] vsync 대기와 shadow 갱신 대기가 서로 다른 vsync에 걸려 두 주기가 된다. 측정하지 않았다. 그래서 nonblocking commit으로 바꿔도 전환은 1초에 30번이 상한이다. 60 fps를 내려면 e850-kms가 pan 순서를 직접 하면서 vsync 대기를 빼야 한다(dpu.ko의 `decon_reg_*`가 EXPORT되어 있는지 먼저 확인).
+
+**보드에 바꾼 것.**
+- `e850-kms` 모듈이 올라가 있다(다음 재부팅까지, 부팅 때 올리지 않음). 파일은 `/var/tmp/e850-kms/`.
+- `~/gpu/`에 kmsro를 넣은 Mesa와 `gles-kms`. 이전 판은 `~/gpu/mesa-kbase.1182`.
+- 데스크톱(사용자 요청): `~/.local/bin/xbg`와 `~/.local/share/wallpaper.bgrx`(오로라 배경, `tools/board/wallpaper/`), `~/.config/lxterminal/lxterminal.conf` 글꼴 `Monospace 16`. 사용자가 root로 `/opt/e850-features/desktop/session.sh`의 `xsetroot -solid '#24323f'` 줄을 `$HOME/.local/bin/xbg … || xsetroot -solid black`으로 바꿨다(저장소 `features/desktop/session.sh`는 그대로).
+- HDMI가 한때 안 나왔다(사용자 보고). 그때 DECON·DSIM·DPP 인터럽트는 1초에 61번씩 늘고 있었고 커널 오류도 없었다. 사용자가 모니터 쪽을 확인한 뒤 화면이 나왔다. 어느 조치가 통했는지는 모른다.
+- 참고: `/dev/fb0`는 `read()`가 0바이트를 돌려준다. 화면 캡처는 mmap으로 한다.
+
+### 11.86 A단계(2): GPU X(modesetting + glamor + DRI3)와 Firefox 하드웨어 WebRender (2026-11-22, 보드3)
+
+**구성.** 평소 데스크톱(vt7, fbdev X)은 그대로 두고, vt8에 두 번째 X를 띄운다.
+- `modules/e850-kms/x-kms.sh`(root): `Xorg :1 vt8 -noreset`, 설정은 `xorg-kms.conf`(modesetting, `kmsdev /dev/dri/card0`, `AccelMethod glamor`)만 쓴다. 서버에 `~/gpu/mesa-kbase`와 kbase shim을 `LD_PRELOAD`한다. 그래서 setuid `Xorg.wrap`이 아니라 Xorg를 직접 실행한다. X 인증은 없고 TCP는 닫았다(시험용). Openbox, LXTerminal, 배경(`xbg`)을 philip으로 띄운다.
+- 클라이언트는 `modules/e850-kms/kenv 프로그램…`으로 같은 Mesa 환경에서 실행한다(DISPLAY=:1).
+- Ctrl+Alt+F7/F8로 오간다. GPU X가 VT를 놓으면 `e850-kms`의 `master_drop`이 fb0를 다시 보인다(사용자가 화면으로 확인).
+- `tools/gpu/gles-x11.c`에 `egl` 모드를 넣었다. EGL 창 표면으로 X 창에 바로 그린다(DRI3 + Present, 복사 없음).
+
+**겪은 문제와 고친 것.**
+1. [관찰] 첫 시작: `glamor: Ignoring GL < 2.1, falling back to GLES.` 다음 `glGetString() returned NULL, your GL is broken`, glamor 실패, ShadowFB(소프트웨어)로 떴다. KMS 장치 위에 X 화면은 정상으로 나왔다.
+   - [가설] glamor는 GL 함수를 libepoxy로 찾는다. 우리 Mesa에 libGL이 없어서 epoxy가 시스템 glvnd `libGL.so.1`을 열었고, 그 함수들은 이 Mesa를 모르니 NULL을 돌려준다. epoxy는 한 번 찾은 함수를 기억하므로 GLES로 넘어가도 같은 함수를 부른다. epoxy 소스로 확인하지는 않았다.
+   - 고침: Mesa를 `-Dglx=dri`로 빌드해 libGL을 함께 넣었다(`tools/gpu/build-mesa.sh`). 결과: `glamor X acceleration enabled on Mali-G52 (Panfrost)`, desktop GL로 켜졌다. DRI3, Present, GLX 확장도 올라왔다(`Disable "glx"`는 듣지 않았다).
+2. [관찰] 서버가 시작 직후 한 번 리셋됐다. 첫 클라이언트 `xbg`가 끝나며 연결이 0개가 됐기 때문이다. 배경이 사라졌다. 고침: `-noreset`.
+3. [관찰] EGL 창 시험이 `X connection to :1 broken`으로 끝났다. 처음 한 번은 X 오류(DRI3 `PixmapFromBuffers` 실패)와 함께 Xorg 프로세스에 `DATA_INVALID_FAULT`(0x58) GPU 폴트 52줄이 났다.
+   - Mesa 로그: `DRM_SHIM: unhandled core DRM ioctl 0x2D`(`PRIME_HANDLE_TO_FD`). 이 Mesa(22.2) panfrost는 SCANOUT만 kmsro(card0 dumb)에 잡고, SHARED(DRI3 창 버퍼)는 kbase 메모리에 잡은 뒤 shim에 내보내기를 시킨다. kbase는 자기 메모리를 dma-buf로 내보내지 못한다. 11.84의 "shim은 가져오기만 있으면 된다"는 틀렸다.
+   - 고침(`tools/gpu/mesa-kbase-g52-e850.patch`):
+     - `pan_resource.c`: KMS 장치가 있으면 SHARED도 kmsro dumb 버퍼로 잡는다.
+     - shim: 가져온 BO는 dma-buf fd의 복제를 갖고 있다가 `PRIME_HANDLE_TO_FD`에 그 복제를 준다. kbase 할당 BO는 EINVAL(shortcut 주석: DRI3 `BufferFromPixmap` 같은 경우는 아직 안 됨).
+   - 고친 클라이언트로도 옛 서버에서는 연결이 끊겼다. 클라이언트 strace: `PixmapFromBuffers`를 fd 2개와 보낸 직후 `recvmsg`가 0(서버가 끊음). 서버 fd 한도(1024, 사용 64)와 SELinux(permissive, 거부 기록 없음)는 원인이 아니었다.
+   - 서버를 새 Mesa로 다시 띄우자 됐다. 옛 서버가 왜 끊었는지는 확정하지 못했다. 후보: 옛 서버 Mesa에 내보내기가 없었던 것, 또는 3번 첫 시도의 GPU 폴트로 서버의 GPU 상태가 망가진 것.
+   - strace는 Debian 12 arm64 패키지에서 꺼내 `~/.local/bin/strace`에 두었다(설치 아님). `x-kms.sh`는 `STRACE=…`로 서버를 추적할 수 있다.
+4. [관찰] GPU X의 Firefox가 시작하자마자 SIGSEGV(주소 0)로 죽었다. 충돌 기록: libxul → shim `realpath` → libc. drm-shim의 `realpath`가 `realpath(장치경로, NULL)`(결과를 할당해야 함)에서 NULL에 `strcpy`했다. 고침: NULL 버퍼면 `strdup`, NULL 경로는 libc로 넘긴다.
+
+**결과: GPU가 X 창에 바로 그리기(관찰, 사용자가 화면 확인 "매우 잘 됨").**
+
+| 방식(GPU X) | fps | 그리기 | 넘기기 |
+|---|---|---|---|
+| EGL 창 640×360 | 346~371 | 1.2 ms | swap 1.5~1.7 ms |
+| EGL 창 1280×720 | 78~92 | 6.5~7.4 ms | swap 4.3~5.5 ms |
+| EGL 창 1920×1080 | 73~74 | 7.1~8.0 ms | swap 5.5~6.4 ms |
+| 복사(`glReadPixels` + `XPutImage`) 1280×720 | 27~29 | 5~6 ms | readback 6 ms + put 23~25 ms |
+
+- 앞의 측정 일부는 X에 strace가 붙은 상태였다. 같은 720p 복사 방식이 fbdev X(:0)에서는 42 fps다.
+- KMS에 vblank가 없어서 Present가 화면 주기를 기다리지 않는다. 그래서 60 fps를 넘고, 찢어짐이 생길 수 있다. GPU 폴트와 커널 오류는 없었다.
+
+**Firefox(ESR 153.7) on GPU X.**
+- `about:support`(chrome 문맥의 `Troubleshoot.snapshot()`, `/var/tmp/ff-support.py`, `-remote-allow-system-access` 필요):
+  - `WEBRENDER available`, `OPENGL_COMPOSITING available`, `X11_EGL available`, `DMABUF available`. 어댑터 `Mali-G52 (Panfrost)`, 드라이버 `mesa/exynos 22.2.0`.
+  - WebGL 1·2: `Panfrost -- Mali-G52`, OpenGL ES 3.1.
+  - 꺼진 것: `WEBRENDER_COMPOSITOR`, 하드웨어 동영상 디코딩(blocklist), WebGPU, `MESA_THREADING`("No glthread with EGL and X11").
+- YouTube Big Buck Bunny 720p60, 30 s(`/var/tmp/ff-yt.py`, 11.81과 같은 방법, Firefox를 매번 새로 띄움). YouTube는 이 화질을 AV1로 보낸다(dav1d).
+
+| 경로 | 보인 fps | 드롭 | CPU(8코어 기준) |
+|---|---|---|---|
+| :0 fbdev X, 소프트웨어 WebRender(오늘 기준) | 58.3 | 74 (4%) | 58% |
+| :1 GPU X(서버에 strace) | 43.1 | 517 (29%) | 56% |
+| :1 GPU X | 42.7, 39.8, 38.6, 39.0, 41.1 | 30~37% | 61~62% |
+| :1 GPU X, `PAN_KBASE_UNCACHED=1` | 35.2 | 769 (42%) | 61% |
+| :1 GPU X, GPU 클럭 1001 MHz 고정 | 45.6 | 458 (25%) | 63% |
+
+- 스레드별 CPU(5 s 동안 `/proc/*/task/*/stat`, `/var/tmp/thrcpu.py`): 페이지 메인 스레드 82%, Firefox Renderer 46%, DOM Worker 40%, dav1d 4개 각 35%, Firefox 메인 20%. 한 코어를 채운 스레드는 없었다. 클럭을 고정한 시험에서는 페이지 메인 스레드가 104%였다.
+  - `top -b -n1`의 스레드 %는 측정 구간이 짧아 믿을 수 없었다(메인 스레드가 99.9%로 나왔지만 `/proc/…/syscall` 표본 200개 중 69%가 `ppoll` 대기).
+- GPU DVFS(`/sys/kernel/gpu`): Mali-G52 1코어, 377~1001 MHz, Interactive. 재생 중 클럭은 대부분 377~433 MHz였고, 순간 사용률은 0%와 100%를 오갔다. 1001 MHz로 고정하면 순간 사용률이 대부분 0%였다. 그래서 GPU 처리량이 병목은 아니다.
+- 판단:
+  - X와 Firefox 자체는 GPU로 돈다. 동영상(720p60)은 지금 소프트웨어 경로보다 나쁘다.
+  - [가설] CPU도 GPU도 다 차지 않으니 프레임 사이의 대기가 원인이다. 후보: vblank 없는 Present와 Firefox 소프트웨어 vsync 타이머의 어긋남, X가 프레임마다 하는 창 복사(glamor) 대기, 페이지 메인 스레드. 측정하지 않았다.
+  - 다음에 볼 것: Firefox 프로파일러(`MOZ_PROFILER_STARTUP`)로 프레임 하나가 어디서 기다리는지 보기, `e850-kms`에 vblank 이벤트 넣기.
+
+**보드에 바꾼 것.**
+- `Xorg :1`(GPU X)이 떠 있다. 내리기: `sudo pkill -f "Xorg :1"`. 로그 `/var/tmp/e850-kms/Xorg.1.log`, strace 기록 `Xorg.1.st`(첫 strace 실행분).
+- `/var/tmp/e850-kms/`: `x-kms.sh`, `xorg-kms.conf`, `kenv`(저장소 `modules/e850-kms/`와 같음).
+- `~/gpu/mesa-kbase`: libGL, SHARED→kmsro, shim 내보내기, `realpath` 수정이 들어간 판. 이전 판(kmsro, GLX 없음)은 `~/gpu/mesa-kbase.1185`.
+- `~/gpu/gles-x11`(egl 모드), `~/.local/bin/strace`.
+- 시험 파일: `/var/tmp/ff-support.py`, `/var/tmp/thrcpu.py`, 프로필 `/var/tmp/ffprof-kms`, `/var/tmp/ffprof-x0`. Firefox 충돌 기록 하나가 `~/.config/mozilla/firefox/Crash Reports/pending/`에 있다(보내지 않음).
+- GPU `dvfs_min_lock`을 1001 MHz로 걸었다가 푸는 중(사용자 sudo). 재부팅하면 어차피 풀린다.
+
+### 11.87 Firefox 동영상이 GPU X에서 느린 원인: shim의 캐시 clean과 동기 제출 (2026-11-22, 보드3)
+
+**질문.** 11.86에서 YouTube 720p60이 GPU X(:1)에서 39~46 fps(드롭 25~37%)로, 소프트웨어 경로(:0, 58.3 fps)보다 나빴다. 사용자가 원인을 찾으라고 했다. 측정은 11.86과 같다(`/var/tmp/ff-yt.py aqz-KE-bpKQ hd720 30`, 시험 Firefox는 `kenv`로 :1에 띄움, 프로필 `/var/tmp/ffprof-kms`). GPU 클럭 고정은 사용자가 푼 상태다.
+
+**1. 대기 위치(관찰).** `/proc/PID/task/TID/syscall`을 약 2 ms마다 읽는 표본기(`/var/tmp/thrwait.py`)로 GPU 프로세스를 봤다.
+- Renderer 스레드: RUN 69.2%, `/dev/mali0`에서 `ppoll` 29.5%, futex 0.5%. 벽시계 시간을 다 쓰고 있었다.
+- 그 밖의 스레드(Compositor, WRSceneBuilder, ImageBridge, CanvasRenderer)는 대부분 futex에서 기다렸다.
+- 프레임마다 Renderer가 CPU 일(약 18 ms)과 GPU 대기(약 8 ms)를 번갈아 하므로, 프레임 하나에 약 26 ms(약 38 fps)가 걸린다. 11.86의 "CPU도 GPU도 다 차지 않는다"는 이 직렬화로 설명된다.
+- 원인 후보는 shim 소스에서 찾았다. `pan_ioctl_submit`은 `JOB_SUBMIT` 다음 `poll`과 `read`로 그 작업의 완료 이벤트를 받을 때까지 돌아오지 않는다(동기 제출). 제출 전에는 목록에 있는 CPU 캐시 BO를 모두 clean한다.
+
+**2. shim 통계(관찰).** `PAN_KBASE_STATS=1`이면 5초마다 제출 수, 제출에 쓴 시간(그 가운데 작업 완료를 기다린 `poll` 시간), 캐시 clean 양과 시간을 찍게 했다. Firefox GPU 프로세스, 재생 중 5초 구간(이 단계에서는 clean을 하나도 건너뛰지 않음):
+
+| 항목 | 5초당 |
+|---|---|
+| 제출 | 1,100~1,800번(프레임당 약 7번) |
+| 제출에 쓴 시간 | 1.4~2.9 s, 그 가운데 작업 대기 1.1~2.8 s |
+| clean(TO_DEVICE) | 3.8~31.8 GB, 0.44~2.8 s |
+| invalidate(TO_CPU) | 0~25 MB, 3 ms 이하 |
+
+- 두 몫을 더하면 Renderer 벽시계 시간의 60~100%가 shim 안이다.
+- clean된 BO(크기별 상위 목록을 잠깐 찍어 봄):
+  - 1 MB BO: 제출마다 한 번. Mesa의 업로드 버퍼(`u_upload`, 1 MB)로 보인다. 매 그리기마다 CPU가 쓰니 clean이 맞다.
+  - 2 MB BO 둘: 제출 2~3번에 한 번.
+  - 16.1 MB BO 서넛: 5초에 14~89번. 텍스처 캐시로 보인다. CPU가 쓰지 않았어도 목록에 있으면 매번 16 MB를 훑었다.
+- 커널의 clean은 더러운 줄이 없어도 범위 전체를 훑는다. 그래서 약 10 GB/s, 16 MB에 약 1.6 ms가 든다.
+
+**3. 고친 것: CPU가 쓴 리소스 BO만 clean(`tools/gpu/mesa-kbase-g52-e850.patch`).**
+- Mesa:
+  - 리소스(텍스처·버퍼) BO를 새 플래그 `PAN_BO_CPU_TRACKED`로 만든다. 커널 플래그로는 `PANFROST_BO_E850_CPU_TRACKED`(bit 31)이다. shim 전용이라 진짜 panfrost 커널은 이 플래그를 거부한다.
+  - `panfrost_ptr_unmap`에서 쓰기 전송이면 `panfrost_bo_cpu_written()`이 `MMAP_BO` ioctl을 한 번 더 부른다. 진짜 커널에서는 오프셋만 돌려주는 무해한 호출이다.
+  - 리소스 BO에 CPU가 쓰는 길은 모두 전송(map/unmap)을 거친다: 직접 쓰기, DISCARD 복사, 타일링, AFBC 스테이징. AFBC 헤더 초기화도 알린다.
+- shim:
+  - 추적 BO는 `MMAP_BO`가 오면 `dirty`가 된다. 제출 때 `dirty`일 때만 clean하고, clean하기 **전에** 플래그를 내린다. 그 사이에 들어온 쓰기는 다음 제출에서 clean된다.
+  - 추적하지 않는 BO(풀, 배치 BO, 선형 변환으로 새로 만든 BO)는 전처럼 매번 clean한다. invalidate(WAIT_BO)는 그대로 둔다.
+- 처음 시도는 효과가 0이었다(통계상 건너뛴 양 0 MB, 상위 BO 모두 `tracked 0`).
+  - 이 브랜치의 `panfrost_bo_create`가 `flags = flags & PAN_BO_EXECUTE;`로 다른 플래그를 다 지운다. 그래서 `DELAY_MMAP`도 지워지고, 모든 BO가 만들자마자 CPU에 매핑된다. "Mesa가 매핑한 적 없는 BO는 건너뛰기"를 먼저 해 봤지만 효과가 없었던 것도 이 때문이다.
+  - `PAN_BO_CPU_TRACKED`는 남기도록 고쳤다. BO 캐시는 플래그가 같아야 다시 쓰므로 추적 BO와 아닌 BO는 섞이지 않는다.
+
+**4. 결과(관찰).** 720p60 30 s:
+
+| Mesa | 보인 fps | 드롭 | 비고 |
+|---|---|---|---|
+| 11.86 판, 통계만 넣은 판(모두 clean) | 38.1, 38.2, 39.8, 40.9 | 36~38% | 매번 새 Firefox |
+| CPU가 쓴 리소스 BO만 clean | 48.0, 50.9, 52.2 | 25%, 15%, 14% | 같은 Firefox에서 1·2·3번째 |
+| 같은 판, 통계 끔(최종) | 47.6, 51.8 | 26%, 14% | 새 Firefox에서 1·2번째 |
+| 참고: :0 소프트웨어 WebRender(11.86) | 58.3 | 4% | |
+
+- 고친 뒤 5초당 clean은 0.76~0.92 GB, 0.10~0.13 s다(전에는 3.8~31.8 GB, 0.44~2.8 s). 건너뛴 양은 3.4~9.9 GB다. 남은 clean은 거의 다 1 MB 업로드 버퍼다.
+- 남은 몫은 작업 대기로, 5초에 2.5~2.9 s(약 55%)다. 제출은 1,500~1,800번이고, 작업 하나에 평균 약 1.7 ms를 기다린다.
+- 재생 중 GPU 클럭(0.5초 간격 16번): 377 MHz가 대부분이다. 0(전원 꺼짐)이 4번, 433·598·865 MHz가 한 번씩이다. `gpu_busy`는 16번 모두 0%였다.
+- `run-test.sh`(GLES 시험) 통과.
+
+**5. 화면 확인과 렌더링 깨짐(관찰).**
+- fb0 mmap(`fbshot.py`)에는 KMS 버퍼가 아닌 원래 fb0 메모리가 보인다(검은 화면에 커서). 그래서 X :1의 루트 창을 `XGetImage`로 뜨는 `tools/gpu/xshot.c`를 만들었다(`DISPLAY=:1 xshot > a.ppm`).
+- 재생 시작 10~12초 뒤 화면(스크린샷이 1080p를 읽느라 그 회차 fps가 30.6~44로 떨어짐):
+  - **11.86 판에서도 페이지가 깨진다.** 글자 일부가 빠지고(제목, 버튼), 오른쪽 목록 타일 일부가 검거나 옛 내용이다. 그러니 이번 수정 때문이 아니다.
+  - `PAN_KBASE_UNCACHED=1`(캐시 없음)이면 더 깨진다. 화면 절반을 가르는 큰 흰 삼각형이 나온다. 그러니 캐시 처리 문제가 아니다. [가설] 그리기 일부를 GPU가 잘못 실행한다(컴파일러 또는 타일러). 확인하지 않았다.
+  - 5번 가운데 4번은 플레이어 자리에 YouTube "Something went wrong. Refresh or try again later"가 떴다. 11.86 판과 새 판 모두에서 떴다. 그동안에도 `<video>`의 프레임 수는 늘었다. 그러니 **fps 수치가 화면에 실제로 보인 영상인지는 확인하지 못했다.** 11.86의 수치도 같은 조건이다.
+
+**판단.**
+- 원인 1(고침): 제출마다 목록의 캐시 BO를 모두 clean한 것. GPU 프로세스 시간의 10~55%를 썼다. 고친 뒤 38~41 → 48~52 fps.
+- 원인 2(남음): 동기 제출. Renderer는 GPU 작업마다 끝날 때까지 기다리므로 CPU 일과 GPU 일이 겹치지 않는다(벽시계 시간의 약 55%가 작업 대기).
+  - [가설] GPU가 작업 사이마다 놀아서 DVFS가 클럭을 최저(377 MHz)에 둔다. 그래서 작업 하나가 더 길어진다. 11.86에서 1001 MHz로 고정하면 +14%였다(45.6 fps, 옛 shim).
+- 11.86의 "GPU 처리량이 병목은 아니다"는 반만 맞다. GPU가 다 차지는 않지만, GPU 시간이 CPU 시간에 더해지므로 프레임 시간의 절반을 차지한다.
+
+**다음 후보(하지 않음).**
+- shim 비동기 제출:
+  - atom마다 바로 앞 atom에 ORDER 의존을 걸어 GPU 순서를 지킨다.
+  - BO마다 마지막으로 쓴 atom 번호를 기억해 `WAIT_BO`(timeout 0은 바쁨 보고)를 실제로 기다리게 한다. syncobj와 fence는 지금 stub이다: handle은 늘 1이고, fence 생성은 export가 fd -1을 돌려줘 실패한다. 이것을 atom 번호로 구현한다.
+  - BO 해제는 GPU가 끝날 때까지 미룬다. kbase 이벤트는 한 스레드가 잠금을 잡고 읽는다.
+  - X와 공유하는 버퍼(가져온 dma-buf)를 쓰는 제출은 지금처럼 동기로 둔다. kbase에서는 dma-buf 암묵 동기화를 쓰지 않기 때문이다.
+  - 할 일이 크고 X 서버에도 들어가므로 사용자와 정한다.
+- X 서버도 새 Mesa로 다시 띄운다(사용자 sudo `x-kms.sh`). 지금 Xorg :1은 11.86 판(모두 clean)을 쓰고 있다.
+- 새 shim으로 GPU 클럭 고정 시험(사용자 sudo). `gpu_busy`가 늘 0%인 이유도 본다.
+- 렌더링 깨짐은 따로 조사한다.
+
+**보드에 바꾼 것.**
+- `~/gpu/mesa-kbase`: 이번 판(쓰기 추적 clean, 제출 통계). 11.86 판은 `~/gpu/mesa-kbase.1186`.
+- `~/.local/bin/xshot`.
+- 시험 파일: `/var/tmp/thrwait.py`, 로그 `/var/tmp/ffk*.log`, `/var/tmp/yt-*.txt`, `/var/tmp/ffk-720*.txt`.
+- Xorg :1과 그 안의 사용자 창은 그대로 두었다. 시험 Firefox는 내렸다.

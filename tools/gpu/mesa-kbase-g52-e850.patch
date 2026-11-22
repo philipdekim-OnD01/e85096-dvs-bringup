@@ -1,5 +1,41 @@
+diff --git a/include/drm-uapi/panfrost_drm.h b/include/drm-uapi/panfrost_drm.h
+index 778a5e0..8093440 100644
+--- a/include/drm-uapi/panfrost_drm.h
++++ b/include/drm-uapi/panfrost_drm.h
+@@ -88,6 +88,9 @@ struct drm_panfrost_wait_bo {
+ 
+ #define PANFROST_BO_NOEXEC	1
+ #define PANFROST_BO_HEAP	2
++/* e850 kbase shim only (a real kernel rejects it): Mesa reports every CPU write to this BO with
++ * MMAP_BO, so the shim cleans the CPU cache before a submit only after such a report */
++#define PANFROST_BO_E850_CPU_TRACKED	(1u << 31)
+ 
+ /**
+  * struct drm_panfrost_create_bo - ioctl argument for creating Panfrost BOs.
+diff --git a/src/drm-shim/device.c b/src/drm-shim/device.c
+index f731475..4c85d79 100644
+--- a/src/drm-shim/device.c
++++ b/src/drm-shim/device.c
+@@ -359,13 +359,16 @@ drm_shim_bo_get(struct shim_bo *bo)
+ void
+ drm_shim_bo_put(struct shim_bo *bo)
+ {
+-   if (p_atomic_dec_return(&bo->refcount) == 0)
++   /* free on the last reference (this branch had the test inverted, e850 11.84) */
++   if (p_atomic_dec_return(&bo->refcount) != 0)
+       return;
+ 
+    if (shim_device.driver_bo_free)
+       shim_device.driver_bo_free(bo);
+ 
+    mtx_lock(&shim_device.mem_lock);
++   if (_mesa_hash_table_u64_search(shim_device.offset_map, bo->mem_addr) == bo)
++      _mesa_hash_table_u64_remove(shim_device.offset_map, bo->mem_addr);
+    mtx_unlock(&shim_device.mem_lock);
+    free(bo);
+ }
 diff --git a/src/drm-shim/drm_shim.c b/src/drm-shim/drm_shim.c
-index e39e9e2..0ae9247 100644
+index e39e9e2..262f2c6 100644
 --- a/src/drm-shim/drm_shim.c
 +++ b/src/drm-shim/drm_shim.c
 @@ -90,7 +90,8 @@ int __lxstat64 (int ver, const char *__filename, struct stat64 *__stat_buf);
@@ -12,6 +48,77 @@ index e39e9e2..0ae9247 100644
  
  #if HAS_XSTAT
  REAL_FUNCTION_POINTER(__xstat);
+@@ -649,12 +650,11 @@ realpath(const char *path, char *resolved_path)
+ {
+    init_shim();
+ 
+-   if (strcmp(path, device_path) != 0)
++   if (!path || strcmp(path, device_path) != 0)
+       return real_realpath(path, resolved_path);
+ 
+-   strcpy(resolved_path, path);
+-
+-   return resolved_path;
++   /* e850: realpath(path, NULL) must allocate the result (Firefox calls it so, 11.86) */
++   return resolved_path ? strcpy(resolved_path, path) : strdup(path);
+ }
+ 
+ /* Main entrypoint to DRM drivers: the ioctl syscall.  We send all ioctls on
+diff --git a/src/gallium/drivers/panfrost/pan_resource.c b/src/gallium/drivers/panfrost/pan_resource.c
+index 80ec540..839e35d 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -510,6 +510,7 @@ panfrost_resource_init_afbc_headers(struct panfrost_resource *pres)
+                         }
+                 }
+         }
++        panfrost_bo_cpu_written(bo);
+ }
+ 
+ void
+@@ -659,7 +660,9 @@ panfrost_resource_create_with_modifier(struct pipe_screen *screen,
+                 (bind & PIPE_BIND_SHADER_IMAGE) ? "Shader image" :
+                 "Other resource";
+ 
+-        if (dev->ro && (template->bind & PIPE_BIND_SCANOUT)) {
++        /* e850: shared buffers (DRI3 window buffers) also go to the KMS device. The kbase shim can
++         * only export a dma-buf it imported; kbase cannot export its own memory. */
++        if (dev->ro && (template->bind & (PIPE_BIND_SCANOUT | PIPE_BIND_SHARED))) {
+                 struct winsys_handle handle;
+                 struct pan_block_size blocksize = panfrost_block_size(modifier, template->format);
+ 
+@@ -723,7 +726,8 @@ panfrost_resource_create_with_modifier(struct pipe_screen *screen,
+                  * care to map e.g. FBOs which the CPU probably won't touch */
+ 
+                 so->image.data.bo =
+-                        panfrost_bo_create(dev, so->image.layout.data_size, PAN_BO_DELAY_MMAP, label);
++                        panfrost_bo_create(dev, so->image.layout.data_size,
++                                           PAN_BO_DELAY_MMAP | PAN_BO_CPU_TRACKED, label);
+         }
+ 
+         if (drm_is_afbc(so->image.layout.modifier))
+@@ -1266,6 +1270,10 @@ panfrost_ptr_unmap(struct pipe_context *pctx,
+         if (transfer->usage & PIPE_MAP_WRITE)
+                 prsrc->valid.crc = false;
+ 
++        /* the staging blit below is submitted before this function returns */
++        if ((transfer->usage & PIPE_MAP_WRITE) && trans->staging.rsrc)
++                panfrost_bo_cpu_written(pan_resource(trans->staging.rsrc)->image.data.bo);
++
+         /* AFBC will use a staging resource. `initialized` will be set when the
+          * fragment job is created; this is deferred to prevent useless surface
+          * reloads that can cascade into DATA_INVALID_FAULTs due to reading
+@@ -1332,6 +1340,10 @@ panfrost_ptr_unmap(struct pipe_context *pctx,
+         }
+ 
+ 
++        /* direct writes, the DISCARD copy in panfrost_ptr_map and the tiling above */
++        if (transfer->usage & PIPE_MAP_WRITE)
++                panfrost_bo_cpu_written(prsrc->image.data.bo);
++
+         util_range_add(&prsrc->base, &prsrc->valid_buffer_range,
+                        transfer->box.x,
+                        transfer->box.x + transfer->box.width);
 diff --git a/src/panfrost/bifrost/bifrost_compile.c b/src/panfrost/bifrost/bifrost_compile.c
 index 081bd0f..1facfad 100644
 --- a/src/panfrost/bifrost/bifrost_compile.c
@@ -29,14 +136,24 @@ index 081bd0f..1facfad 100644
          if (nir->info.stage != MESA_SHADER_VERTEX)
                  return false;
 diff --git a/src/panfrost/drm-shim/panfrost_kbase.c b/src/panfrost/drm-shim/panfrost_kbase.c
-index f984e7f..d225067 100644
+index f984e7f..6a658cc 100644
 --- a/src/panfrost/drm-shim/panfrost_kbase.c
 +++ b/src/panfrost/drm-shim/panfrost_kbase.c
-@@ -29,9 +29,11 @@
+@@ -22,16 +22,21 @@
+  * DEALINGS IN THE SOFTWARE.
+  */
+ 
++#include <errno.h>
+ #include <fcntl.h>
+ #include <limits.h>
+ #include <poll.h>
+ #include <stdio.h>
  #include <stdlib.h>
++#include <string.h>
  #include <sys/mman.h>
  #include <sys/stat.h>
 +#include <time.h>
++#include <unistd.h>
  
  #include "drm-shim/drm_shim.h"
  #include "util/u_math.h"
@@ -44,7 +161,7 @@ index f984e7f..d225067 100644
  
  #include "drm-uapi/panfrost_drm.h"
  
-@@ -49,7 +51,7 @@ typedef int64_t s64;
+@@ -49,7 +54,7 @@ typedef int64_t s64;
  #include "perf.h"
  
  //#define LOG printf
@@ -53,14 +170,15 @@ index f984e7f..d225067 100644
  
  #define PROP_NAME(n) [MALI_GPUPROP_ ## n] = #n
  
-@@ -152,6 +154,59 @@ static const char * const prop_names[] = {
+@@ -152,6 +157,111 @@ static const char * const prop_names[] = {
  bool drm_shim_driver_prefers_first_render_node = true;
  
  static int kbase_fd = -1;
 +
 +/* Large image BOs are CPU-cached so glReadPixels reads at cache speed instead of ~170 MB/s
 + * uncached (e850 11.82). The GPU is not IO-coherent, so the shim cleans them before every
-+ * submit that lists them and invalidates them in WAIT_BO, which Mesa calls before CPU access
++ * submit that lists them (resource BOs only after Mesa reports a CPU write, 11.87) and
++ * invalidates them in WAIT_BO, which Mesa calls before CPU access
 + * to a BO the GPU wrote. Up to 64 MB: the 128 MB tiler heap is GPU-only but arrives without
 + * PANFROST_BO_HEAP (this branch's pan_bo.c keeps only PAN_BO_EXECUTE), and cleaning it on
 + * every submit cost ~23 ms. The cleans cost GPU-only throughput (1080p shader test 334 -> 103 fps)
@@ -71,15 +189,61 @@ index f984e7f..d225067 100644
 +struct kbase_bo {
 +   struct shim_bo base; /* first: drm-shim frees the struct through this pointer */
 +   bool cached;
++   bool tracked; /* PANFROST_BO_E850_CPU_TRACKED: Mesa reports CPU writes with MMAP_BO */
++   bool dirty;   /* tracked BO written by the CPU since the last clean */
++   ino_t ino; /* dma-buf inode of an imported BO (0 = allocated here): one handle per buffer */
++   int dmabuf; /* imported BO: our dup of its dma-buf fd, handed out again on export */
 +};
 +
-+static double sync_s[3], sync_mb[3];
++/* r38p1 KBASE_IOCTL_MEM_IMPORT (24 bytes; mali-ioctl.h has an older 40-byte layout) */
++union kbase_mem_import {
++   struct { u64 flags, phandle; u32 type, padding; } in;
++   struct { u64 flags, gpu_va, va_pages; } out;
++};
++#define KBASE_IOCTL_MEM_IMPORT _IOWR(0x80, 22, union kbase_mem_import)
++#define KBASE_IMPORT_TYPE_UMM 2
++
++extern ioctl_fn_t core_ioctls[];
++
++/* PAN_KBASE_STATS=1: every 5 s (and at exit) print the submit count, the time spent in submits
++ * (they wait for the job) and the cache maintenance time (e850 11.87) */
++static int stats = -1;
++static double sync_s[3], sync_mb[3], submit_s, wait_s, skip_mb, stats_t0;
++static unsigned n_submit;
++
++static double
++now_s(void)
++{
++   struct timespec t;
++   clock_gettime(CLOCK_MONOTONIC, &t);
++   return t.tv_sec + t.tv_nsec * 1e-9;
++}
 +
 +static void
 +print_sync_stats(void)
 +{
-+   fprintf(stderr, "mem_sync to device %.1f MB %.1f ms, to cpu %.1f MB %.1f ms\n",
-+           sync_mb[1], sync_s[1] * 1e3, sync_mb[2], sync_s[2] * 1e3);
++   double t = now_s();
++   fprintf(stderr, "panfrost_kbase %d: %.1f s: %u submits %.1f ms (job wait %.1f ms); mem_sync to device "
++           "%.1f MB %.1f ms (not written, skipped %.1f MB), to cpu %.1f MB %.1f ms\n", (int) getpid(),
++           t - stats_t0, n_submit, submit_s * 1e3, wait_s * 1e3, sync_mb[1], sync_s[1] * 1e3, skip_mb,
++           sync_mb[2], sync_s[2] * 1e3);
++   memset(sync_s, 0, sizeof(sync_s));
++   memset(sync_mb, 0, sizeof(sync_mb));
++   submit_s = wait_s = skip_mb = 0;
++   n_submit = 0;
++   stats_t0 = t;
++}
++
++static bool
++stats_on(void)
++{
++   if (stats < 0) {
++      stats = !!getenv("PAN_KBASE_STATS");
++      stats_t0 = now_s();
++      if (stats)
++         atexit(print_sync_stats);
++   }
++   return stats;
 +}
 +
 +static void
@@ -88,14 +252,20 @@ index f984e7f..d225067 100644
 +   if (!((struct kbase_bo *)bo)->cached)
 +      return;
 +
-+   static int stats = -1;
-+   if (stats < 0) {
-+      stats = !!getenv("PAN_KBASE_STATS");
-+      if (stats)
-+         atexit(print_sync_stats);
++   stats_on();
++   /* A tracked BO the CPU has not written since the last clean has no dirty lines. Cleaning every
++    * listed BO on every submit walked 20-160 MB per Firefox frame (11.87). The flag is cleared
++    * before the clean, so a write reported meanwhile is cleaned next time. Invalidation stays
++    * unconditional. */
++   struct kbase_bo *kbo = (struct kbase_bo *)bo;
++   if (type == MALI_SYNC_TO_DEVICE && kbo->tracked) {
++      if (!kbo->dirty) {
++         skip_mb += bo->size / 1048576.0;
++         return;
++      }
++      kbo->dirty = false;
 +   }
-+   struct timespec t0, t1;
-+   clock_gettime(CLOCK_MONOTONIC, &t0);
++   double t0 = now_s();
 +
 +   struct mali_ioctl_sync s = {
 +      .handle = bo->mem_addr,
@@ -106,14 +276,13 @@ index f984e7f..d225067 100644
 +   if (drmIoctl(kbase_fd, MALI_IOCTL_SYNC, &s) == -1)
 +      perror("ioctl(mem_sync)");
 +   LOG("mem_sync %d %"PRIx64" %zu\n", type, (uint64_t) bo->mem_addr, (size_t) bo->size);
-+   clock_gettime(CLOCK_MONOTONIC, &t1);
-+   sync_s[type] += (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
++   sync_s[type] += now_s() - t0;
 +   sync_mb[type] += bo->size / 1048576.0;
 +}
  static uint8_t *gpuprops;
  static unsigned gpuprops_size;
  
-@@ -301,7 +356,9 @@ pan_ioctl_get_param(int fd, unsigned long request, void *arg)
+@@ -301,7 +411,9 @@ pan_ioctl_get_param(int fd, unsigned long request, void *arg)
        LOG("tiler features: %"PRIx64"\n", (uint64_t) gp->value);
        return 0;
     case DRM_PANFROST_PARAM_AFBC_FEATURES:
@@ -124,7 +293,7 @@ index f984e7f..d225067 100644
        return 0;
     default:
        fprintf(stderr, "Unknown DRM_IOCTL_PANFROST_GET_PARAM %d\n", gp->param);
-@@ -315,7 +372,8 @@ pan_ioctl_create_bo(int fd, unsigned long request, void *arg)
+@@ -315,18 +427,29 @@ pan_ioctl_create_bo(int fd, unsigned long request, void *arg)
     struct drm_panfrost_create_bo *create = arg;
  
     struct shim_fd *shim_fd = drm_shim_fd_lookup(fd);
@@ -132,9 +301,10 @@ index f984e7f..d225067 100644
 +   struct kbase_bo *kbo = calloc(1, sizeof(*kbo));
 +   struct shim_bo *bo = &kbo->base;
     size_t size = ALIGN(create->size, 4096);
++   bo->refcount = 1;
  
     union mali_ioctl_mem_alloc kcreate = {
-@@ -323,10 +381,17 @@ pan_ioctl_create_bo(int fd, unsigned long request, void *arg)
+       .in = {
           .va_pages = DIV_ROUND_UP(size, 4096),
           .commit_pages = DIV_ROUND_UP(size, 4096),
           .extent = 0,
@@ -149,11 +319,131 @@ index f984e7f..d225067 100644
 +                 size >= (1 << 20) && size <= (64 << 20) && !getenv("PAN_KBASE_UNCACHED");
 +   if (kbo->cached)
 +      kcreate.in.flags |= MALI_MEM_CACHED_CPU;
++   kbo->tracked = create->flags & PANFROST_BO_E850_CPU_TRACKED;
++   kbo->dirty = true;
 +
     if (create->flags & PANFROST_BO_HEAP) {
        size_t align_size = 2 * 1024 * 1024 / 4096; /* 2 MB */
  
-@@ -430,6 +495,16 @@ pan_ioctl_submit(int fd, unsigned long request, void *arg)
+@@ -379,8 +502,117 @@ pan_ioctl_mmap_bo(int fd, unsigned long request, void *arg)
+    struct shim_fd *shim_fd = drm_shim_fd_lookup(fd);
+    struct shim_bo *bo = drm_shim_bo_lookup(shim_fd, mmap_bo->handle);
+ 
++   if (!bo)
++      return -EINVAL;
+    mmap_bo->offset = drm_shim_bo_get_mmap_offset(shim_fd, bo);
++   ((struct kbase_bo *)bo)->dirty = true; /* Mesa calls MMAP_BO again after each CPU write */
++   drm_shim_bo_put(bo);
++
++   return 0;
++}
++
++static int
++pan_ioctl_get_bo_offset(int fd, unsigned long request, void *arg)
++{
++   struct drm_panfrost_get_bo_offset *get = arg;
++   struct shim_bo *bo = drm_shim_bo_lookup(drm_shim_fd_lookup(fd), get->handle);
++
++   if (!bo)
++      return -EINVAL;
++   get->offset = bo->mem_addr;
++   drm_shim_bo_put(bo);
++   return 0;
++}
++
++/* dma-buf import: kbase UMM. A 64-bit process gets a cookie that must be mmapped, which also fixes
++ * the GPU VA (= CPU VA, SAME_VA zone); munmap of that mapping frees the import (driver_bo_free). */
++static int
++pan_ioctl_prime_fd_to_handle(int fd, unsigned long request, void *arg)
++{
++   struct drm_prime_handle *args = arg;
++   struct shim_fd *shim_fd = drm_shim_fd_lookup(fd);
++   struct stat st;
++
++   if (fstat(args->fd, &st) == -1)
++      return -EINVAL;
++
++   /* the same buffer must give the same handle (DRM semantics; Mesa keys its BOs by handle) */
++   mtx_lock(&shim_fd->handle_lock);
++   hash_table_foreach(shim_fd->handles, e) {
++      if (((struct kbase_bo *)e->data)->ino == st.st_ino) {
++         args->handle = (uintptr_t)e->key;
++         mtx_unlock(&shim_fd->handle_lock);
++         return 0;
++      }
++   }
++   mtx_unlock(&shim_fd->handle_lock);
+ 
++   pan_open_kbase();
++   int dmabuf_fd = args->fd;
++   union kbase_mem_import imp = {
++      .in = {
++         .flags = MALI_MEM_PROT_CPU_RD | MALI_MEM_PROT_CPU_WR | MALI_MEM_PROT_GPU_RD | MALI_MEM_PROT_GPU_WR,
++         .phandle = (uintptr_t)&dmabuf_fd,
++         .type = KBASE_IMPORT_TYPE_UMM,
++      }
++   };
++   if (drmIoctl(kbase_fd, KBASE_IOCTL_MEM_IMPORT, &imp) == -1) {
++      perror("ioctl(mem_import)");
++      return -EINVAL;
++   }
++   size_t size = imp.out.va_pages * 4096;
++   void *va = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, kbase_fd, imp.out.gpu_va);
++   if (va == MAP_FAILED) {
++      perror("mmap(import)");
++      struct mali_ioctl_mem_free f = { .gpu_addr = imp.out.gpu_va };
++      drmIoctl(kbase_fd, MALI_IOCTL_MEM_FREE, &f);
++      return -EINVAL;
++   }
++   LOG("import fd %d ino %lu: %zu bytes at %p\n", args->fd, (unsigned long)st.st_ino, size, va);
++
++   struct kbase_bo *kbo = calloc(1, sizeof(*kbo));
++   kbo->ino = st.st_ino;
++   kbo->dmabuf = fcntl(args->fd, F_DUPFD_CLOEXEC, 3);
++   kbo->base.mem_addr = (uintptr_t)va;
++   kbo->base.size = size;
++   kbo->base.refcount = 1;
++   args->handle = drm_shim_bo_get_handle(shim_fd, &kbo->base);
++   drm_shim_bo_put(&kbo->base);
++   return 0;
++}
++
++/* Both allocations and imports live in a SAME_VA mapping made from a kbase cookie, and kbase
++ * frees the region when that mapping goes (free_on_close). Mesa unmaps its own mapping first. */
++static void
++pan_bo_free(struct shim_bo *bo)
++{
++   LOG("free %"PRIx64" %u\n", bo->mem_addr, bo->size);
++   if (munmap((void *)(uintptr_t)bo->mem_addr, bo->size) == -1)
++      perror("munmap(bo)");
++   if (((struct kbase_bo *)bo)->ino)
++      close(((struct kbase_bo *)bo)->dmabuf);
++}
++
++/* dma-buf export (DRI3 hands window buffers to X this way): only imported BOs, as a dup of the
++ * imported fd. Mesa's kmsro puts every shared buffer on the KMS device, so those are imported.
++ * shortcut: a kbase allocation cannot be exported (EINVAL), e.g. a glamor pixmap asked for with
++ * DRI3 BufferFromPixmap; allocate such BOs from a dma-heap and import them if a client needs it. */
++static int
++pan_ioctl_prime_handle_to_fd(int fd, unsigned long request, void *arg)
++{
++   struct drm_prime_handle *args = arg;
++   struct kbase_bo *kbo = (struct kbase_bo *)drm_shim_bo_lookup(drm_shim_fd_lookup(fd), args->handle);
++   if (!kbo)
++      return -EINVAL;
++   int out = -1;
++   if (kbo->ino)
++      out = fcntl(kbo->dmabuf, (args->flags & DRM_CLOEXEC) ? F_DUPFD_CLOEXEC : F_DUPFD, 3);
++   else
++      fprintf(stderr, "panfrost_kbase: cannot export a kbase allocation as dma-buf (handle %u)\n", args->handle);
++   drm_shim_bo_put(&kbo->base);
++   if (out < 0)
++      return -EINVAL;
++   args->fd = out;
+    return 0;
+ }
+ 
+@@ -430,6 +662,16 @@ pan_ioctl_submit(int fd, unsigned long request, void *arg)
     else
        atom.core_req = 2;
  
@@ -163,14 +453,43 @@ index f984e7f..d225067 100644
 +      struct shim_bo *bo = drm_shim_bo_lookup(shim_fd, handles[i]);
 +      if (bo) {
 +         kbase_bo_sync(bo, MALI_SYNC_TO_DEVICE);
-+         p_atomic_dec(&bo->refcount); /* not drm_shim_bo_put(): it frees when the count stays non-zero */
++         drm_shim_bo_put(bo);
 +      }
 +   }
 +
     struct mali_ioctl_job_submit ksubmit = {
        .nr_atoms = 1,
        .stride = sizeof(struct mali_jd_atom_v2),
-@@ -469,9 +544,23 @@ pan_ioctl_submit(int fd, unsigned long request, void *arg)
+@@ -437,6 +679,7 @@ pan_ioctl_submit(int fd, unsigned long request, void *arg)
+    };
+ 
+    LOG("submit %"PRIx64"\n", (uint64_t) submit->jc);
++   double t0 = now_s();
+    int ret = drmIoctl(kbase_fd, MALI_IOCTL_JOB_SUBMIT, &ksubmit);
+    LOG("submit done\n");
+    if (ret == -1)
+@@ -447,7 +690,9 @@ pan_ioctl_submit(int fd, unsigned long request, void *arg)
+        .events = POLLIN,
+    };
+ 
++   double tw = now_s();
+    poll(&pollfd, 1, -1);
++   wait_s += now_s() - tw;
+ 
+    if (pollfd.revents != POLLIN)
+        fprintf(stderr, "poll on kbase_fd didn't return POLLIN!\n");
+@@ -464,18 +709,38 @@ pan_ioctl_submit(int fd, unsigned long request, void *arg)
+    if (atom.atom_number != event.atom_number)
+       LOG("atom: %i -> %i\n", atom.atom_number, event.atom_number);
+ 
++   double t1 = now_s();
++   submit_s += t1 - t0;
++   n_submit++;
++   if (stats_on() && t1 - stats_t0 >= 5)
++      print_sync_stats();
++
+    frostwrap_dump();
+ 
     return 0;
  }
  
@@ -183,7 +502,7 @@ index f984e7f..d225067 100644
 +
 +   if (bo) {
 +      kbase_bo_sync(bo, MALI_SYNC_TO_CPU);
-+      p_atomic_dec(&bo->refcount);
++      drm_shim_bo_put(bo);
 +   }
 +   return 0;
 +}
@@ -195,6 +514,21 @@ index f984e7f..d225067 100644
     [DRM_PANFROST_CREATE_BO] = pan_ioctl_create_bo,
     [DRM_PANFROST_MMAP_BO] = pan_ioctl_mmap_bo,
     [DRM_PANFROST_GET_PARAM] = pan_ioctl_get_param,
+-   [DRM_PANFROST_GET_BO_OFFSET] = pan_ioctl_noop,
++   [DRM_PANFROST_GET_BO_OFFSET] = pan_ioctl_get_bo_offset,
+    [DRM_PANFROST_PERFCNT_ENABLE] = pan_ioctl_noop,
+    [DRM_PANFROST_PERFCNT_DUMP] = pan_ioctl_noop,
+    [DRM_PANFROST_MADVISE] = pan_ioctl_madvise,
+@@ -489,6 +754,9 @@ drm_shim_driver_init(void)
+    shim_device.driver_name = "panfrost";
+    shim_device.driver_ioctls = driver_ioctls;
+    shim_device.driver_ioctl_count = ARRAY_SIZE(driver_ioctls);
++   shim_device.driver_bo_free = pan_bo_free;
++   core_ioctls[_IOC_NR(DRM_IOCTL_PRIME_FD_TO_HANDLE)] = pan_ioctl_prime_fd_to_handle;
++   core_ioctls[_IOC_NR(DRM_IOCTL_PRIME_HANDLE_TO_FD)] = pan_ioctl_prime_handle_to_fd;
+ 
+    /* panfrost uses the DRM version to expose features, instead of getparam. */
+    shim_device.version_major = 1;
 diff --git a/src/panfrost/drm-shim/perf.c b/src/panfrost/drm-shim/perf.c
 index 0e3b963..02be199 100644
 --- a/src/panfrost/drm-shim/perf.c
@@ -227,3 +561,65 @@ index 0e3b963..02be199 100644
      struct prfcnt_control_cmd sample_perf = {
          .cmd = PRFCNT_CONTROL_CMD_SAMPLE_SYNC,
      };
+diff --git a/src/panfrost/lib/pan_bo.c b/src/panfrost/lib/pan_bo.c
+index 28b3da2..c9196ef 100644
+--- a/src/panfrost/lib/pan_bo.c
++++ b/src/panfrost/lib/pan_bo.c
+@@ -70,6 +70,8 @@ panfrost_bo_alloc(struct panfrost_device *dev, size_t size,
+                 if (!(flags & PAN_BO_EXECUTE))
+                         create_bo.flags |= PANFROST_BO_NOEXEC;
+         }
++        if (flags & PAN_BO_CPU_TRACKED)
++                create_bo.flags |= PANFROST_BO_E850_CPU_TRACKED;
+ 
+         ret = drmIoctl(dev->fd, DRM_IOCTL_PANFROST_CREATE_BO, &create_bo);
+         if (ret) {
+@@ -349,6 +351,15 @@ panfrost_bo_mmap(struct panfrost_bo *bo)
+         }
+ }
+ 
++void
++panfrost_bo_cpu_written(struct panfrost_bo *bo)
++{
++        struct drm_panfrost_mmap_bo mmap_bo = { .handle = bo->gem_handle };
++
++        if (bo->flags & PAN_BO_CPU_TRACKED)
++                drmIoctl(bo->dev->fd, DRM_IOCTL_PANFROST_MMAP_BO, &mmap_bo);
++}
++
+ static void
+ panfrost_bo_munmap(struct panfrost_bo *bo)
+ {
+@@ -379,7 +390,7 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size,
+         if (flags & PAN_BO_GROWABLE)
+                 assert(flags & PAN_BO_INVISIBLE);
+ 
+-        flags = flags & PAN_BO_EXECUTE;
++        flags = flags & (PAN_BO_EXECUTE | PAN_BO_CPU_TRACKED); /* e850: keep the shim's write tracking */
+ 
+         /* Before creating a BO, we first want to check the cache but without
+          * waiting for BO readiness (BOs in the cache can still be referenced
+diff --git a/src/panfrost/lib/pan_bo.h b/src/panfrost/lib/pan_bo.h
+index e267cb4..9c1fecd 100644
+--- a/src/panfrost/lib/pan_bo.h
++++ b/src/panfrost/lib/pan_bo.h
+@@ -50,6 +50,10 @@
+  * cached locally */
+ #define PAN_BO_SHARED             (1 << 4)
+ 
++/* e850 kbase shim: every CPU write is reported with panfrost_bo_cpu_written() (resources: all
++ * CPU writes go through a transfer), so the shim skips cleaning the CPU cache otherwise */
++#define PAN_BO_CPU_TRACKED        (1 << 5)
++
+ /* GPU access flags */
+ 
+ /* BO is either shared (can be accessed by more than one GPU batch) or private
+@@ -126,6 +130,8 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size,
+                    uint32_t flags, const char *label);
+ void
+ panfrost_bo_mmap(struct panfrost_bo *bo);
++void
++panfrost_bo_cpu_written(struct panfrost_bo *bo);
+ struct panfrost_bo *
+ panfrost_bo_import(struct panfrost_device *dev, int fd);
+ int

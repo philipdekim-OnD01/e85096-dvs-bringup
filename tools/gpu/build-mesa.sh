@@ -4,7 +4,7 @@
 set -e
 gcc -I/g/kbase-g52/src/panfrost/drm-shim -I/u -I/u/jm /t/abi-check.c -o /tmp/abi-check && { /tmp/abi-check > /tmp/abi.txt && tail -1 /tmp/abi.txt; } || { cat /tmp/abi.txt; exit 1; }
 [ -d /g/build ] || meson setup /g/build /g/kbase-g52 --prefix=/opt/mesa-kbase --libdir=lib --buildtype=release \
-  -Dgallium-drivers=panfrost -Dvulkan-drivers= -Dplatforms=x11 -Dglx=disabled -Degl=enabled \
+  -Dgallium-drivers=panfrost,kmsro -Dvulkan-drivers= -Dplatforms=x11 -Dglx=dri -Degl=enabled \
   -Dgles1=disabled -Dgles2=enabled -Dopengl=true -Dgbm=enabled -Dllvm=disabled -Dshared-glapi=enabled \
   -Dtools=drm-shim -Dvalgrind=disabled -Dlibunwind=disabled -Dzstd=disabled \
   -Dgallium-vdpau=disabled -Dgallium-va=disabled -Dgallium-xa=disabled -Dgallium-nine=false \
@@ -16,3 +16,7 @@ gcc -O2 -I/g/out/mesa-kbase/include /t/gles-test.c -L/g/out/mesa-kbase/lib -Wl,-
   -lEGL -lGLESv2 -o /g/out/gles-test
 gcc -O2 -I/g/out/mesa-kbase/include /t/gles-x11.c -L/g/out/mesa-kbase/lib -Wl,-rpath-link,/g/out/mesa-kbase/lib \
   -lEGL -lGLESv2 -lX11 -lm -o /g/out/gles-x11
+gcc -O2 -I/g/out/mesa-kbase/include /t/gles-fb.c -L/g/out/mesa-kbase/lib -Wl,-rpath-link,/g/out/mesa-kbase/lib \
+  -lEGL -lGLESv2 -lm -o /g/out/gles-fb
+gcc -O2 -I/g/out/mesa-kbase/include -I/usr/include/libdrm /t/gles-kms.c -L/g/out/mesa-kbase/lib -Wl,-rpath-link,/g/out/mesa-kbase/lib \
+  -lEGL -lGLESv2 -lgbm -ldrm -lm -o /g/out/gles-kms

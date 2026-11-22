@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run a client with the GPU Mesa (~/gpu/mesa-kbase + kbase shim) on the e850-kms X server (11.86):
+#   sh /var/tmp/e850-kms/kenv ~/gpu/gles-x11 1280 720 20 egl
+L=${L:-$HOME/gpu/mesa-kbase/lib}
+export DISPLAY=${DISPLAY_KMS:-:1} LD_LIBRARY_PATH=$L LIBGL_DRIVERS_PATH=$L/dri LD_PRELOAD=$L/libpanfrost_kbase_drm_shim.so
+exec "$@"
