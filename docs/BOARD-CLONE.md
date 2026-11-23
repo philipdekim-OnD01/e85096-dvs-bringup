@@ -150,6 +150,8 @@ python3 tools/host/acm.py "cat /etc/machine-id; systemctl is-system-running; sys
 | boot | **`~/e850-logs/boot-nocpu/boot.img`**(md5 `25643a9a3f6b62b18db07cd895a7c410`, 명령줄에 `cgroup_disable=cpu`). 이 rootfs에는 `libpam-systemd`가 있어, 다른 boot로는 로그인할 때 커널 패닉이 난다(11.80) |
 | 파일시스템 | 8 GiB(`BLOCKS=2097152`), 라벨 `rootfs`, UUID `de77216b-a7d7-4c77-9fec-51c801b1fb77`(원본과 같음). 원본 사용량 약 5.2 GB(apt 캐시는 비우고 받음) |
 
+**구운 보드: 보드5(11.92), 보드6(11.93, 현미경 뷰어를 더 넣음).** 지금 `part.simg.*`의 machine-id(`f580f9d9…`)는 보드6의 것이다. 현미경 보드로 쓸 때는 구운 뒤 `~/e850-logs/scope-board6/board6-setup.sh`(11.92의 두 수정, `e850-usbhost` 끄기, `tools/board/scope/install.sh`, OpenCV)를 root로 돌린다(11.93).
+
 **대상마다 이미지를 새로 만든다.** `build-clone.sh`가 만들 때마다 machine-id를 새로 넣기 때문이다. 같은 `part.simg.*`를 두 보드에 구우면 machine-id가 같아져 DHCP 주소가 겹친다. `rootfs.tar`는 다시 받을 필요가 없다.
 
 ```sh
@@ -166,7 +168,18 @@ for f in $D/part.simg.*; do ~/e850-logs/fbmini flash userdata $f || break; done 
 **구운 뒤 원본(보드3)과 다른 점과 할 일.**
 - **ACM 콘솔이 없다.** `e850-usbhost`가 부팅 때 켜져서 micro-USB는 gadget이 아니다. 확인은 Wi-Fi ssh(`ssh -o HostKeyAlias=192.168.0.236 philip@<대상 주소>`, sudo 비밀번호는 원본과 같다)나 HDMI root 프롬프트(USB 키보드)로 한다. 8장의 `acm.py` 명령은 ssh에서 `sudo`로 바꿔 한다. ACM이 필요하면 `sudo e850-usbhost off`(다음 부팅까지) 또는 `sudo systemctl disable e850-usbhost`. fastboot(LK)는 이와 상관없이 micro-USB로 된다.
 - 파일시스템을 늘린다: `sudo resize2fs /dev/mmcblk0p24`(10장).
+- **이미지에 없는 두 수정을 넣는다(11.92).** 넣지 않으면 부팅이 2분 동안 `systemd-networkd-wait-online`을 기다리다 `degraded`가 된다(usb0가 DOWN). `bluealsa-aplay`도 failed로 남는다.
+  ```sh
+  # Mac에서 (저장소 루트)
+  scp -o HostKeyAlias=192.168.0.236 features/usbhost/wait-online-any.conf philip@<대상 주소>:/var/tmp/
+  # 대상 보드에서 (sudo)
+  install -D -m 644 /var/tmp/wait-online-any.conf /etc/systemd/system/systemd-networkd-wait-online.service.d/e850-any.conf
+  systemctl daemon-reload; systemctl reset-failed; systemctl restart systemd-networkd-wait-online
+  systemctl disable --now bluealsa-aplay
+  systemctl is-system-running        # running
+  ```
 - **DVS 센서가 있는 보드:** dvslive가 꺼져 있다. `sudo systemctl enable --now dvslive`로 켠다. 그러면 HDMI는 DVS 화면이 차지하고, `e850-x`를 치면 dvslive를 멈추고 데스크톱을 띄운다.
 - **BT 스피커는 다시 페어링한다.** 페어링 정보는 원본 어댑터 주소(`/var/lib/bluetooth/9C:23:E0:0A:74:9C/`) 아래에 있어 새 보드에서는 쓰이지 않는다. 절차는 `features/README.md`의 "BT 스피커"다. 그 전에는 `~/.asoundrc`(philip, 기본 출력 = BT) 때문에 소리가 나지 않는다. 헤드폰 잭으로 쓰려면 그 파일을 지운다.
 - 그대로 오는 것: philip의 `netdev`·`bluetooth` 그룹, wpa_supplicant 제어 소켓(netdev) 설정, zram(1.8 GB, lz4), GPU(`~/gpu/mesa-kbase`, `/var/tmp/e850-kms`의 `e850-kms.ko`), `/usr/local/bin/e850-x`, `/etc/motd`의 안내 한 줄, Firefox 프로필(사용자 기본 프로필과 `~/.config/mozilla/firefox/gpu`, 시험 프로필 `/var/tmp/ffprof*`), `/var/tmp`의 녹화와 시험 파일(약 2 GB).
+- 보드5에서 본 굽기: boot 2.4초, userdata 8조각 합계 577초. 첫 시도는 boot에서 LK가 멈춰 전원을 다시 넣었다. 그때 보드는 UART와 같은 허브 뒤에 있었고, 다른 세션 스크립트가 5초마다 `fastboot devices`를 부르고 있었다(11.92). 굽는 동안에는 다른 fastboot 호출을 멈춘다.
 - 확인 순서: HDMI에 root 프롬프트 → USB 키보드로 `e850-x` → 패널·메뉴·한/영 → `ssh`로 `systemctl --failed`, `cat /proc/swaps`, `id philip`.

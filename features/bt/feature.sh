@@ -12,6 +12,8 @@ install)
     install -D -m 644 "$H/bluealsa-no-userns.conf" /etc/systemd/system/bluealsa.service.d/e850-no-userns.conf
     apt_need bluez bluez-alsa-utils libasound2-plugin-bluez
     systemctl daemon-reload; systemctl restart bluealsa || true
+    # the A2DP sink player (phone -> board) has the same PrivateUsers=true and is not used: off (11.92)
+    systemctl disable --now bluealsa-aplay 2>/dev/null || true
     ko_install scsc_wlan
     unit_install "$H/e850-bt.service" enable
     if sh "$H/bt-check.sh" 2>/dev/null; then systemctl restart e850-bt

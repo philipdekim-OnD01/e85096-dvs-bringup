@@ -12,10 +12,11 @@ automatic capture takes one every tl_every seconds with its own LED, exposure, a
   scope.py [--fake FILE.yuv [--size WxH] [--chip 5031]] [--data DIR] [--port N]
   --fake loops raw YUYV frames (default 1632x1224, chip 4608) from a file instead of the camera (PC without a board).
 """
-import argparse, ctypes, fcntl, glob, http.server, json, math, os, re, socketserver, struct, subprocess, sys, threading, time
+import argparse, ctypes, fcntl, glob, http.server, json, math, os, queue, re, socketserver, struct, subprocess, sys, threading, time
 import urllib.parse, zlib
 import numpy as np
 import scope_rec
+import scope_still
 
 os.environ.setdefault("TZ", "Asia/Seoul")        # the board runs in UTC; photo names and the page clock use lab time
 time.tzset()
@@ -24,19 +25,22 @@ W, H = 1632, 1224                                 # current frame size, from the
 # output pixel in um (sensor pitch x 2, the firmware averages pixel pairs; Hi-5031Q 0.56 um summed 2 x 2 first).
 SENSORS = {
     0x4608: {"name": "Hi-846", "mp": 8, "mhz": 288, "llp": "0x0008", "fll": "0x0006", "expReg": "0x0074", "exp": 150, "um": 2.24,
+             "bayer": None, "black": 64,
              "regs": [["0f16", "칩 ID"], ["0006", "프레임 길이(FLL)"], ["0008", "줄 길이(LLP)"], ["0074", "노출(줄 수)"],
                       ["0a00", "스트림 모드"]]},
     0x5031: {"name": "Hi-5031Q", "mp": 50, "mhz": 124, "llp": "0x0206", "fll": "0x0210", "expReg": "0x020C", "exp": 2000, "um": 2.24,
+             "bayer": None, "black": 64,      # no colour filter: equal 2x2 site means under LED and room light
              "regs": [["0716", "칩 ID"], ["0210", "프레임 길이(FLL)"], ["0206", "줄 길이(LLP)"], ["020c", "노출(줄 수)"],
                       ["020a", "아날로그 이득(값/16+1 배)"], ["0b00", "스트림 모드"]]},
     0x1634: {"name": "Hi-1634", "mp": 16, "mhz": 80, "llp": "0x0206", "fll": "0x020E", "expReg": "0x020A", "exp": 200, "um": 2.0,
+             "bayer": None, "black": 64,
              "regs": [["0716", "칩 ID"], ["020e", "프레임 길이(FLL)"], ["0206", "줄 길이(LLP)"], ["020a", "노출(줄 수)"],
                       ["0b12", "출력 폭"], ["0b00", "스트림 모드"]]},
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIAG_FIELDS = ("magic chipId initStatus usbSpeed frames goodFrames lastFrameBytes buffers commitFail dmaResets "
                "streamStarts lastFrameMs llp fll exposureLines mipiErrors framePeriodMs exposure100us led truncFrames "
-               "vBadRows vFirstCol convMs").split()
+               "vBadRows vFirstCol convMs inFrameBytes inFrameMs stillFails").split()
 USBDEVFS_CONTROL = 0xC0185500                     # _IOWR('U', 0, struct usbdevfs_ctrltransfer), 24 B on arm64
 FLAT_FRAMES = 16
 
@@ -63,7 +67,8 @@ cfg = {"exp": 150, "led": 0, "avg": 1, "flat": False, "pixel_um": 2.24, "sample"
        "tl_on": False, "tl_every": 300, "tl_hours": 24, "tl_start": 0, "tl_run": None,
        "tl_led": True, "tl_ae": True, "tl_flat": True, "tl_avg4": False,
        "an_dark": True, "an_min_um": 5.0, "an_max_um": 500.0, "an_split": True, "an_track": False, "an_sens": 3,
-       "rec_png": True, "rec_ov": True, "rec_gb": 30}
+       "rec_png": True, "rec_ov": True, "rec_gb": 30,
+       "shot_res": "live", "shot_color": "grey"}      # photo: live frame or high-resolution still (grab_still)
 BOOL_KEYS = ("tl_led", "tl_ae", "tl_flat", "tl_avg4", "an_dark", "an_split", "an_track", "rec_png", "rec_ov")
 AN_KEYS = ("an_dark", "an_min_um", "an_max_um", "an_split", "an_track", "an_sens")
 SENS_K = {1: 5.0, 2: 4.0, 3: 3.0, 4: 2.5, 5: 2.0}      # sensitivity -> threshold in noise units (scope_rec.analyze)
@@ -81,8 +86,13 @@ def save_cfg():
     os.replace(tmp, CFG_FILE)
 
 
-# ---------------------------------------------------------------- PNG (grey, no extra libraries on the board)
+# ---------------------------------------------------------------- PNG (grey: zlib, 75 ms a live frame vs OpenCV 100 ms)
 def png(gray):
+    """PNG of a grey (HxW) or RGB (HxWx3, only made when OpenCV is there) uint8 image."""
+    if gray.ndim == 3:
+        cv2 = scope_rec.cv2
+        bgr = cv2.cvtColor(np.ascontiguousarray(gray), cv2.COLOR_RGB2BGR)
+        return cv2.imencode(".png", bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1])[1].tobytes()
     h, w = gray.shape
     raw = np.empty((h, w + 1), np.uint8)
     raw[:, 0] = 0
@@ -142,17 +152,20 @@ sol = Sol()
 
 
 # ---------------------------------------------------------------- capture and processing
-def largest_yuyv(dev):
-    """Largest YUYV frame size the camera offers (frame 1 of the SOL firmware)."""
+def camera_sizes(dev):
+    """Largest YUYV frame size the camera offers (frame 1 of the SOL firmware), and the GREY still format of the
+    still-capture firmware as (row bytes, rows), None with older firmware."""
     out = subprocess.run(["v4l2-ctl", "-d", dev, "--list-formats-ext"], capture_output=True, text=True).stdout
-    sizes, yuyv = [], False
+    sizes, grey, fmt = [], None, ""
     for line in out.splitlines():
         if "'" in line:
-            yuyv = "'YUYV'" in line
+            fmt = line.split("'")[1]
         m = re.search(r"Size: Discrete (\d+)x(\d+)", line)
-        if m and yuyv:
+        if m and fmt == "YUYV":
             sizes.append((int(m[1]), int(m[2])))
-    return max(sizes, key=lambda s: s[0] * s[1]) if sizes else (1632, 1224)
+        elif m and fmt == "GREY":
+            grey = (int(m[1]), int(m[2]))
+    return (max(sizes, key=lambda s: s[0] * s[1]) if sizes else (1632, 1224)), grey
 
 
 class Cam:
@@ -168,6 +181,10 @@ class Cam:
         self.ring, self.sum = [], None
         self.gain = None           # flat-field gain, float32 HxW
         self.flat_acc, self.flat_left = None, 0
+        self.still = None          # GREY still format (row bytes, rows), None = this firmware has none
+        self.busy = ""             # what a high-resolution still is doing, for the page
+        self.pause = threading.Event()     # set by grab_still: live capture lets go of the camera
+        self.paused = threading.Event()    # set by frames() once it has
         try:
             self.gain = np.load(os.path.join(A.data, "flat.npy"))
         except (OSError, ValueError):
@@ -217,14 +234,17 @@ class Cam:
                 yield np.minimum(np.frombuffer(buf, np.uint8)[0::2].reshape(H, W).astype(np.uint16) + noise, 255).astype(np.uint8)
                 i += 1
         while True:
+            while self.pause.is_set():          # a high-resolution still has the camera (grab_still)
+                self.paused.set()
+                time.sleep(0.05)
             dev = next((("/dev/" + os.path.basename(v)) for v in sorted(glob.glob("/sys/class/video4linux/video*"))
                         if "/usb" in os.path.realpath(v + "/device")), None)
             if not dev:
-                self.dev, self.msg = None, "현미경을 기다리는 중 · micro-USB 케이블을 빼야 USB 허브가 붙습니다"
+                self.dev, self.still, self.msg = None, None, "현미경을 기다리는 중 · micro-USB 케이블을 빼야 USB 허브가 붙습니다"
                 time.sleep(1)
                 continue
             sol.find(dev)
-            W, H = largest_yuyv(dev)
+            (W, H), self.still = camera_sizes(dev)
             size = W * H * 2
             try:
                 chip = sol.diag().get("chipId", 0)
@@ -245,12 +265,12 @@ class Cam:
 
             def watch():            # an unplugged kit (module swap) leaves v4l2-ctl waiting on the gone node forever
                 while p.poll() is None:
-                    if not os.path.exists(dev) or time.time() - last[0] > 20:   # 20 s: frames come every <= ~1.5 s
+                    if self.pause.is_set() or not os.path.exists(dev) or time.time() - last[0] > 20:   # 20 s: frames every <= ~1.5 s
                         p.kill()
                     time.sleep(1)
             threading.Thread(target=watch, daemon=True).start()
             try:
-                while True:
+                while not self.pause.is_set():
                     buf = p.stdout.read(size)
                     if len(buf) < size:
                         break
@@ -259,6 +279,8 @@ class Cam:
             finally:
                 p.terminate()
                 p.wait()
+            if self.pause.is_set():
+                continue
             self.msg = "스트림이 끊겼습니다 · 다시 연결하는 중"
             log("stream ended")
             time.sleep(1)
@@ -282,18 +304,23 @@ def safe_name(s):
 rec = scope_rec.Rec(os.path.join(A.data, "scope.db"))
 
 
-def save_photo(img, run_id=None, over=None):
+def save_photo(img, run_id=None, over=None, wait=True):
     """PNG + thumbnail + JSON in photos/, objects into the record. over: settings of an automatic shot at the moment
-    it was taken (exp, led, avg, flat). Returns the photo name."""
+    it was taken (exp, led, avg, flat). wait=False: the JSON says pending and the analysis runs in an_loop (a still
+    takes ~20 s to analyse). Returns the photo's JSON with its name."""
     with cfg_lock:
         c = dict(cfg)
     meta = {k: c[k] for k in ("exp", "led", "avg", "flat", "pixel_um", "sample", "note")}
+    meta.update(res="live")
     meta.update(over or {})
+    if meta["res"] == "still":                       # stills keep every row and pixel: half the live pixel size
+        meta["pixel_um"] = round(c["pixel_um"] / 2, 4)
+    grey = img if img.ndim == 2 else scope_rec.cv2.cvtColor(img, scope_rec.cv2.COLOR_RGB2GRAY)
     t = time.time()
     lt = time.localtime(t)
     meta.update(time=time.strftime("%Y-%m-%d %H:%M:%S", lt), width=img.shape[1], height=img.shape[0],
-                sensor=cam.sensor.get("name", ""), run=run_id,
-                mean=round(float(img.mean()), 1), board=open("/etc/hostname").read().strip() if os.path.exists("/etc/hostname") else "")
+                color=img.ndim == 3, sensor=cam.sensor.get("name", ""), run=run_id,
+                mean=round(float(grey.mean()), 1), board=open("/etc/hostname").read().strip() if os.path.exists("/etc/hostname") else "")
     base = time.strftime("%Y%m%d-%H%M%S", lt) + ("_" + safe_name(meta["sample"]) if meta["sample"] else "")
     name, i = base, 2
     while os.path.exists(os.path.join(PHOTOS, name + ".json")):     # a manual and an automatic shot in one second
@@ -304,28 +331,77 @@ def save_photo(img, run_id=None, over=None):
             f.write(png(img))
     with open(os.path.join(PHOTOS, name + ".thumb.png"), "wb") as f:
         f.write(png(img[::8, ::8]))
-    res = None
+    meta.update(png=keep_png)
+    if wait:
+        return finish_photo(name, grey, meta, c, run_id, t)
+    meta.update(pending=True, ov=False, count=None, mean_d_um=None, total_area_um2=None)
+    write_json(name, meta)
+    an_q.put((name, grey, dict(meta), c, run_id, t))       # blocks while 4 wait: the next capture answers later
+    log("photo", name, "saved, analysis queued")
+    return dict(meta, name=name)
+
+
+def write_json(name, meta):
+    tmp = os.path.join(PHOTOS, name + ".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    os.replace(tmp, os.path.join(PHOTOS, name + ".json"))     # /photos never reads half a file
+
+
+def finish_photo(name, grey, meta, c, run_id, t):
+    """Analysis, contour JPEG, final JSON and record of a saved photo."""
+    res, ta = None, time.time()
     if scope_rec.HAVE_CV:
         try:
-            res = scope_rec.analyze(img, c["pixel_um"], c["an_dark"], c["an_min_um"], c["an_max_um"], c["an_split"],
+            res = scope_rec.analyze(grey, meta["pixel_um"], c["an_dark"], c["an_min_um"], c["an_max_um"], c["an_split"],
                                     SENS_K.get(c["an_sens"], 3.0))
             if c["rec_ov"]:
                 with open(os.path.join(PHOTOS, name + ".ov.jpg"), "wb") as f:
-                    f.write(scope_rec.overlay_jpg(img, res))
+                    f.write(scope_rec.overlay_jpg(grey, res))
         except Exception as e:                                      # an analysis fault must not lose the photo
             log("analysis:", e)
             res = None
-    meta.update(png=keep_png, ov=bool(res and c["rec_ov"]), count=res["count"] if res else None,
+    meta.pop("pending", None)
+    meta.update(ov=bool(res and c["rec_ov"]), count=res["count"] if res else None,
                 mean_d_um=res["mean_d_um"] if res else None, total_area_um2=res["total_area_um2"] if res else None)
-    with open(os.path.join(PHOTOS, name + ".json"), "w") as f:
-        json.dump(meta, f, ensure_ascii=False)
+    write_json(name, meta)
     try:
-        rec.add_photo(run_id, name, dict(meta, t=t, opts={k: c[k] for k in AN_KEYS}), res, c["pixel_um"],
+        rec.add_photo(run_id, name, dict(meta, t=t, opts={k: c[k] for k in AN_KEYS}), res, meta["pixel_um"],
                       track=bool(run_id and c["an_track"]))
     except Exception as e:                                          # the files are written; keep going
         log("record:", e)
-    log("photo", name, "objects", meta["count"])
-    return name
+    log("photo", name, "objects", meta["count"], f"analysis {time.time() - ta:.1f} s")
+    return dict(meta, name=name)
+
+
+an_q = queue.Queue(maxsize=4)
+
+
+def an_loop():
+    """Analyses of saved photos, in order. Photos still pending from before a restart first: from their PNG, with
+    the analysis settings of now; one without a PNG cannot be analysed and is left without a count."""
+    for j in sorted(glob.glob(os.path.join(PHOTOS, "*.json"))):
+        try:
+            meta = json.load(open(j))
+            if not meta.get("pending"):
+                continue
+            name = os.path.basename(j)[:-5]
+            grey = scope_rec.cv2.imread(os.path.join(PHOTOS, name + ".png"), 0) if scope_rec.HAVE_CV else None
+            with cfg_lock:
+                c = dict(cfg)
+            if grey is None:
+                meta.pop("pending")
+                write_json(name, meta)
+            else:
+                finish_photo(name, grey, meta, c, meta.get("run"), time.mktime(time.strptime(meta["time"], "%Y-%m-%d %H:%M:%S")))
+        except Exception as e:
+            log("pending analysis", j, e)
+    while True:
+        job = an_q.get()
+        try:
+            finish_photo(*job)
+        except Exception as e:                   # finish_photo keeps the photo; a fault here must not stop the loop
+            log("analysis", job[0], e)
 
 
 def wait_frames(k, timeout=8.0):
@@ -373,6 +449,48 @@ def grab(n, flat):
     return np.clip(img + 0.5, 0, 255).astype(np.uint8), flat
 
 
+still_lock = threading.RLock()      # one shot at a time: a manual still and an automatic shot wait for each other
+
+
+def grab_still(color, n=1, flat=False):
+    """Mean of n high-resolution stills (UVC format 2, scope_still), developed; live capture stops meanwhile.
+    Colour only when the sensor has a colour filter (SENSORS bayer). Returns (image, flat applied)."""
+    with still_lock:
+        if not scope_rec.HAVE_CV:
+            raise OSError(scope_rec.CV_ERR)
+        if not cam.dev or not cam.still:
+            raise OSError("현미경 없음" if not cam.dev else "이 키트 펌웨어는 고해상도 사진을 주지 않습니다")
+        dev, (rb, rows), s = cam.dev, cam.still, cam.sensor
+        cam.busy = "고해상도 촬영 중"
+        cam.paused.clear()                    # set again only once live capture has let go (frames)
+        cam.pause.set()
+        try:
+            if not cam.paused.wait(10):
+                raise OSError("실시간 영상을 멈추지 못했습니다")
+            f, t0 = rb * rows, time.time()
+            try:
+                out = subprocess.run(["v4l2-ctl", "-d", dev, f"--set-fmt-video=width={rb},height={rows},pixelformat=GREY",
+                                      "--stream-mmap=2", f"--stream-count={n}", "--stream-to=-"],
+                                     capture_output=True, timeout=15 + 3 * n).stdout
+            except subprocess.TimeoutExpired:
+                out = b""
+            log(f"still {n} x {rb}x{rows}: {len(out)} B in {time.time() - t0:.1f} s")
+            if len(out) != n * f:
+                raise OSError("고해상도 사진을 받지 못했습니다")
+            raw = None
+            for i in range(n):                        # 10-bit sums of up to 64 stills fit in uint16
+                r = scope_still.unpack_raw10(scope_still.reorder(out[i * f:(i + 1) * f], rows, rb))
+                raw = r if raw is None else raw + r
+            if n > 1:
+                raw = ((raw + n // 2) // n).astype(np.uint16)
+            flat = bool(flat and cam.gain is not None and cam.gain.shape == (H, W))
+            gain = scope_rec.cv2.resize(cam.gain, (raw.shape[1], raw.shape[0])) if flat else None
+            return scope_still.develop(raw, s.get("bayer"), s.get("black", 64), color, gain), flat
+        finally:
+            cam.pause.clear()
+            cam.busy = ""
+
+
 # ---------------------------------------------------------------- automatic capture
 tl = {"next": 0, "last": 0, "n": 0, "msg": ""}
 
@@ -404,30 +522,34 @@ def disk_full(limit_gb):
 
 def shoot_auto(c):
     """One automatic photo: LED on, auto exposure, average, flat-field as chosen; LED and exposure back after."""
-    with cfg_lock:
-        exp0, led0 = cfg["exp"], cfg["led"]
-    try:
-        if c["tl_led"] and led0 < 255:
+    with still_lock:
+        with cfg_lock:
+            exp0, led0 = cfg["exp"], cfg["led"]
+        try:
+            if c["tl_led"] and led0 < 255:
+                with cfg_lock:
+                    cfg["led"] = 255
+                    sol.led(255)
+                wait_frames(3)
+            if c["tl_ae"]:
+                auto_exposure()
+            n = 4 if c["tl_avg4"] else 1
+            if c["shot_res"] == "still":
+                img, flat = grab_still(c["shot_color"] == "color", n, c["tl_flat"])
+            else:
+                img, flat = grab(n, c["tl_flat"])
             with cfg_lock:
-                cfg["led"] = 255
-                sol.led(255)
-            wait_frames(3)
-        if c["tl_ae"]:
-            auto_exposure()
-        n = 4 if c["tl_avg4"] else 1
-        img, flat = grab(n, c["tl_flat"])
-        with cfg_lock:
-            over = {"exp": cfg["exp"], "led": cfg["led"], "avg": n, "flat": flat}
-    finally:
-        with cfg_lock:
-            changed = (cfg["exp"], cfg["led"]) != (exp0, led0)
-            cfg["exp"], cfg["led"] = exp0, led0
-            if changed:
-                try:
-                    sol.exposure(exp0)
-                    sol.led(led0)
-                except OSError:
-                    pass
+                over = {"exp": cfg["exp"], "led": cfg["led"], "avg": n, "flat": flat, "res": c["shot_res"]}
+        finally:
+            with cfg_lock:
+                changed = (cfg["exp"], cfg["led"]) != (exp0, led0)
+                cfg["exp"], cfg["led"] = exp0, led0
+                if changed:
+                    try:
+                        sol.exposure(exp0)
+                        sol.led(led0)
+                    except OSError:
+                        pass
     return save_photo(img, c["tl_run"], over)
 
 
@@ -594,12 +716,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send({"n": cam.n, "fps": round(cam.fps, 2), "dev": cam.dev, "msg": cam.msg, "cfg": c,
                            "flat_ready": cam.gain is not None and cam.gain.shape == (H, W), "flat_left": cam.flat_left,
                            "diag": diag_cache["d"], "sensor": cam.sensor, "size": [W, H],
+                           "still": [cam.still[0] * 4 // 5, cam.still[1]] if cam.still else None,
+                           "still_color": bool(cam.sensor.get("bayer")), "busy": cam.busy,
                            "tl": {k: tl[k] for k in ("next", "n", "msg")}, "cv": {"have": scope_rec.HAVE_CV, "err": scope_rec.CV_ERR},
                            "disk": disk_info(),
                            "time": time.strftime("%Y-%m-%d %H:%M:%S"), "now": time.time()})
             elif p == "/set":
-                with cfg_lock:
-                    for k, v in q.items():
+                with cfg_lock:      # blank values kept: an emptied sample name or note must clear it
+                    for k, v in urllib.parse.parse_qs(u.query, keep_blank_values=True).items():
                         v = v[0]
                         if k == "exp" and v.isdigit():
                             cfg["exp"] = max(1, min(10000, int(v)))
@@ -623,6 +747,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             cfg[k] = max(0.5, min(5000.0, float(v)))
                         elif k == "an_sens" and v in ("1", "2", "3", "4", "5"):
                             cfg[k] = int(v)
+                        elif k == "shot_res" and v in ("live", "still"):
+                            cfg[k] = v
+                        elif k == "shot_color" and v in ("grey", "color"):
+                            cfg[k] = v
                         elif k == "rec_gb" and v.isdigit():
                             cfg[k] = max(1, min(45, int(v)))
                         elif k in BOOL_KEYS:
@@ -649,11 +777,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     sol.reg_write(reg, int(q["v"][0], 16))
                 self.send({"reg": f"0x{reg:04x}", "value": f"0x{sol.reg_read(reg):04x}"})
             elif p == "/capture":
-                with cam.lock:
-                    img = cam.img
-                if img is None:
-                    raise OSError("영상 없음")
-                self.send({"name": save_photo(img)})
+                with cfg_lock:
+                    c = dict(cfg)
+                if c["shot_res"] == "still":
+                    img, flat = grab_still(c["shot_color"] == "color", 1, c["flat"])
+                    j = save_photo(img, over={"avg": 1, "flat": flat, "res": "still"}, wait=False)
+                else:
+                    with cam.lock:
+                        img = cam.img
+                    if img is None:
+                        raise OSError("영상 없음")
+                    j = save_photo(img, wait=False)
+                self.send(j)
             elif p == "/analyze/preview":
                 if not scope_rec.HAVE_CV:
                     return self.send({"error": scope_rec.CV_ERR}, code=503)
@@ -727,6 +862,7 @@ def main():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=cam.run, daemon=True).start()
     threading.Thread(target=tl_loop, daemon=True).start()
+    threading.Thread(target=an_loop, daemon=True).start()
     log("http on", A.port, "fake" if A.fake else "")
     while not any(os.path.exists(os.path.join(A.ctl, f)) for f in ("stop", "reload")):
         time.sleep(0.5)

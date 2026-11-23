@@ -31,6 +31,7 @@ input[type=range]{accent-color:var(--acc);min-width:0}
 .sw:checked{background:var(--acc)}.sw:checked::after{transform:translateX(16px);background:#fff}
 .sw:disabled{opacity:.4;cursor:not-allowed}
 .opt{display:flex;align-items:center;gap:12px;padding:8px 0;cursor:pointer}.opt>span{flex:1;min-width:0}.opt small{display:block;color:var(--dim);font-size:12px}.opt small.warn{color:var(--amb)}
+.hsel{font-size:12.5px;padding:5px 7px;max-width:170px}
 .pill{display:inline-flex;align-items:center;gap:7px;font:600 12px var(--mono);padding:4px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--dim);white-space:nowrap}
 .pill i{width:8px;height:8px;border-radius:50%;background:#4a5562;flex:none}
 .pill.on{color:var(--ok)}.pill.on i{background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 1.2s infinite}
@@ -195,7 +196,7 @@ label.chip:has(input:focus-visible){outline:2px solid var(--acc);outline-offset:
   .rbody{display:block}#rSide{border-left:0;border-top:1px solid var(--line)}
   .rstrip{position:sticky;bottom:calc(62px + env(safe-area-inset-bottom));z-index:3}
 }
-@media (max-width:520px){.brand div{display:none}header.top{gap:6px}.pill{padding:4px 8px}}
+@media (max-width:520px){.brand div{display:none}header.top{gap:6px}.pill{padding:4px 8px}.hsel{max-width:92px;padding:5px 4px}}
 /* report: the page is laid out at print width first so the charts are drawn at the size they print */
 body.printing{--surf:#fff;--bg:#fff;--card:#fff;--card2:#fff;--grid:#e3e8ee;--axis:#97a3af;--dim:#56636f;--txt:#1b232c;--hi:#0d1318;--line:#d4dbe2;--accd:#e6f7f9}
 body.printing .rbody{display:block;width:700px}body.printing #rSide{width:700px}
@@ -225,6 +226,8 @@ body.printing .rbody{display:block;width:700px}body.printing #rSide{width:700px}
   <div class="sp"></div>
   <div id="live" class="pill" title="카메라 상태"><i></i><span>WAIT</span><span id="liveFps"></span></div>
   <button id="tlPill" class="pill rec" style="display:none" title="진행 중인 실험 · 누르면 결과"><i></i><span>REC</span></button>
+  <select id="shotRes" class="hsel" title="사진 해상도" aria-label="사진 해상도"><option value="live">실시간 화질</option><option value="still">고해상도</option></select>
+  <select id="shotColor" class="hsel" title="사진 색 (고해상도만)" aria-label="사진 색"><option value="grey">흑백</option><option value="color">컬러</option></select>
   <button id="bShot" class="pri" title="지금 화면을 사진으로 저장 (C)"><svg class="ic" data-ic="camera"></svg><span class="t">촬영</span></button>
   <button id="bAdv" title="고급 설정 · 센서, 보정" aria-label="고급 설정"><svg class="ic" data-ic="sliders"></svg></button>
 </header>
@@ -441,7 +444,7 @@ const proc = document.createElement("canvas"), pctx = proc.getContext("2d");
 const cv = $("cv"), ctx = cv.getContext("2d");
 let dpr = 1;
 
-function toast(t) { const e = $("toast"); e.textContent = t; e.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.opacity = 0, 2600); }
+function toast(t, ms = 2600) { const e = $("toast"); e.textContent = t; e.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.opacity = 0, ms); }
 const api = (p) => fetch(p).then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.status); return j; }));
 const fmtUm = um => um >= 1000 ? (um / 1000).toFixed(um >= 10000 ? 1 : 2) + " mm" : (um >= 10 ? um.toFixed(0) : um.toFixed(1)) + " µm";
 const pad2 = n => String(n).padStart(2, "0");
@@ -490,9 +493,14 @@ function syncCfg() {
   $("bLed").classList.toggle("on", c.led > 0); $("bLedT").textContent = c.led > 0 ? "LED 끄기" : "LED 켜기"; $("dLed").textContent = c.led > 0 ? "켬" : "끔";
   $("dAvg").textContent = c.avg + "장"; $("dFlat").textContent = c.flat ? "켬" : "끔"; $("dPix").textContent = c.pixel_um.toFixed(2) + " µm";
   $("dFov").textContent = (FW * c.pixel_um / 1000).toFixed(2) + " × " + (FH * c.pixel_um / 1000).toFixed(2) + " mm";
+  if (document.activeElement !== $("shotRes")) $("shotRes").value = c.shot_res || "live";
+  if (document.activeElement !== $("shotColor")) $("shotColor").value = c.shot_color || "grey";
+  $("shotColor").disabled = c.shot_res !== "still" || !st.stillColor;
   syncLiveOv(c);
 }
 $("pix").onchange = () => setCfg({pixel_um: $("pix").value});
+$("shotRes").onchange = () => setCfg({shot_res: $("shotRes").value});
+$("shotColor").onchange = () => setCfg({shot_color: $("shotColor").value});
 $("sample").onchange = () => setCfg({sample: $("sample").value});
 
 /* ---------- auto exposure: scale exposure so the mean of the visible image goes to ~118 */
@@ -743,7 +751,21 @@ function togglePause() {
 }
 $("bShot").onclick = shoot;
 function shoot() {
-  api("/capture").then(j => { toast("저장했습니다: " + j.name); loadGal(); }).catch(e => toast("촬영 실패: " + e.message));
+  if (st.shooting || st.busy) return toast(st.busy || "촬영 중입니다");
+  st.shooting = true; $("bShot").disabled = true;
+  if (st.cfg.shot_res === "still") toast("고해상도 촬영 중…", 60000);
+  api("/capture").then(j => {
+    toast("저장했습니다: " + j.name + (j.pending ? " · 물체 수는 분석이 끝나면 갤러리에 나옵니다" : j.count != null ? ` · ${j.count}개` : ""), j.pending ? 4000 : 2600);
+    loadGal(); if (j.pending) waitAnalysis(j.name, Date.now());
+  })
+    .catch(e => toast("촬영 실패: " + e.message)).finally(() => { st.shooting = false; $("bShot").disabled = !!st.busy; });
+}
+function waitAnalysis(name, t0) {      // the analysis runs on the board after the photo is saved (a still ~20 s)
+  setTimeout(() => api("/photos").then(list => {
+    const p = list.find(x => x.name === name);
+    if (p && !p.pending) { loadGal(); if (p.count != null) toast(`${name} 분석 끝: 물체 ${p.count}개`); }
+    else if (p && Date.now() - t0 < 600000) waitAnalysis(name, t0);
+  }).catch(() => Date.now() - t0 < 600000 && waitAnalysis(name, t0)), 3000);
 }
 $("bFlatTake").onclick = () => { if (confirm("시료를 치운 빈 상태에서 기준 영상을 16장 찍습니다. 진행할까요?")) api("/flat/take").then(() => toast("기준 영상 찍는 중…")); };
 $("bFlat").onclick = () => setCfg({flat: st.cfg.flat ? 0 : 1});
@@ -763,7 +785,7 @@ $("bRegW").onclick = () => {
 function loadGal() {
   return api("/photos").then(list => {
     st.photos = list;
-    $("gal").innerHTML = list.slice(0, 9).map((p, i) => `<img src="/photos/${encodeURIComponent(p.name)}.thumb.png" title="${p.name}${p.count != null ? " · 물체 " + p.count + "개" : ""}" alt="${p.time}" data-i="${i}">`).join("") || '<span class="note" style="grid-column:1/-1">아직 없음 · 위 ‘촬영’을 누르세요</span>';
+    $("gal").innerHTML = list.slice(0, 9).map((p, i) => `<img src="/photos/${encodeURIComponent(p.name)}.thumb.png" title="${p.name}${p.pending ? " · 분석 중" : p.count != null ? " · 물체 " + p.count + "개" : ""}" alt="${p.time}" data-i="${i}">`).join("") || '<span class="note" style="grid-column:1/-1">아직 없음 · 위 ‘촬영’을 누르세요</span>';
     [...$("gal").querySelectorAll("img")].forEach(im => im.onclick = () => openPhoto(st.photos[+im.dataset.i]));
     showLastPhoto();
   }).catch(() => {});
@@ -772,7 +794,7 @@ function openPhoto(p) {
   const base = "/photos/" + encodeURIComponent(p.name), hasPng = p.png !== false, u = base + (hasPng ? ".png" : p.ov ? ".ov.jpg" : ".thumb.png");
   $("mImg").src = u; $("mRaw").href = u; $("mRaw").download = p.name + ".png";
   $("mMeta").textContent = `${p.time} · 노출 ${(p.exp / 10).toFixed(1)} ms · 평균 ${p.avg}장 · 평탄화 ${p.flat ? "켬" : "끔"}${p.led != null ? " · LED " + (p.led ? "켬" : "끔") : ""} · 화소 ${p.pixel_um} µm${p.sample ? " · 시료 " + p.sample : ""}` +
-    (p.count != null ? ` · 물체 ${p.count}개${p.mean_d_um ? " · 평균 지름 " + p.mean_d_um.toFixed(1) + " µm" : ""}` : "");
+    (p.pending ? " · 분석 중" : p.count != null ? ` · 물체 ${p.count}개${p.mean_d_um ? " · 평균 지름 " + p.mean_d_um.toFixed(1) + " µm" : ""}` : "");
   ["mRaw", "mBar"].forEach(id => $(id).style.display = hasPng ? "" : "none");
   let ov = false; $("mOv").style.display = p.ov && hasPng ? "" : "none"; $("mOv").textContent = "윤곽 보기";
   $("mOv").onclick = () => { ov = !ov; $("mImg").src = ov ? base + ".ov.jpg" : u; $("mOv").textContent = ov ? "원본 보기" : "윤곽 보기"; };
@@ -850,6 +872,13 @@ function poll() {
     if (j.size && (j.size[0] !== FW || j.size[1] !== FH)) {   // another camera (sensor): new image size
       [FW, FH] = j.size; st.anchor = null; st.meas = []; st.pend = null; listMeas(); fit();
     }
+    st.still = j.still || null; st.stillColor = !!j.still_color; st.busy = j.busy || "";
+    const ro = $("shotRes").options;
+    ro[0].textContent = `실시간 화질 ${FW}×${FH}`;
+    ro[1].textContent = st.still ? `고해상도 ${st.still[0]}×${st.still[1]}` : "고해상도 (지원 안 함)"; ro[1].disabled = !st.still;
+    $("shotRes").title = st.still ? "사진 해상도" : "고해상도: 키트 펌웨어가 지원하지 않음";
+    $("shotColor").title = st.stillColor ? "사진 색 (고해상도만)" : "컬러: 이 센서는 색 필터가 없어 흑백으로만 찍힘";
+    $("bShot").disabled = !!st.busy || !!st.shooting; $("bShot").querySelector(".t").textContent = st.busy ? st.busy + "…" : "촬영";
     st.cvOk = !j.cv || j.cv.have; st.cvErr = j.cv ? j.cv.err : ""; st.disk = j.disk || null; st.flatReady = j.flat_ready;
     const runChanged = !!st.cfg.tl_on !== !!j.cfg.tl_on, first = !st.got;
     st.cfg = j.cfg; st.got = true; syncCfg(); showAuto(j);
@@ -1084,8 +1113,10 @@ function gateMove(e) {
   $("wMin").value = D.an_min_um; $("wMax").value = D.an_max_um; drawGate();
 }
 for (const ev of ["pointerup", "pointercancel"]) $("gate").addEventListener(ev, () => { if (!W.drag) return; W.drag = null; renderWiz(); testSoon(0); });
+const photoTxt = () => st.cfg.shot_res === "still" && st.still ? `고해상도 ${st.still[0]}×${st.still[1]} · ` +
+  (st.cfg.shot_color === "color" && st.stillColor ? "컬러" : "흑백") : `실시간 화질 ${FW}×${FH} · 흑백`;
 function estimate(d) {        // bytes per output pixel measured on board 4 photos (2016 x 1536): PNG 0.8, contour JPEG 0.22, thumbnail 0.014
-  const px = FW * FH, mb = ((d.rec_png ? 0.8 : 0) + (d.rec_ov ? 0.22 : 0) + 0.014) * px / 1e6;
+  const px = st.cfg.shot_res === "still" && st.still ? st.still[0] * st.still[1] : FW * FH, mb = ((d.rec_png ? 0.8 : 0) + (d.rec_ov ? 0.22 : 0) + 0.014) * px / 1e6;
   const n = d.tl_hours ? Math.ceil(d.tl_hours * 3600 / d.tl_every) : null, perDay = 86400 / d.tl_every;
   return {mb, n, gb: n != null ? n * mb / 1000 : null, dayGb: perDay * mb / 1000, perDay};
 }
@@ -1108,6 +1139,7 @@ function showSum() {
   const rows = [["시료", (D.sample || "이름 없음") + (D.note ? " · " + D.note : "")],
     ["분석", PRESETS[pk].t + " · " + anTxt(D) + (D.an_split ? " · 붙은 물체 나누기" : "") + (D.an_track ? " · 개별 물체 추적" : "")],
     ["일정", fmtEvery(D.tl_every) + "마다 · " + fmtHours(+D.tl_hours) + (end ? ` (${fmtT(end, true)}에 끝)` : "")],
+    ["사진", photoTxt()],
     ["찍기 전", [on("tl_led", "LED 켜기"), on("tl_ae", "자동 노출"), on("tl_flat", "평탄화" + (st.flatReady ? "" : " (기준 없음)")), on("tl_avg4", "4장 평균")].filter(Boolean).join(" · ") || "없음"],
     ["남길 것", [on("rec_png", "원본 PNG"), on("rec_ov", "윤곽 사진")].filter(Boolean).concat("분석 값").join(" · ") + ` · 보관 한도 ${D.rec_gb} GB`],
     ["예상", e.n != null ? `${e.n.toLocaleString()}장 · 약 ${e.gb.toFixed(1)} GB` : `하루 ${Math.round(e.perDay)}장 · 약 ${e.dayGb.toFixed(1)} GB`]];

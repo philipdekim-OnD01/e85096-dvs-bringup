@@ -9,10 +9,13 @@ install)
     ko_install e850-hubpwr
     unit_install "$H/e850-usbhost.service"
     ln -sf "$H/usbhost.sh" /usr/local/sbin/e850-usbhost
+    install -D -m 644 "$H/wait-online-any.conf" /etc/systemd/system/systemd-networkd-wait-online.service.d/e850-any.conf
+    systemctl daemon-reload
     systemctl is-enabled -q e850-scope 2>/dev/null && log "e850-scope is enabled: it already turns host mode on at boot"
     log "usbhost: 'e850-usbhost on' (until reboot) or 'systemctl enable --now e850-usbhost' (every boot)";;
 remove)
-    unit_remove e850-usbhost.service; rm -f /usr/local/sbin/e850-usbhost; ko_remove e850-hubpwr;;
+    unit_remove e850-usbhost.service; rm -f /usr/local/sbin/e850-usbhost; ko_remove e850-hubpwr
+    rm -f /etc/systemd/system/systemd-networkd-wait-online.service.d/e850-any.conf; systemctl daemon-reload;;
 status)
     sh "$H/usbhost.sh" status;;
 esac

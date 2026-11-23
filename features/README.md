@@ -4,11 +4,11 @@ E850-96 보드(보드1~4 어느 것이든)에 기본 이미지에 없는 기능�
 
 | 기능 | 하는 일 | 의존 | 부팅 때 |
 |---|---|---|---|
-| `usbhost` | USB-A 호스트 모드(키보드, 마우스, LAN9514). `e850-usbhost on\|off` | | 켜지 않음. 켜면 micro-USB ACM/ECM이 없어진다 |
+| `usbhost` | USB-A 호스트 모드(키보드, 마우스, LAN9514). `e850-usbhost on\|off`. 부팅 때 켜도 기다리지 않게 `systemd-networkd-wait-online`을 `--any`로 바꾼다(11.92) | | 켜지 않음. 켜면 micro-USB ACM/ECM이 없어진다 |
 | `ethernet` | LAN9514 유선랜(`smsc95xx.ko`), 이름 `eth0`, MAC는 machine-id로 고정, DHCP | usbhost | USB 호스트가 켜지면 자동 |
 | `audio` | ABOX DSP + AUD3004X 코덱 사운드 카드, 3.5 mm 헤드폰 출력, ALSA 기본 장치(plug → 48 kHz, 한 번에 한 프로그램) | | `e850-audio.service` |
 | `video` | MFC 하드웨어 코덱(V4L2 `/dev/video6` 디코더, `/dev/video7` 인코더). 부팅 경합을 고친 `exynos_mfc`(다음 부팅부터) | | `e850-mfc.service` |
-| `bt` | Bluetooth: `scsc_bt` → `e850-btbridge.py` → `/dev/vhci` → BlueZ `hci0`. BT 스피커 출력(bluez-alsa, A2DP) | Wi-Fi(e850-wifi) | `e850-bt.service`, `bluealsa.service` |
+| `bt` | Bluetooth: `scsc_bt` → `e850-btbridge.py` → `/dev/vhci` → BlueZ `hci0`. BT 스피커 출력(bluez-alsa, A2DP) | Wi-Fi(e850-wifi) | `e850-bt.service`, `bluealsa.service`(`bluealsa-aplay`는 끔, 11.92) |
 | `desktop` | X(fbdev) + Openbox + 패널(lxpanel: 메뉴, 작업 표시줄, 시계) + 파일 관리자(pcmanfm) + 터미널 + Firefox + mpv + 한글 입력(fcitx5-hangul), HDMI tty7. `e850-desktop start\|stop` | usbhost | 켜지 않음(무겁다) |
 
 `desktop`만 빼고 설치하면 X 없이 가벼운 보드가 된다. X가 필요할 때만 `desktop`을 더 설치한다.
