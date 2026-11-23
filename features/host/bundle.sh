@@ -18,7 +18,9 @@ docker run --rm -v ~/e850-a13-build:/work -v e850-out:/work/out -v "$B/ko:/x" e8
     S=/work/prebuilts/clang/host/linux-x86/clang-r450784e/bin/llvm-strip
     for k in /work/out/ext-smsc95xx/smsc95xx.ko /work/out/ext-exynos3830-sound/exynos3830_sound.ko \
              /work/out/ext-e850-hubpwr/e850-hubpwr.ko /work/out/ext-scsc-wlan/scsc_wlan.ko \
-             /work/out/ext-exynos-mfc/exynos_mfc.ko; do $S --strip-debug -o /x/${k##*/} $k; done
+             /work/out/ext-exynos-mfc/exynos_mfc.ko \
+             /work/out/drivers/media/platform/exynos/camera/fimc-is.ko /work/out/ext-s5krc1s/is-cis-s5krc1s.ko \
+             /work/out/ext-csis-irqstat/csis-irqstat.ko; do $S --strip-debug -o /x/${k##*/} $k; done
     cat /work/out/include/config/kernel.release' > "$B/KVER"
 
 FW=$R/out/fw-cache
@@ -30,6 +32,16 @@ cd "$R/features"
 cp README.md e850-feature common.sh "$B/"
 for f in */feature.sh; do d=${f%/feature.sh}; [ "$d" = host ] || cp -R "$d" "$B/"; done
 cp "$R/tools/board/scope/gpiohold.py" "$B/usbhost/"
+# dvs (11.97): the decoder built for the boards' Debian 12, its scripts from tools/, the optional banner glyphs and
+# demo recording from out/ (not in git: a system font's glyphs; a recording)
+docker run --rm --platform linux/arm64 -v "$R/tools/linux510:/s:ro" -v "$B/dvs:/x" debian:12 sh -c '
+    apt-get -qq update && apt-get -qq install -y gcc libc6-dev zlib1g-dev >/dev/null &&
+    gcc -O2 -Wall -shared -fPIC -o /x/libdvsview.so /s/dvsview.c -lpthread -lm -lz' > "$S/build-dvsview.log" 2>&1 ||
+    { tail -20 "$S/build-dvsview.log"; exit 1; }
+cp "$R/tools/linux510/ov5647-cap.py" "$R/tools/linux510/dvsctl.py" "$R/tools/linux510/dvsctl.html" \
+    "$R/tools/linux510/dvsact.py" "$R/tools/linux510/dvsx11.py" "$R/tools/board/dvslive.sh" \
+    "$R/tools/board/dvslive.service" "$B/dvs/"
+for f in dvsfont.json:dvsfont.json dvs-demo.gz:demo.gz; do [ ! -f "$R/out/${f%:*}" ] || cp "$R/out/${f%:*}" "$B/dvs/${f#*:}"; done
 find "$B" -name __pycache__ -prune -exec rm -rf {} +
 git -C "$R" describe --always --dirty > "$B/VERSION"
 COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$OUT" -C "$S" e850-features

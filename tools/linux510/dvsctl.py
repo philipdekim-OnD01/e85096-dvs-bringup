@@ -388,7 +388,8 @@ class Recorder:
                 self.last = 'error: %s.json: %s' % (os.path.basename(cur['path']), e)
 
 
-def start(lib, port):
+def start(lib, port, banner=True):
+    """banner: the address line on /dev/fb0 (off under X: dvsx11.py shows the view, fb0 is X's)"""
     lib.dvs_set.argtypes = [ctypes.c_char_p, ctypes.c_int]
     lib.dvs_params.restype = lib.dvs_stats.restype = ctypes.c_char_p
     lib.dvs_png.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
@@ -545,5 +546,6 @@ def start(lib, port):
     srv.daemon_threads = True
     threading.Thread(target=serve, daemon=True).start()
     threading.Thread(target=sample, daemon=True).start()
-    threading.Thread(target=banner_loop, args=(port,), daemon=True).start()
+    if banner:
+        threading.Thread(target=banner_loop, args=(port,), daemon=True).start()
     return srv

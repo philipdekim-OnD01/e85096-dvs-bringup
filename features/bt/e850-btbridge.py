@@ -12,7 +12,10 @@ device is a byte stream, so packets from it are cut by their H4 headers.
 import os
 import select
 import signal
+import subprocess
 import sys
+import threading
+import time
 
 H4_DEV = '/dev/scsc_h4_0'
 VHCI = '/dev/vhci'
@@ -41,6 +44,67 @@ def cut(buf):
     return out, buf
 
 
+def cmd_status(pkt):
+    """(opcode, status) of a Command Complete or Command Status event, else None"""
+    if pkt[:2] == b'\x04\x0e' and len(pkt) >= 7:
+        return pkt[4] | pkt[5] << 8, pkt[6]
+    if pkt[:2] == b'\x04\x0f' and len(pkt) >= 7:
+        return pkt[5] | pkt[6] << 8, pkt[3]
+    return None
+
+
+# Stuck discovery (linux510 docs 11.96): when a command of the kernel's stop-discovery request fails, discov_update()
+# leaves the state at STOPPING; only a Remote Name Request Complete moves it on (hci_check_pending_name), so Start
+# Discovery answers Busy until a power cycle. This fake one (status 0x02, address 0) does that and nothing else.
+NUDGE = bytes([0x04, 0x07, 255, 0x02]) + bytes(6 + 248)
+STUCK_S = 30            # bluetoothd says discovering but no discovery command for this long; healthy: <= ~11 s
+# Inquiry, Inquiry Cancel, Remote Name Request (Cancel), LE (Extended) Scan Parameters and Enable. Only these: blueman
+# polls Read RSSI and Link Quality every second while a device is connected.
+DISC_OPS = {0x0401, 0x0402, 0x0419, 0x041a, 0x200b, 0x200c, 0x2041, 0x2042}
+
+
+def disc_cmd(pkt):
+    """an HCI command packet of the kernel's discovery"""
+    return pkt[0] == 0x01 and len(pkt) >= 3 and pkt[1] | pkt[2] << 8 in DISC_OPS
+
+
+def watch_action(idle, discovering, nudged):
+    """what to do about a discovery that may be stuck: None, 'nudge', then 'power' (adapter off and on)"""
+    if idle < STUCK_S or not discovering:
+        return None
+    return 'power' if nudged else 'nudge'
+
+
+def discovering(idx):
+    try:
+        r = subprocess.run(['busctl', 'get-property', 'org.bluez', '/org/bluez/hci%d' % idx, 'org.bluez.Adapter1',
+                            'Discovering'], capture_output=True, text=True, timeout=3)
+        return r.stdout.strip() == 'b true'
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def watchdog(vh, idx, last_disc):
+    """a stuck discovery: nudge the kernel, then power cycle (own thread: busctl must not hold up the audio)"""
+    nudged_at = None
+    while True:
+        time.sleep(STUCK_S / 2)
+        idle = time.monotonic() - last_disc[0]
+        nudged = nudged_at is not None and last_disc[0] < nudged_at
+        act = watch_action(idle, idle >= STUCK_S and discovering(idx), nudged)
+        if act == 'nudge':
+            print('discovery stuck (no discovery command for %d s while discovering): fake Remote Name Request '
+                  'Complete' % idle, flush=True)
+            os.write(vh, NUDGE)              # one packet a write: safe beside the forwarding thread's writes
+            nudged_at = time.monotonic()
+        elif act == 'power':
+            print('discovery still stuck: hci%d off and on' % idx, flush=True)
+            subprocess.run(['sh', '-c', 'bluetoothctl power off; sleep 1; bluetoothctl power on'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+            nudged_at = None
+            last_disc[0] = time.monotonic()
+
+
 def run():
     vh = os.open(VHCI, os.O_RDWR)
     os.write(vh, b'\xff\x00')                # create the primary controller now, not after vhci's 1 s
@@ -50,11 +114,14 @@ def run():
     # it may speak first, so hci%d must exist before this
     debug = os.environ.get('E850_BT_DEBUG')
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
-    print('bridge %s <-> %s = hci%d' % (H4_DEV, VHCI, r[2] | r[3] << 8), flush=True)
+    idx = r[2] | r[3] << 8
+    print('bridge %s <-> %s = hci%d' % (H4_DEV, VHCI, idx), flush=True)
     rest = b''
     p = select.poll()
     p.register(h4, select.POLLIN)
     p.register(vh, select.POLLIN)
+    last_disc = [time.monotonic()]          # the time of the kernel's last discovery command
+    threading.Thread(target=watchdog, args=(vh, idx, last_disc), daemon=True).start()
     while True:
         for fd, ev in p.poll():
             if ev & (select.POLLERR | select.POLLHUP | select.POLLNVAL):
@@ -64,6 +131,8 @@ def run():
                 if pkt and pkt[0] != 0xff:   # 0xff: vhci's own vendor reply (index), not for the chip
                     if debug:
                         print('>', pkt[:16].hex(), flush=True)
+                    if disc_cmd(pkt):
+                        last_disc[0] = time.monotonic()
                     os.write(h4, pkt)
             else:
                 data = os.read(h4, 4096)
@@ -73,6 +142,9 @@ def run():
                 for pkt in pkts:
                     if debug:
                         print('<', pkt[:16].hex(), flush=True)
+                    st = cmd_status(pkt)
+                    if st and st[1]:
+                        print('hci command 0x%04x: status 0x%02x' % st, flush=True)
                     os.write(vh, pkt)
 
 
@@ -88,6 +160,16 @@ def selftest():
         assert False
     except ValueError:
         pass
+    assert cmd_status(ev) == (0x0c03, 0)
+    assert cmd_status(bytes([0x04, 0x0f, 0x04, 0x0c, 0x01, 0x1a, 0x04])) == (0x041a, 0x0c)   # Command Status
+    assert cmd_status(acl) is None and cmd_status(NUDGE) is None
+    assert cut(NUDGE) == ([NUDGE], b'') and NUDGE[1] == 0x07 and NUDGE[3] != 0
+    assert disc_cmd(bytes([0x01, 0x01, 0x04, 0x05, 0x33, 0x8b, 0x9e, 0x08, 0x00]))           # Inquiry
+    assert disc_cmd(bytes([0x01, 0x42, 0x20, 0x06, 0, 0, 0, 0, 0, 0]))                   # LE ext scan enable
+    assert not disc_cmd(bytes([0x01, 0x05, 0x14, 0x02, 0x01, 0x00]))                     # Read RSSI (blueman, 1/s)
+    assert not disc_cmd(ev)
+    assert watch_action(29, True, False) is None and watch_action(60, False, False) is None
+    assert watch_action(30, True, False) == 'nudge' and watch_action(45, True, True) == 'power'
     print('selftest ok')
 
 

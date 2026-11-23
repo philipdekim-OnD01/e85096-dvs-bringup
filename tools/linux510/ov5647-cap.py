@@ -42,6 +42,7 @@ import select
 import signal
 import struct
 import sys
+import threading
 import time
 
 VIDIOC_S_FMT = 0xc0d05605
@@ -97,6 +98,9 @@ ap.add_argument('--box-window', type=int, default=5000, help='--boxes: us of eve
 ap.add_argument('--ctl', type=int, default=0, help='--live --raw8: serve the display settings page on this port')
 ap.add_argument('--act', help='--live --raw8: append person action changes to this file (JSON lines)')
 ap.add_argument('--act-model', help='--act: the ONNX model (tools/host/act/export.py)')
+ap.add_argument('--x11', action='store_true',
+                help='--live --raw8: draw in an X window ($DISPLAY) instead of /dev/fb0, no address line on fb0')
+ap.add_argument('--replay', help='--live --raw8 --ctl: no sensor on CN4: show this dvs_record() file, over and over')
 ap.add_argument('--stuck', type=int, default=10,
                 help='--live --raw8: this many short buffers in one 2 s stats window restarts the stream (0: off)')
 a = ap.parse_args()
@@ -315,22 +319,24 @@ class DvsLive:
             r = self.lib.dvs_boxes(a.boxes.encode(), a.mm_per_px, a.box_window)
             if r < 0:
                 raise OSError(-r, 'dvs_boxes: ' + os.strerror(-r))
-        r = self.lib.dvs_start(b'/dev/fb0', a.fps)
+        r = self.lib.dvs_start(None if a.x11 else b'/dev/fb0', a.fps)      # None: a page in memory for X
         if r < 0:
             raise OSError(-r, 'dvs_start: ' + os.strerror(-r))
+        sys.path.append('/usr/local/share/dvsview')
+        if a.x11:                               # before the page: no display, no view
+            import dvsx11
+            dvsx11.start(self.lib, a.fps)
         self.ctl, self.q_us, self.q_n = None, 0.0, 0
         if a.ctl:
-            sys.path.append('/usr/local/share/dvsview')
             import dvsctl
-            dvsctl.NO_SENSOR = no_sensor
+            dvsctl.NO_SENSOR = no_sensor and no_sensor + ('; replaying ' + a.replay if a.replay else '')
             try:
-                dvsctl.start(self.lib, a.ctl)
+                dvsctl.start(self.lib, a.ctl, banner=not a.x11)
                 self.ctl = dvsctl
                 log('display settings: http://<board>:%d/' % a.ctl)
             except OSError as e:                # port taken: keep the live view without the page
                 log('display settings off: port %d: %s' % (a.ctl, e))
         if a.act and a.act_model:               # without onnxruntime or the model it says why and stays off
-            sys.path.append('/usr/local/share/dvsview')
             import dvsact
             dvsact.start(self.lib, a.act, a.act_model)
         self.lib.dvs_stats.restype = ctypes.c_char_p
@@ -378,9 +384,31 @@ class DvsLive:
         del p                                   # drop the buffer export so the mmap can close at exit
 
 
-live = (DvsLive() if a.raw8 else Live(a.W, a.H)) if a.live else None
+def stream_off():
+    try:
+        fcntl.ioctl(ldr.fd, VIDIOC_S_CTRL, struct.pack('Ii', CID_IS_S_STREAM, 0))
+    except OSError as e:
+        log('S_STREAM off: %s' % e)
+    for n in (ldr, vc0):
+        try:
+            n.stream(False)
+        except OSError as e:
+            log('%s STREAMOFF: %s' % (n.name, e))
+
+
+try:
+    live = (DvsLive() if a.raw8 else Live(a.W, a.H)) if a.live else None
+except BaseException:           # e.g. --x11 without a display: never leave the stream on (the next start hangs)
+    if not no_sensor:
+        stream_off()
+    raise
 signal.signal(signal.SIGTERM, signal.default_int_handler)   # pkill: stream off cleanly (& ignores SIGINT)
 if no_sensor:                   # the page and HDMI say so until dvslive starts again with a sensor on CN4
+    if live and a.replay:       # a board without the DVS shows a recording instead (11.97)
+        live.lib.dvs_replay.argtypes = [ctypes.c_char_p]
+        threading.Thread(target=lambda: log('replay %s: %s' % (
+            a.replay, os.strerror(-live.lib.dvs_replay(a.replay.encode())))), daemon=True).start()
+        log('replaying %s over and over' % a.replay)
     try:
         while True:
             signal.pause()
@@ -436,14 +464,6 @@ try:
 except KeyboardInterrupt:
     log('interrupted')
 finally:
-    try:
-        fcntl.ioctl(ldr.fd, VIDIOC_S_CTRL, struct.pack('Ii', CID_IS_S_STREAM, 0))
-    except OSError as e:
-        log('S_STREAM off: %s' % e)
-    for n in (ldr, vc0):
-        try:
-            n.stream(False)
-        except OSError as e:
-            log('%s STREAMOFF: %s' % (n.name, e))
+    stream_off()
     log('stopped after %.1f s, %d VC0 frame(s)' % (time.time() - t0, saved))
 sys.exit(0 if saved else 1)

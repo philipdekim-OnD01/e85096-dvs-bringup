@@ -591,6 +591,58 @@ int dvs_ingest(uint8_t *buf, size_t len)
 	return 0;
 }
 
+/*
+ * A board without the sensor (11.97): a dvs_record() file (each line's packet words, then a zero word) back into
+ * buffers of 127 lines for dvs_ingest(), paced by the display clock, over and over. Returns only on an error.
+ */
+int dvs_replay(const char *path)
+{
+	enum { LINES = 127 };
+	uint8_t *buf = calloc(LINES, LINE);
+	gzFile g = buf ? gzopen(path, "rb") : NULL;
+	int64_t t0 = 0, w0 = 0, ahead;
+	size_t n = 0, l = 0, pass = 0;		/* words in the line, lines in the buffer, buffers this pass */
+	uint32_t w = 0;
+	int r;
+
+	if (!g) {
+		free(buf);
+		return buf ? -ENOENT : -ENOMEM;
+	}
+	for (;;) {
+		r = gzread(g, &w, 4);
+		if (r == 4 && w) {
+			if (n < LINE / 4)
+				((uint32_t *)(buf + l * LINE))[n++] = w;
+			continue;
+		}
+		l += n > 0;
+		n = 0;
+		if (l == LINES || (r != 4 && l)) {
+			dvs_ingest(buf, l * LINE);
+			memset(buf, 0, l * LINE);
+			l = 0;
+			pass++;
+			if (!w0) {
+				t0 = S.t;
+				w0 = now_us();
+			} else if ((ahead = S.t - t0 - (now_us() - w0)) > 0) {
+				usleep(ahead);
+			}
+		}
+		if (r == 4)
+			continue;
+		if (r < 0 || !pass) {
+			gzclose(g);
+			free(buf);
+			return -EINVAL;
+		}
+		gzrewind(g);
+		S.have_ts = 0;			/* the next timestamp is the new base, not 64 bad ones back */
+		pass = 0;
+	}
+}
+
 /* ---- box measurement ---- */
 
 static int busy(int cx, int cy)
@@ -1360,7 +1412,16 @@ int dvs_png(uint8_t *dst, size_t len)
 	return png_chunk(p, "IEND", 0) - dst;
 }
 
-/* Map fbdev, start drawing fps frames/s on its visible page. */
+/* The page drawn on: fbdev's visible page, or XS x YS in memory (dvs_start(NULL)) that dvsx11.py shows. */
+const uint32_t *dvs_frame(int *w, int *h, int *stride)
+{
+	*w = S.xres;
+	*h = S.yres;
+	*stride = S.stride;
+	return (const uint32_t *)S.fb;
+}
+
+/* Map fbdev (NULL: a page in memory), start drawing fps frames/s on its visible page. */
 int dvs_start(const char *fbdev, int fps)
 {
 	struct fb_var_screeninfo v;
@@ -1371,6 +1432,16 @@ int dvs_start(const char *fbdev, int fps)
 
 	if (dvs_set("fps", fps) || alloc_ring())
 		return -EINVAL;
+	if (!fbdev) {
+		f.line_length = XS * 4;
+		v = (struct fb_var_screeninfo){ .xres = XS, .yres = YS, .yres_virtual = YS, .bits_per_pixel = 32 };
+		fb = malloc((size_t)XS * YS * 4);
+		if (!fb)
+			return -ENOMEM;
+		for (int i = 0; i < XS * YS; i++)
+			((uint32_t *)fb)[i] = BLACK;
+		goto page;
+	}
 	fd = open(fbdev, O_RDWR);
 	if (fd < 0)
 		return -errno;
@@ -1380,6 +1451,7 @@ int dvs_start(const char *fbdev, int fps)
 	fb = mmap(NULL, (size_t)f.line_length * v.yres_virtual, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (fb == MAP_FAILED)
 		return -errno;
+page:
 	S.stride = f.line_length;
 	S.fb = fb + (size_t)v.yoffset * S.stride;
 	S.xres = v.xres;
@@ -1407,6 +1479,12 @@ static void reset(void)
 	atomic_store(&S.wr, 0);
 	atomic_store(&S.scan, SCAN);
 	memset(S.hist, 0, sizeof(S.hist));
+}
+
+static void *replay_th(void *path)
+{
+	fprintf(stderr, "dvs_replay: %d\n", dvs_replay(path));
+	return NULL;
 }
 
 static void feed(const uint32_t *w, size_t n)
@@ -1874,6 +1952,44 @@ int main(int argc, char **argv)
 			return fprintf(stderr, "filter thread: %llu of 3 events passed\n",
 				       (unsigned long long)atomic_load(&S.fw)), 1;
 		puts("filter thread ok");
+	}
+	{					/* dvs_replay: a recording fed again at its own pace, over and over */
+		char path[] = "/tmp/dvsrecXXXXXX";
+		int fd = mkstemp(path);
+		gzFile g = fd < 0 ? NULL : gzdopen(fd, "wb");
+		uint64_t bufs;
+		pthread_t th;
+
+		for (int k = 0; g && k < 50; k++) {	/* 50 lines 1 ms apart, an event each, as dvs_record() writes */
+			uint32_t w[] = { 0x08000003 + k, 0x08800000, 0x04000005, 0x80080001, 0 };
+
+			for (int i = 0; i < 4; i++)
+				w[i] = __builtin_bswap32(w[i]);
+			gzwrite(g, w, sizeof(w));
+		}
+		if (!g || gzclose(g) != Z_OK)
+			return perror(path), 1;
+		reset();
+		atomic_store(&S.buffers, 0);
+		pthread_create(&th, NULL, replay_th, path);
+		usleep(300000);
+		bufs = atomic_load(&S.buffers);
+		unlink(path);
+		if (bufs < 3 || bufs > 10 || nev() < (int)bufs * 40 || !atomic_load(&S.started))
+			return fprintf(stderr, "replay: %llu buffers in 300 ms, %d events\n", (unsigned long long)bufs,
+				       nev()), 1;
+		printf("replay ok: %llu buffers, %d events in 300 ms\n", (unsigned long long)bufs, nev());
+	}
+	{					/* no fbdev: frames in memory for an X window (dvsx11.py) */
+		int w = 0, h = 0, stride = 0;
+		const uint32_t *f;
+
+		if (dvs_start(NULL, 30))
+			return fprintf(stderr, "dvs_start(NULL): failed\n"), 1;
+		f = dvs_frame(&w, &h, &stride);
+		if (!f || w != XS || h != YS || stride != XS * 4 || f[0] != BLACK || f[XS * YS - 1] != BLACK)
+			return fprintf(stderr, "dvs_frame: %p %dx%d stride %d\n", (void *)f, w, h, stride), 1;
+		puts("memory frame ok");
 	}
 	return 0;
 }

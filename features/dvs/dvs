@@ -1,0 +1,18 @@
+#!/bin/sh
+# dvs: the DVS (S5KRC1S on CN4) in an X window and its settings page on :8080, from a terminal in X (docs 11.97).
+#   dvs [ov5647-cap.py args]      q, Esc, closing the window or Ctrl+C ends it
+# Without the sensor on CN4 it shows the demo recording (/var/lib/dvsview/demo.gz) over and over.
+# Runs dvslive.sh as root (sudo asks for the password); dvslive.service is stopped meanwhile and started again after.
+set -u
+[ -n "${DISPLAY:-}" ] || { echo "dvs: no DISPLAY: run it from a terminal in X" >&2; exit 1; }
+if [ "$(id -u)" != 0 ]; then
+    exec sudo env DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}" CTL_PORT="${CTL_PORT:-8080}" \
+        /usr/local/bin/dvs "$@"
+fi
+was=$(systemctl is-active dvslive 2>/dev/null)
+[ "$was" = active ] && systemctl stop dvslive
+trap '[ "$was" = active ] && systemctl start dvslive' EXIT
+trap 'exit 130' INT TERM
+ip=$(hostname -I 2>/dev/null | cut -d' ' -f1)
+echo "dvs: settings page http://${ip:-<board>}:${CTL_PORT:-8080}/  (q or Esc in the window ends it)"
+DVS_X11=1 DVS_LOG=- /usr/local/bin/dvslive.sh "$@"

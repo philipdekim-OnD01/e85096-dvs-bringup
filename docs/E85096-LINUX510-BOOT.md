@@ -5842,3 +5842,87 @@ A의 단계와 어려움:
 **메일.** 2026-11-23 09:49에 Mail.app으로 `philip.de.kim@yonsei.ac.kr`에 보냈다. 제목은 "E850-96 강의 자료 2종: 리눅스 bring-up · 현미경 실험실 (2026-11-23)"이고, 첨부는 PDF 2개(보기·발표용, 3.4 MB와 7.7 MB)와 HTML 2개(고치기용)다. 본문에 스위치 ③ 이야기와 공개 여부 질문을 넣었다. 약 80초 뒤 메일함에서 첨부 4개, 크기 17.2 MB인 한 통을 확인했다(처음 잠깐 같은 시각의 첨부 0개 항목이 함께 보였으나 다시 보니 message-id가 하나였다).
 
 **저장.** 사용자가 "다 저장해", 이어서 "푸시해"라고 했다. 공개 저장소 `features-20261121`(11.92~11.95)과 비공개 `sol-cx3-uvc`의 `still-capture` 브랜치(LOG 14, 처음 올림)를 push했다. 키트 EEPROM 부팅은 같은 날 10:12에 확인했다(11.94).
+
+### 11.96 BT 검색이 아무것도 못 찾음: 커널 검색 상태가 STOPPING에 갇힘, 브리지 감시 (2026-11-23)
+
+**사용자 요청.** "BT가 잘 안잡혀, 잘 접속되도록 기능을 보강해" (보드6, 22:43 KST). 이어서 "BT음질이 안좋아"(23:01).
+
+**관찰(보드6, 가동 17시간 42분).**
+- `e850-bt`, `bluetooth`, `bluealsa` 모두 active였다. 사용자는 blueman-manager로 장치를 찾던 중이었다. `bluetoothctl show`는 `Discovering: yes`인데 장치는 하나도 없었다.
+- btmon 15초 동안 HCI 명령·이벤트가 하나도 없었다(blueman의 RAW 소켓 열고 닫기만 있음). 컨트롤러는 `Read Local Version`에 4 ms 만에 답했다.
+- 무선은 정상이었다. BlueZ를 거치지 않은 `hcitool inq`(10초)가 장치 3개를 찾았다: JBL Flip 6(RSSI −57), MacBook Pro, Samsung TV.
+- 커널 mgmt: `Stop Discovery`가 Rejected(검색 중이 아님), `Start Discovery`가 Busy(정지 상태도 아님). 커널 소스(`net/bluetooth`)로 보면 이 둘을 동시에 만족하는 오래가는 상태는 STOPPING뿐이다. STARTING은 `discov_update()`가 바로 FINDING이나 STOPPED로 넘긴다.
+- `hcitool lescan`의 `Command Disallowed`는 이상이 아니다. 컨트롤러가 LE 확장 광고를 지원해서(LE features `ff 79`), 커널이 확장 스캔 명령을 쓰고 일반 명령은 막힌다.
+- 커널 로그에는 command timeout이 없었다(`Bluetooth: hci0: unexpected event for opcode 0x0000` 한 줄뿐, 부팅 때).
+
+**원인(코드로 확인, 이번 고착의 직접 계기는 못 봄).** `hci_request.c`의 `discov_update()`는 STOPPING에서 정지 요청(`hci_req_stop_discovery`: Inquiry Cancel, LE 스캔 끄기, Remote Name Request Cancel)을 보낸다. 그 가운데 하나라도 오류로 끝나면 STOPPED로 넘기지 않는다. 그 뒤 STOPPING을 벗어나는 길은 Remote Name Request Complete 이벤트(`hci_check_pending_name`)뿐이다. Inquiry Cancel의 0x0c 경합은 이 커널에 이미 고쳐져 있다. 남는 후보(가설)는 펌웨어가 다른 정지 명령에 오류를 주고 이름 완료 이벤트를 보내지 않는 경우다.
+
+**재현(결함 주입).**
+- 브리지 복사본이 검색 중 "LE 확장 스캔 끄기"의 응답을 0x0c로 바꾸게 했다.
+- 첫 시도에서는 결함이 검색 시작 때의 스캔 끄기(본딩된 MX Master용 수동 스캔을 끄는 것)에 걸렸다. 그래서 검색 시작만 실패했고 갇히지 않았다.
+- 검색이 돈 뒤에 걸자 처음 증상이 그대로 나왔다: 정지 뒤에도 `Discovering: yes`, Start Busy.
+- 밖에서 `hcitool cmd`로 스캔을 꺼 두는 방법은 재현되지 않았다. 커널이 그 응답을 보고 스캔 플래그를 지워서, 정지 요청에 보낼 명령이 남지 않았다.
+
+**고침(`features/bt/e850-btbridge.py`).**
+- 별도 스레드가 15초마다 본다. 브리지가 본 마지막 검색 명령(Inquiry, Inquiry Cancel, 이름 요청·취소, LE 스캔 파라미터·켜기/끄기, 일반·확장) 뒤로 30초가 지났고 bluetoothd가 검색 중이라고 하면(`busctl ... Discovering`) 갇힌 것으로 본다.
+  - 판정에서 다른 명령은 뺐다. 첫 판은 "아무 HCI 명령 30초 없음"이었는데, blueman-manager가 연결된 장치의 RSSI·링크 품질·송신 전력을 1초마다 읽어서 결함 주입 시험에서 67초 동안 움직이지 않았다.
+  - 정상 검색의 검색 명령 간격은 최대 약 11초다(LE 5.12초, Inquiry 5.12초, bluetoothd 재시작 약 5.6초, 22:48 기록).
+- 1차 조치: 가짜 Remote Name Request Complete(status 0x02, 주소 0)를 커널에 넣는다. STOPPING이면 STOPPED로 가고, 다른 상태에서는 아무것도 하지 않는다(`hci_check_pending_name`). 연결은 건드리지 않는다.
+- 2차 조치: 다음 검사에서도 그대로면 `bluetoothctl power off/on`을 한다(연결이 끊긴다).
+- 0이 아닌 Command Complete/Status는 모두 로그에 남긴다(`hci command 0x....: status 0x..`). 다음에 무엇이 실패했는지 알기 위해서다.
+- 감시를 처음에는 전달 루프 안에 넣었다가 별도 스레드로 옮겼다. `busctl`이 도는 수십 ms 동안 A2DP 패킷이 멈추지 않게 하기 위해서다(음질 문제 보고 뒤).
+- 자체 시험(`--selftest`): 응답 코드 해석, 가짜 이벤트 틀, 검색 명령 판별(Read RSSI 제외), 판정 단계. 먼저 실패하는 것을 보고 구현했다.
+
+**확인하지 못한 것.** 스레드 판의 감시가 결함 주입으로 만든 STOPPING을 실제로 푸는지. 그 시험 직전에 보드6이 네트워크에서 빠졌다(아래).
+
+**보드6 네트워크 끊김(22:59 KST부터, 원인 모름).**
+- 결함 주입 시험 때문에 22:55~22:58 사이에 BT 브리지를 세 번 내렸다 올렸다(`e850-bt` 정지, `btb-faultA`, `btb-faultA2`). 그 직후부터 ping, ssh, Cloudflare 터널(530, 뒤에는 응답 없음)이 모두 안 된다.
+- 23:01에 사용자가 "BT음질이 안좋아"라고 했으니 그때 보드와 BT는 살아 있었다.
+- 가설(측정 안 함): 브리지를 다시 열 때마다 WLBT 펌웨어의 BT 서비스가 멈췄다 켜지는데, 이것이 Wi-Fi 연결을 끊었다. Wi-Fi가 다시 붙으려고 계속 스캔하면 같은 안테나를 쓰는 A2DP가 밀려 소리가 끊긴다. 두 증상이 한 원인일 수 있다.
+- 보드6에는 UART와 ACM이 없다(USB 호스트 모드). Mac에서 닿을 길이 없어 사용자가 볼 때까지 기다린다.
+
+**보드6에 바꾼 것(마지막으로 본 상태).**
+- 22:48 `bluetoothctl power off/on`(갇힌 상태가 풀렸다). 그 뒤 사용자가 JBL Flip 6과 MX Master(BLE HID, `event10`)를 페어링·연결했다. 둘 다 `Trusted: no`다.
+- 22:55 `e850-bt.service`를 멈췄다. 지금 BT 브리지는 임시 유닛 `btb-faultA2`(`/var/tmp/btfix/btb-faultA.py`, 스레드 전 판에 결함 주입을 더한 것; 결함은 `/var/tmp/btb-fault-on`이 있을 때 한 번만 건다)다. 재부팅하면 `e850-bt`가 다시 뜬다.
+- **끄지 않은 것:** 22:48에 띄운 `btmon -w /var/tmp/bt-fix.snoop`(nohup)이 계속 기록하고 있을 수 있다. A2DP를 쓰면 시간당 100 MB 넘게 쌓일 수 있다.
+- `/var/tmp/btfix/`(새 브리지와 결함 주입 복사본), `/var/tmp/bt-*.snoop`, `/var/tmp/bt-fix.txt`.
+
+**다음.** 보드6이 돌아오면 btmon을 끄고, `e850-bt`를 새 브리지로 되돌리고(번들 설치), 결함 주입으로 감시를 확인한다. 페어링한 두 장치를 trust하고, Wi-Fi가 끊긴 원인을 journal에서 찾는다. 음질은 Wi-Fi가 붙은 상태에서 다시 본다.
+
+### 11.97 `dvs` 기능: X 터미널에서 DVS 디코더를 띄우면 창에 모양, 웹 :8080 (2026-11-23)
+
+**사용자 요청.** "추가 기능으로 DVS 드라이버와 디코더도 넣어서, 터미널에서 실행 시킬 수 있도록 하자", "그냥 엑스윈도우 터미널에서 dvs decoder를 실행하면 쉐이프가 나오게 하고 웹서비스도 작동하게 해", "6번 보드에 설치해". 자러 가며 "DVS도 설치하고, 안정화도 해놔, 아침까지".
+
+**설계.** 디코더(`libdvsview.so`)와 캡처(`ov5647-cap.py`), 웹(`dvsctl.py`)은 그대로 두고 그리는 곳만 X 창으로 바꿨다.
+- `dvsview.c`:
+  - `dvs_start(NULL, fps)`는 fb0 대신 메모리 960×720 페이지에 그린다. 1.5배 확대는 꺼진다(페이지가 960×720이라).
+  - `dvs_frame(&w, &h, &stride)`가 그 주소를 준다.
+  - `dvs_replay(path)`는 `dvs_record()` 파일(줄마다 패킷 워드, 0 워드)을 127줄 버퍼로 다시 묶어 `dvs_ingest()`에 넣는다. 속도는 디스플레이 시계(`S.t`)에 맞추고, 끝나면 되감아 되풀이한다. 되감을 때 시각 기준(`have_ts`)만 지운다. 그러지 않으면 뒤로 간 시각 64개를 버린 뒤에야 다시 맞춘다.
+- `dvsx11.py`(새 파일): ctypes Xlib로 "DVS" 창을 만들고 그 페이지를 fps마다 `XPutImage`로 올린다.
+  - SysV IPC가 없어 MIT-SHM은 쓰지 않는다.
+  - 창 닫기, q, Esc는 프로세스에 SIGINT를 보낸다. 그러면 캡처 루프가 Ctrl+C 때처럼 스트림을 끄고 끝난다.
+  - X 서버가 죽으면 Xlib이 바로 exit하지 않도록 IO 오류 처리기가 SIGINT를 보내고 기다린다.
+- `ov5647-cap.py`:
+  - `--x11`이면 `dvs_start(NULL)`, 창, fb0 주소 배너 끔(`dvsctl.start(..., banner=False)`; X도 fb0를 쓴다).
+  - `--replay FILE`이면 센서가 없을 때(11.57의 "no sensor" 분기) 그 녹화를 되풀이한다. 페이지의 `no_sensor`에 "replaying ..."가 붙는다.
+  - 화면 쪽 시작(`DvsLive()`)이 실패하면 스트림을 끄고 끝낸다. 전에는 켠 채로 죽었다(`stream_off()`로 뺌).
+- `dvslive.sh`: `DVS_X11=1`이면 `--x11`, `/var/lib/dvsview/demo.gz`가 있으면 `--replay`, `DVS_LOG=-`이면 로그를 터미널로 보낸다. 서비스로 돌 때(HDMI)는 전과 같다.
+- `features/dvs/`:
+  - `dvs` 명령: X 터미널에서 실행하면 sudo(비밀번호)로 `DISPLAY`·`XAUTHORITY`를 넘긴다. `dvslive.service`가 돌고 있으면 멈췄다가 끝날 때 되살린다.
+  - `feature.sh`: 모듈 3개(`fimc-is`, `is-cis-s5krc1s`, `csis-irqstat`)를 `extra/`에 넣는다. 다시 빌드하지 않고 보드들이 쓰는 e850-out 빌드(11-07, 11-13, 11-14)를 strip했다. 디코더, 스크립트, 데모, `dvslive.service`도 넣는다(서비스는 켜지 않음).
+  - `bundle.sh`가 `libdvsview.so`를 Debian 12 arm64 Docker에서 빌드한다. 파일은 `tools/`에서 복사한다(저장소에 두 벌 두지 않음). 데모 녹화 `out/dvs-demo.gz`와 배너 글꼴 `out/dvsfont.json`은 git 밖이라 있을 때만 넣는다.
+- 데모 녹화: 보드1 `/var/tmp/dvsrec/20261108T214957Z-stand_up.gz`(7초, 이벤트 1280만, 35 MB, 사람이 일어서는 장면).
+
+**시험(Mac Docker, Debian 12 arm64).**
+- `dvsview.c` 시험(`-DDVSVIEW_TEST`): 먼저 `dvs_frame`·`dvs_replay`가 없어서 실패하는 것을 보고 구현했다.
+  - 메모리 페이지는 960×720, stride 3840, 검은색이다.
+  - 재생: 1 ms 간격 50줄 녹화를 300 ms 동안 돌리면 버퍼 8개, 이벤트 400개다(제 속도로 되풀이).
+  - 기존 시험도 모두 통과했다.
+- `dvsx11.py --selftest`(Xvfb): 그린 페이지를 창에서 다시 읽어 초록 사각형과 검은 바탕을 확인한다. `put()`을 비우면 실패하는 것도 봤다.
+- 끝에서 끝: 실제 녹화로 `dvs_replay` + `dvsx11` + `dvsctl`(:8080)를 함께 띄웠다.
+  - 렌더러: 30 fps, 프레임당 이벤트 4~7만, 디스플레이 뒤처짐 34~45 ms, 데이터 99~100%. 7초 녹화가 끝난 뒤에도 같았다(되풀이 확인).
+  - X 화면 캡처("DVS" 창 960×720)와 웹 `/frame.png` 모두에 사람 모양이 나왔다(ON 초록, OFF 빨강).
+  - `/stats`의 `no_sensor`도 나왔다.
+- 번들: 38 MB(데모 35 MB 포함), `fimc-is.ko` strip 후 7.6 MB.
+
+**보드에서 확인하지 못한 것.** 보드6에 설치하지 못했다. 22:59부터 네트워크에서 빠졌다(11.96). `ov5647-cap.py --x11 --replay`의 센서 없음 분기는 V4L2 장치가 있어야 해서 Docker로는 시험하지 못했다. 보드6의 X에서 root가 창을 여는 것(`XAUTHORITY`)과 8080 포트가 비어 있는지도 보지 못했다.
