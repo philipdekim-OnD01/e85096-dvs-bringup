@@ -98,8 +98,10 @@ ap.add_argument('--box-window', type=int, default=5000, help='--boxes: us of eve
 ap.add_argument('--ctl', type=int, default=0, help='--live --raw8: serve the display settings page on this port')
 ap.add_argument('--act', help='--live --raw8: append person action changes to this file (JSON lines)')
 ap.add_argument('--act-model', help='--act: the ONNX model (tools/host/act/export.py)')
+ap.add_argument('--face', help='--live --raw8: box the face on the view with its width in cm (dvsface.py, YuNet ONNX)')
 ap.add_argument('--x11', action='store_true',
                 help='--live --raw8: draw in an X window ($DISPLAY) instead of /dev/fb0, no address line on fb0')
+ap.add_argument('--need-sensor', action='store_true', help='--live --raw8 --ctl: no sensor on CN4: exit 3')
 ap.add_argument('--replay', help='--live --raw8 --ctl: no sensor on CN4: show this dvs_record() file, over and over')
 ap.add_argument('--stuck', type=int, default=10,
                 help='--live --raw8: this many short buffers in one 2 s stats window restarts the stream (0: off)')
@@ -251,6 +253,8 @@ except OSError as e:
             n.stream(False)
         except OSError as e2:
             log('%s STREAMOFF: %s' % (n.name, e2))
+    if a.need_sensor:           # `dvs --auto` at desktop start: nothing to show on a board without the DVS
+        sys.exit(3)
 
 class Live:
     """Half-resolution demosaic (one RGB pixel per BGGR cell) through per-channel LUTs that hold
@@ -325,7 +329,7 @@ class DvsLive:
         sys.path.append('/usr/local/share/dvsview')
         if a.x11:                               # before the page: no display, no view
             import dvsx11
-            dvsx11.start(self.lib, a.fps)
+            dvsx11.start(self.lib)
         self.ctl, self.q_us, self.q_n = None, 0.0, 0
         if a.ctl:
             import dvsctl
@@ -339,6 +343,9 @@ class DvsLive:
         if a.act and a.act_model:               # without onnxruntime or the model it says why and stays off
             import dvsact
             dvsact.start(self.lib, a.act, a.act_model)
+        if a.face:                              # the same: says why on stderr and stays off
+            import dvsface
+            dvsface.start(self.lib, a.face)
         self.lib.dvs_stats.restype = ctypes.c_char_p
         self.next_check = time.monotonic() + 10        # no verdict in the first 10 s
         self.short = None
@@ -403,6 +410,16 @@ except BaseException:           # e.g. --x11 without a display: never leave the 
         stream_off()
     raise
 signal.signal(signal.SIGTERM, signal.default_int_handler)   # pkill: stream off cleanly (& ignores SIGINT)
+user_quit = []
+
+
+def _sigint(*_):                # Ctrl+C, or q / Esc / closing the window (dvsx11): exit 130, `dvs` does not start again
+    user_quit.append(1)
+    raise KeyboardInterrupt
+
+
+if signal.getsignal(signal.SIGINT) is signal.default_int_handler:
+    signal.signal(signal.SIGINT, _sigint)
 if no_sensor:                   # the page and HDMI say so until dvslive starts again with a sensor on CN4
     if live and a.replay:       # a board without the DVS shows a recording instead (11.97)
         live.lib.dvs_replay.argtypes = [ctypes.c_char_p]
@@ -413,7 +430,7 @@ if no_sensor:                   # the page and HDMI say so until dvslive starts 
         while True:
             signal.pause()
     except KeyboardInterrupt:
-        sys.exit(1)
+        sys.exit(130 if user_quit else 1)
 saved = 0
 t0 = last = time.time()
 try:
@@ -466,4 +483,4 @@ except KeyboardInterrupt:
 finally:
     stream_off()
     log('stopped after %.1f s, %d VC0 frame(s)' % (time.time() - t0, saved))
-sys.exit(0 if saved else 1)
+sys.exit(130 if user_quit else 0 if saved else 1)

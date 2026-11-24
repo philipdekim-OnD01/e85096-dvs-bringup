@@ -29,10 +29,17 @@ while pkill -TERM -f 'ov5647-cap.py --live'; do sleep 2; done
 if [ -e /var/lib/dvsact/enable ]; then
     set -- --act /var/lib/dvsact/act.jsonl --act-model /var/lib/dvsact/model.onnx "$@"
 fi
+# the face box with its width in cm (dvsface.py, 11.99) while the model is there
+[ -f /var/lib/dvsview/face.onnx ] && set -- --face /var/lib/dvsview/face.onnx "$@"
 # dvs (features/dvs, 11.97): DVS_X11=1 the view in an X window ($DISPLAY), DVS_LOG=- the log on this terminal.
 # Without the sensor the demo recording plays over and over, if the board has one.
 [ -n "${DVS_X11:-}" ] && set -- --x11 "$@"
-[ -f /var/lib/dvsview/demo.gz ] && set -- --replay /var/lib/dvsview/demo.gz "$@"
+# DVS_AUTO=1 (dvs --auto, 11.98): without the sensor exit 3 instead
+if [ -n "${DVS_AUTO:-}" ]; then
+    set -- --need-sensor "$@"
+elif [ -f /var/lib/dvsview/demo.gz ]; then
+    set -- --replay /var/lib/dvsview/demo.gz "$@"
+fi
 set -- --live --raw8 -W 8192 -H 127 -n 0 -b 8 -B 16 -t 3 --ctl "${CTL_PORT:-8080}" "$@"
 [ "${DVS_LOG:-}" = - ] && exec ov5647-cap.py "$@"
 exec ov5647-cap.py "$@" > /tmp/dvslive.log 2>&1 < /dev/null

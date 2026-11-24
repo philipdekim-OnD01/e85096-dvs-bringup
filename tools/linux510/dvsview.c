@@ -70,6 +70,8 @@
 #define ON_RGB 0xff00ff00u
 #define OFF_RGB 0xffff0000u
 #define BOX_RGB 0xffffffffu
+#define MARK_RGB 0xffffff00u		/* dvsface.py's face box: yellow */
+#define MARK_US 600000			/* a mark not renewed for this long is gone */
 #define EV_Y 0x3ff			/* struct ev y: row, */
 #define EV_SUP 0x4000			/* a neighbour fired within filter_ms (set only while the filter is on), */
 #define EV_OFF 0x8000			/* OFF polarity */
@@ -82,6 +84,7 @@
 #define DECODE_CPU 1			/* 11.45: the dvs_ingest() caller, */
 #define RENDER_CPU 2			/* the render thread, */
 #define FILTER_CPU 3			/* the filter thread */
+#define FCHUNK 32768			/* events it filters before it moves fw */
 #define BROW 104			/* bytes per column of a filter bitmap: 722 rows with the border, + an 8-byte read */
 
 #define CELL 8				/* px, side of a measurement cell */
@@ -345,7 +348,39 @@ static void pin(int cpu, const char *name)
 		fprintf(stderr, "dvsview: CPU%d: %s\n", cpu, strerror(errno));
 }
 
-/* The filter thread: woken after each buffer, it filters what came and moves fw; lapped, it skips ahead. */
+/* Events from display time first on became drawable now: the playout delay has to cover them (the decoder after
+ * each buffer, or with the filter on the filter thread after each chunk: under heavy motion the filter took long
+ * enough that frames reached past what it had passed and came out dark, 11.99). */
+static void seen(int64_t first)
+{
+	int64_t d = now_us() - first, delay = atomic_load(&S.delay);
+
+	if (!atomic_load(&S.started) || d > delay + STALL || d < delay - STALL) {	/* a stall, or the clock jumped */
+		delay = d;
+		atomic_store(&S.anchor, first);
+		atomic_store(&S.started, 1);
+	} else if (d > delay) {
+		delay = d;
+	} else {
+		delay -= (delay - d) >> 8;	/* creep down, ~20 s time constant at 14 buffers/s */
+	}
+	atomic_store(&S.delay, delay);
+}
+
+/* render: with the filter on, a frame ends at the last event it passed (a hold, not a dark frame, 11.99) */
+static int64_t drawable_end(int64_t end, int filter)
+{
+	uint64_t fw = atomic_load_explicit(&S.fw, memory_order_acquire);
+	int32_t over;
+
+	if (!filter || !fw)
+		return end;
+	over = (int32_t)((uint32_t)end - S.ring[(fw - 1) % RING].t);
+	return over > 0 ? end - over : end;
+}
+
+/* The filter thread: woken after each buffer, it filters what came, FCHUNK events at a time, and moves fw (so the
+ * first part of a big buffer is drawable before the rest is filtered); lapped, it skips ahead. */
 static void *filter_thread(void *arg)
 {
 	uint64_t f = 0, wr;
@@ -359,9 +394,20 @@ static void *filter_thread(void *arg)
 		pthread_mutex_unlock(&S.flock);
 		if (wr - f > RING / 2)		/* the decoder is overwriting what is older (or went back: a test) */
 			f = wr > RING / 2 ? wr - RING / 2 : 0;
-		if ((baf = PV(P_FILTER) * 1000))	/* once: the page may set 0 meanwhile (slot() divides by it) */
-			filter(f, wr, baf);
-		atomic_store_explicit(&S.fw, f = wr, memory_order_release);
+		if (!(baf = PV(P_FILTER) * 1000)) {	/* once: the page may set 0 meanwhile (slot() divides by it) */
+			atomic_store_explicit(&S.fw, f = wr, memory_order_release);
+			continue;
+		}
+		while (f < wr) {
+			uint64_t to = wr - f > FCHUNK ? f + FCHUNK : wr;
+			uint32_t t = S.ring[f % RING].t;
+			int64_t nw;
+
+			filter(f, to, baf);
+			atomic_store_explicit(&S.fw, f = to, memory_order_release);
+			nw = atomic_load(&S.newest);			/* the display clock, 64 bits, near t */
+			seen(nw - (int32_t)((uint32_t)nw - t));	/* the chunk's first event */
+		}
 	}
 	return NULL;
 }
@@ -554,7 +600,7 @@ static void link_stats(char *s, size_t size)
 int dvs_ingest(uint8_t *buf, size_t len)
 {
 	static int pinned;
-	int64_t t0 = now_us(), s_first = S.t, d, delay;
+	int64_t t0 = now_us(), s_first = S.t, d;
 	size_t n;
 
 	if (!pinned++)
@@ -562,25 +608,13 @@ int dvs_ingest(uint8_t *buf, size_t len)
 	S.lk_first_ts = S.lk_first_fe = 1;
 	n = decode_lines(buf, len);
 	wake_filter();
+	if (!PV(P_FILTER))
+		seen(s_first);			/* the oldest event of this buffer became drawable now */
 
 	atomic_store(&S.newest, S.t);
 	atomic_store(&S.d2m[atomic_fetch_add(&S.d2m_n, 1) % D2M], now_us() - S.t);
 	atomic_fetch_add(&S.covered, S.cov);
 	S.cov = 0;
-
-	/* the oldest event of this buffer became visible now: the delay has to cover it */
-	d = now_us() - s_first;
-	delay = atomic_load(&S.delay);
-	if (!atomic_load(&S.started) || d > delay + STALL || d < delay - STALL) {	/* a stall, or the clock jumped */
-		delay = d;
-		atomic_store(&S.anchor, s_first);
-		atomic_store(&S.started, 1);
-	} else if (d > delay) {
-		delay = d;
-	} else {
-		delay -= (delay - d) >> 8;	/* creep down, ~20 s time constant at 14 buffers/s */
-	}
-	atomic_store(&S.delay, delay);
 
 	d = now_us() - t0;
 	atomic_fetch_add(&S.buffers, 1);
@@ -914,7 +948,7 @@ static void box_frame(uint64_t from, uint64_t to, int64_t end)
 }
 
 /* 5 x 7 glyphs for the label, bit 4 = left column */
-static const char glyphs[] = "0123456789LWm .-";
+static const char glyphs[] = "0123456789LWm .-c";
 static const uint8_t font[][7] = {
 	{ 0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e }, { 0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e },
 	{ 0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f }, { 0x1f, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0e },
@@ -924,6 +958,7 @@ static const uint8_t font[][7] = {
 	{ 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f }, { 0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a },
 	{ 0x00, 0x00, 0x1a, 0x15, 0x15, 0x11, 0x11 }, { 0 },
 	{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c }, { 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00 },
+	{ 0x00, 0x00, 0x0e, 0x10, 0x10, 0x11, 0x0e },
 };
 
 static void dot(int x, int y, uint32_t c)
@@ -952,6 +987,53 @@ static void text(int x, int y, const char *s, int scale, uint32_t c)
 				if (font[g - glyphs][r / scale] >> (4 - b / scale) & 1)
 					dot(x + b, y + r, c);
 	}
+}
+
+/* dvsface.py's face box and label (11.99), in view px as shown: it flips its image the way the view is flipped */
+static struct {
+	pthread_mutex_t lock;
+	int x, y, w, h;
+	char label[24];
+	int64_t t;
+} M = { .lock = PTHREAD_MUTEX_INITIALIZER };
+
+int dvs_mark(int x, int y, int w, int h, const char *label)
+{
+	pthread_mutex_lock(&M.lock);
+	M.x = x;
+	M.y = y;
+	M.w = w;
+	M.h = h;
+	snprintf(M.label, sizeof(M.label), "%s", label ? label : "");
+	M.t = now_us();
+	pthread_mutex_unlock(&M.lock);
+	return 0;
+}
+
+/* render thread: the mark while it is fresh, 2 px wide, the label above it (below at the top edge) */
+static void draw_mark(int64_t now)
+{
+	char l[sizeof(M.label)];
+	int x, y, w, h;
+
+	pthread_mutex_lock(&M.lock);
+	x = M.x;
+	y = M.y;
+	w = M.t && now - M.t < MARK_US ? M.w : 0;
+	h = M.h;
+	memcpy(l, M.label, sizeof(l));
+	pthread_mutex_unlock(&M.lock);
+	if (w <= 0 || h <= 0)
+		return;
+	for (int k = 0; k < 2; k++) {
+		struct pt a = { x - k, y - k }, b = { x + w + k, y - k }, c = { x + w + k, y + h + k }, d = { x - k, y + h + k };
+
+		line(a, b, MARK_RGB);
+		line(b, c, MARK_RGB);
+		line(c, d, MARK_RGB);
+		line(d, a, MARK_RGB);
+	}
+	text(x, y >= 30 ? y - 27 : y + h + 6, l, 3, MARK_RGB);
 }
 
 /* back buffer -> the visible page, centred, at 1x or 1.5x (nearest neighbour; 1440x1080 fills the HDMI height) */
@@ -1028,6 +1110,7 @@ static void *render(void *arg)
 		newest = atomic_load(&S.newest);
 		if (end > newest)
 			end = newest;			/* not past the data: a hole holds the last frame instead of a dark one */
+		end = drawable_end(end, filter);
 		anchor = atomic_exchange(&S.anchor, -1);
 		if (anchor >= 0)
 			prev = anchor - window;		/* first buffer or after a stall: start from its data */
@@ -1077,6 +1160,7 @@ static void *render(void *arg)
 				line(B.r.c[i], B.r.c[(i + 1) % 4], BOX_RGB);
 		if (B.label[0])
 			text(12, 12, B.label, 4, BOX_RGB);
+		draw_mark(t0);
 		present(zoom);
 		prev = end;
 
@@ -1150,6 +1234,15 @@ int dvs_set(const char *name, int value)
 		atomic_store(&P[i].v, value);
 		return 0;
 	}
+	return -ENOENT;
+}
+
+/* Display setting name's value, -ENOENT; safe from any thread (dvsx11 follows fps with it). */
+int dvs_get(const char *name)
+{
+	for (size_t i = 0; i < sizeof(P) / sizeof(*P); i++)
+		if (!strcmp(name, P[i].name))
+			return PV(i);
 	return -ENOENT;
 }
 
@@ -1691,8 +1784,32 @@ int main(int argc, char **argv)
 		free(S.back);
 		S.back = NULL;
 	}
+	{	/* dvsface.py's mark (11.99): a 2 px box with its label above while fresh, nothing once MARK_US old */
+		int lab = 0, cee = 0, any = 0;
+
+		S.back = calloc(XS * YS, 4);
+		dvs_mark(100, 200, 50, 60, "W 18.5 cm");
+		draw_mark(now_us());
+		for (int y = 173; y < 194; y++)
+			for (int x = 100; x < 100 + 9 * 18; x++) {
+				lab += S.back[y * XS + x] == MARK_RGB;
+				cee += x >= 100 + 7 * 18 && x < 100 + 8 * 18 && S.back[y * XS + x] == MARK_RGB;
+			}
+		if (S.back[200 * XS + 120] != MARK_RGB || S.back[199 * XS + 120] != MARK_RGB ||
+		    S.back[260 * XS + 150] != MARK_RGB || S.back[230 * XS + 125] || lab < 100 || !cee)
+			return fprintf(stderr, "mark: box or label (%d px, 'c' %d)\n", lab, cee), 1;
+		memset(S.back, 0, XS * YS * 4);
+		draw_mark(now_us() + MARK_US);
+		for (int i = 0; i < XS * YS; i++)
+			any |= S.back[i];
+		free(S.back);
+		S.back = NULL;
+		if (any)
+			return fprintf(stderr, "mark: still drawn after %d us\n", MARK_US), 1;
+	}
 	if (dvs_set("fade", 128) || PV(P_FADE) != 128 || dvs_set("fade", 999) != -ERANGE || dvs_set("nope", 1) != -ENOENT ||
-	    !strstr(dvs_params(), "\"fade\":{\"v\":128,\"def\":0,\"min\":0,\"max\":250}") || dvs_set("fade", 0))
+	    !strstr(dvs_params(), "\"fade\":{\"v\":128,\"def\":0,\"min\":0,\"max\":250}") || dvs_get("fade") != 128 ||
+	    dvs_get("nope") != -ENOENT || dvs_set("fade", 0))
 		return fprintf(stderr, "settings: %s\n", dvs_params()), 1;
 	/* filter: column 5, ON at rows 16 and 17 (the second has a neighbour), then column 300 row 400 alone; the
 	 * decoder leaves EV_SUP to filter() (its own thread on the board, 11.45) even with the filter on */
@@ -1935,12 +2052,30 @@ int main(int argc, char **argv)
 		printf("filter_ms %d: %.1f%% of %d events kept (%llu), decode %.2f + filter %.2f ms per buffer\n", ms,
 		       100.0 * kept / nev(), nev(), (unsigned long long)kept, t / 1e3 / (argc - 1), tf / 1e3 / (argc - 1));
 	}
+	{	/* with the filter on, a frame ends at the last event it passed: a hold, not a dark frame (11.99) */
+		reset();
+		S.ring[0] = (struct ev){ 1000, 1, 1 };
+		S.ring[1] = (struct ev){ 2000, 1, 1 };
+		S.ring[2] = (struct ev){ 3000, 1, 1 };
+		atomic_store(&S.wr, 3);
+		atomic_store(&S.fw, 2);
+		if (drawable_end(5000, 1) != 2000 || drawable_end(5000, 0) != 5000 || drawable_end(1500, 1) != 1500)
+			return fprintf(stderr, "drawable_end: %lld %lld %lld\n", (long long)drawable_end(5000, 1),
+				       (long long)drawable_end(5000, 0), (long long)drawable_end(1500, 1)), 1;
+		atomic_store(&S.fw, 0);
+		if (drawable_end(5000, 1) != 5000)
+			return fprintf(stderr, "drawable_end with nothing filtered yet\n"), 1;
+	}
 	{					/* the filter thread, last (it stays): woken per buffer, it catches up */
 		int64_t t0 = now_us();
 
 		dvs_set("filter_ms", 5);
 		reset();
 		S.slot_us = 0;
+		atomic_store(&S.started, 0);
+		atomic_store(&S.delay, 0);
+		S.t += 5LL << 32;			/* a display clock past 2^32 us (the board's after 71 min) */
+		atomic_store(&S.newest, S.t);
 		if (start_filter())
 			return fprintf(stderr, "filter thread: not started\n"), 1;
 		feed((const uint32_t[]){ 0x04000005, 0x80080003, 0x0400012c, 0x80000000 | 50 << 18 | 1 }, 4);
@@ -1951,6 +2086,11 @@ int main(int argc, char **argv)
 		if (atomic_load(&S.fw) != 3 || S.ring[0].y & EV_SUP || !(S.ring[1].y & EV_SUP) || S.ring[2].y & EV_SUP)
 			return fprintf(stderr, "filter thread: %llu of 3 events passed\n",
 				       (unsigned long long)atomic_load(&S.fw)), 1;
+		/* with the filter on, events become drawable when it passes them: the playout delay is set there */
+		if (!atomic_load(&S.started) || llabs(atomic_load(&S.delay) - (now_us() - S.t)) > 1000000 ||
+		    atomic_load(&S.anchor) != S.t)	/* delay: now minus the first event's time, whatever the sign */
+			return fprintf(stderr, "filter thread: delay %lld, anchor %lld, want %lld\n",
+				       (long long)atomic_load(&S.delay), (long long)atomic_load(&S.anchor), (long long)S.t), 1;
 		puts("filter thread ok");
 	}
 	{					/* dvs_replay: a recording fed again at its own pace, over and over */

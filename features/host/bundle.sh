@@ -32,15 +32,28 @@ cd "$R/features"
 cp README.md e850-feature common.sh "$B/"
 for f in */feature.sh; do d=${f%/feature.sh}; [ "$d" = host ] || cp -R "$d" "$B/"; done
 cp "$R/tools/board/scope/gpiohold.py" "$B/usbhost/"
-# dvs (11.97): the decoder built for the boards' Debian 12, its scripts from tools/, the optional banner glyphs and
-# demo recording from out/ (not in git: a system font's glyphs; a recording)
+# dvs (11.97, 11.98): the decoder and the settings panel built for the boards' Debian 12, its scripts from tools/,
+# the optional banner glyphs and demo recording from out/ (not in git: a system font's glyphs; a recording)
 docker run --rm --platform linux/arm64 -v "$R/tools/linux510:/s:ro" -v "$B/dvs:/x" debian:12 sh -c '
-    apt-get -qq update && apt-get -qq install -y gcc libc6-dev zlib1g-dev >/dev/null &&
-    gcc -O2 -Wall -shared -fPIC -o /x/libdvsview.so /s/dvsview.c -lpthread -lm -lz' > "$S/build-dvsview.log" 2>&1 ||
+    apt-get -qq update && apt-get -qq install -y gcc libc6-dev zlib1g-dev pkg-config libgtk-3-dev libcjson-dev >/dev/null &&
+    gcc -O2 -Wall -shared -fPIC -o /x/libdvsview.so /s/dvsview.c -lpthread -lm -lz &&
+    gcc -O2 -Wall -o /x/dvspanel /s/dvspanel.c $(pkg-config --cflags --libs gtk+-3.0 libcjson) -lm' > "$S/build-dvsview.log" 2>&1 ||
     { tail -20 "$S/build-dvsview.log"; exit 1; }
 cp "$R/tools/linux510/ov5647-cap.py" "$R/tools/linux510/dvsctl.py" "$R/tools/linux510/dvsctl.html" \
-    "$R/tools/linux510/dvsact.py" "$R/tools/linux510/dvsx11.py" "$R/tools/board/dvslive.sh" \
+    "$R/tools/linux510/dvsact.py" "$R/tools/linux510/dvsx11.py" "$R/tools/linux510/dvsface.py" "$R/tools/board/dvslive.sh" \
     "$R/tools/board/dvslive.service" "$B/dvs/"
+# the face detector (11.99): OpenCV zoo YuNet 2023mar (MIT), fetched once into out/ and checked
+YUNET=$R/out/face/face_detection_yunet_2023mar.onnx
+[ -f "$YUNET" ] || { mkdir -p "${YUNET%/*}" && curl -sSfL -o "$YUNET" \
+    https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx; }
+echo "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4  $YUNET" | shasum -a 256 -c -s ||
+    { echo "bundle: $YUNET: wrong checksum"; exit 1; }
+FACE=$R/out/face/yunet-free.onnx      # its input size made free (dvsface.py --free-size)
+[ -f "$FACE" ] || docker run --rm --platform linux/arm64 -v "$R/tools/linux510:/s:ro" -v "${YUNET%/*}:/f" \
+    python:3.11-slim sh -c 'pip install -q "onnx<1.17" "numpy<2" &&
+    python -I /s/dvsface.py --free-size /f/face_detection_yunet_2023mar.onnx /f/yunet-free.onnx' > "$S/yunet.log" 2>&1 ||
+    { tail -5 "$S/yunet.log"; exit 1; }
+cp "$FACE" "$B/dvs/face.onnx"
 for f in dvsfont.json:dvsfont.json dvs-demo.gz:demo.gz; do [ ! -f "$R/out/${f%:*}" ] || cp "$R/out/${f%:*}" "$B/dvs/${f#*:}"; done
 find "$B" -name __pycache__ -prune -exec rm -rf {} +
 git -C "$R" describe --always --dirty > "$B/VERSION"

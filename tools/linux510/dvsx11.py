@@ -77,18 +77,22 @@ class Window:
         X.XFlush(self.d)
 
 
-def start(lib, fps=30):
+def start(lib):
     """show libdvsview's memory page (after dvs_start(NULL)) from a daemon thread; closing it is a Ctrl+C"""
     w, h, stride = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
     lib.dvs_frame.restype = P
     lib.dvs_frame.argtypes = [ctypes.POINTER(I)] * 3
+    lib.dvs_get.argtypes = [ctypes.c_char_p]
     frame = lib.dvs_frame(ctypes.byref(w), ctypes.byref(h), ctypes.byref(stride))
     win = Window(frame, w.value, h.value, stride.value)       # here: a display error stops the caller
 
     def loop():
+        t = time.monotonic()
         while not win.closed():
             win.put()
-            time.sleep(1 / fps)
+            # as often as the decoder draws (its fps setting, also from the panel); more would repeat frames
+            t = max(t + 1 / max(lib.dvs_get(b'fps'), 1), time.monotonic() - 0.1)
+            time.sleep(max(0, t - time.monotonic()))
         os.kill(os.getpid(), signal.SIGINT)
     threading.Thread(target=loop, daemon=True, name='dvs-x11').start()
     return win

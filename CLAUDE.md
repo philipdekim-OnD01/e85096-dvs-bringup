@@ -40,7 +40,7 @@ WinLink E850-96(Samsung Exynos850 = s5e3830, Cortex-A55 8코어)에 vendor Linux
 | 보드3 (2026-11-15, 11.57) | Wi-Fi 192.168.0.234 (DHCP), fastboot `00000a749c9c23e0`, machine-id `16314a53…`. UART는 보드2에 쓰던 `A5069RR4`를 옮겨 꽂았다 | 보드1의 복제본(11-14 rootfs). **DVS 센서 없음.** 2026-11-23(11.90)부터 데스크톱 보드: 부팅하면 HDMI tty1에 root 프롬프트, USB 호스트가 켜짐(ACM 없음, ssh로만 관리), dvslive 꺼짐. `e850-x`가 GPU 데스크톱(:1)을 띄운다(GPU 1001 MHz·MIF·INT 최대 고정, `e850-x stop`이 풂, Ctrl+Alt+F1). zram 1.8 GB. philip은 netdev·bluetooth 그룹이고 wpa_supplicant 제어 소켓이 netdev에 열려 있다(wpa_gui). 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.234` |
 | 보드4 (2026-11-15, 11.57) | Wi-Fi 192.168.0.244 (DHCP), fastboot `00000bf40c9c23e0`, machine-id `e0c18890…`, UART 없음 | 보드3과 같은 이미지. 2026-11-17 사용자가 DVS 센서를 달았다(dvslive 동작). 현미경 보드(11.64~11.69): 부팅 때 `e850-scope.service`가 50M 키트 뷰어 `:8090`을 띄우고 USB를 호스트 모드로 바꾼다. 그래서 평소 ACM이 없다. ACM이 필요하면 `curl http://192.168.0.244:8090/quit`(다음 부팅까지). 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.244` |
 | 보드5 (2026-11-23, 11.92) | Wi-Fi 192.168.0.206 (DHCP), fastboot `00000ae74e9c23e0`, machine-id `6f0d9b38…`, UART 없음 | 보드3 데스크톱 이미지(`clone-20261123`, boot-nocpu)를 구웠다. 보드3처럼 HDMI tty1 root 프롬프트, 부팅 때 USB 호스트(ACM 없음), dvslive 꺼짐, `e850-x`. BT 스피커는 아직 페어링 안 함. 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.206` |
-| 보드6 (2026-11-23, 11.93) | Wi-Fi 192.168.0.208 (DHCP), fastboot `00000bf54c9c23e0`, machine-id `f580f9d9…`, UART 없음 | 보드5와 같은 데스크톱 이미지 + 현미경 보드: 부팅 때 `e850-scope`가 뷰어 `:8090`을 띄우고 USB를 호스트 모드로 바꾼다(`e850-usbhost`는 disabled). Cloudflare 임시 터널(philip, 수동, 재부팅하면 꺼짐, 주소는 보드 `/var/tmp/tunnel-url.txt`). 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.208` |
+| 보드6 (2026-11-23, 11.93) | Wi-Fi 192.168.0.208 (DHCP), fastboot `00000bf54c9c23e0`, machine-id `f580f9d9…`, UART 없음 | 보드5와 같은 데스크톱 이미지. 부팅 때 `e850-scope`가 뷰어 `:8090`을 띄우고 USB를 호스트 모드로 바꾼다(`e850-usbhost`는 disabled). 2026-11-24 현미경은 뗐다(뷰어는 기다림). **CN4에 DVS 센서**: `dvs` 기능, 데스크톱 시작 때 `e850-dvs` 유닛이 DVS 창 + C 패널 + 얼굴 표시를 띄운다(11.98~11.99). 사용자가 :1에서 Firefox·BT 마우스·JBL 스피커를 쓴다. Cloudflare 임시 터널(philip, 수동, 재부팅하면 꺼짐, 주소는 보드 `/var/tmp/tunnel-url.txt`). 접속 `ssh -o HostKeyAlias=192.168.0.236 philip@192.168.0.208` |
 | HDMI | LT8912B 브리지, tty1 텍스트 콘솔(16x32 글꼴) | `e850-hdmi.service` |
 
 ## 빌드
@@ -118,6 +118,7 @@ docker run --rm --privileged -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v
 - **`pkill -f`/`pgrep -f`를 ssh로 보낼 때:** 패턴과 같은 글자가 그 ssh 명령 줄 어디에 있어도 ssh 자신이 잡힌다(`x-kms.sh` 안의 `pkill -f "Xorg :1 vt8"` 포함, 11.88). pkill은 따로 ssh 한 번으로 보낸다.
 - **Firefox를 :0과 :1에 함께 띄울 때:** 같은 프로필로 두 번째 Firefox를 띄우면 떠 있는 Firefox에 창을 넘기고 바로 끝난다. 창은 다른 화면에 생긴다(11.89). 그래서 `/usr/local/bin/firefox`(desktop 기능)가 :1에서 `~/.config/mozilla/firefox/gpu` 프로필을 쓴다. 메뉴, 패널, 터미널의 `firefox`가 모두 이것이다. `firefox-esr`를 직접 치면 이 우회가 안 된다.
 - **ALSA 출력 바꾸기(`~/.asoundrc`):** 이미 떠 있는 프로그램은 설정을 다시 읽지 않는다. 다시 띄워야 한다(11.89). BT 스피커는 bt 기능의 bluez-alsa로 쓴다(README).
+- **DVS 시각(11.99):** 링의 이벤트 시각은 32비트 표시 시계다. 64비트로 되돌릴 때 기준은 `S.newest`(표시 시계)를 쓴다. `now_us()`(단조 시계)와는 2^31 µs 넘게 다를 수 있다.
 - **`pgrep -f 'ov5647-cap.py --live'`:** ssh로 보낸 명령 줄 자신도 잡는다. live PID는 `systemctl show -p MainPID --value dvslive`로 얻는다.
 
 ## 로그와 백업 위치 (Mac)

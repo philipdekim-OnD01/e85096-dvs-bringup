@@ -8,9 +8,9 @@ E850-96 보드(보드1~4 어느 것이든)에 기본 이미지에 없는 기능�
 | `ethernet` | LAN9514 유선랜(`smsc95xx.ko`), 이름 `eth0`, MAC는 machine-id로 고정, DHCP | usbhost | USB 호스트가 켜지면 자동 |
 | `audio` | ABOX DSP + AUD3004X 코덱 사운드 카드, 3.5 mm 헤드폰 출력, ALSA 기본 장치(plug → 48 kHz, 한 번에 한 프로그램) | | `e850-audio.service` |
 | `video` | MFC 하드웨어 코덱(V4L2 `/dev/video6` 디코더, `/dev/video7` 인코더). 부팅 경합을 고친 `exynos_mfc`(다음 부팅부터) | | `e850-mfc.service` |
-| `bt` | Bluetooth: `scsc_bt` → `e850-btbridge.py` → `/dev/vhci` → BlueZ `hci0`. BT 스피커 출력(bluez-alsa, A2DP) | Wi-Fi(e850-wifi) | `e850-bt.service`, `bluealsa.service`(`bluealsa-aplay`는 끔, 11.92) |
+| `bt` | Bluetooth: `scsc_bt` → `e850-btbridge.py` → `/dev/vhci` → BlueZ `hci0`. BT 스피커 출력(bluez-alsa, A2DP, SBC XQ, ALSA 변환기 speex: 11.98) | Wi-Fi(e850-wifi) | `e850-bt.service`, `bluealsa.service`(`bluealsa-aplay`는 끔, 11.92) |
 | `desktop` | X(fbdev) + Openbox + 패널(lxpanel: 메뉴, 작업 표시줄, 시계) + 파일 관리자(pcmanfm) + 터미널 + Firefox + mpv + 한글 입력(fcitx5-hangul), HDMI tty7. `e850-desktop start\|stop` | usbhost | 켜지 않음(무겁다) |
-| `dvs` | DVS(CN4의 S5KRC1S): 모듈(`fimc-is`, `is-cis-s5krc1s`, `csis-irqstat`), 디코더 `libdvsview.so`, X 터미널에서 `dvs` → "DVS" 창에 이벤트 영상 + 설정 페이지 :8080. 센서가 없으면 데모 녹화를 되풀이한다(11.97) | X(desktop) | `dvslive.service`는 설치만(HDMI로 보려면 `systemctl enable --now dvslive`) |
+| `dvs` | DVS(CN4의 S5KRC1S): 모듈(`fimc-is`, `is-cis-s5krc1s`, `csis-irqstat`), 디코더 `libdvsview.so`, X 터미널에서 `dvs` → "DVS" 창에 이벤트 영상 + 설정 페이지 :8080. 센서가 없으면 데모 녹화를 되풀이한다(11.97). 옆에 C 설정 패널 `dvspanel`(웹 설정창과 같은 내용, 11.99), 데스크톱이 뜰 때 센서가 있으면 저절로 뜬다(11.98), 얼굴 가로 길이 표시(YuNet, 11.99) | X(desktop) | `dvslive.service`는 설치만(HDMI로 보려면 `systemctl enable --now dvslive`) |
 
 `desktop`만 빼고 설치하면 X 없이 가벼운 보드가 된다. X가 필요할 때만 `desktop`을 더 설치한다.
 
@@ -72,5 +72,5 @@ e850-usbhost on              # 키보드/마우스/유선랜 (재부팅하면 �
 - **Wi-Fi·BT 설정(11.90):** desktop 기능이 `wpagui`와 `blueman`을 넣고, 세션이 트레이에 아이콘을 띄운다. wpa_gui가 일반 사용자로 Wi-Fi를 다루려면 두 가지가 더 필요하다. 사용자를 `netdev`·`bluetooth` 그룹에 넣고(`usermod -aG netdev,bluetooth 사용자`), `wpa_supplicant-wlan0.conf`에 `ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev`와 `update_config=1`을 넣은 뒤 `wpa_supplicant@wlan0`를 재시작한다. Wi-Fi가 잠깐 끊기니 ssh로 할 때는 되돌리기 장치를 걸고 한다(11.90). Wi-Fi 드라이버는 `/proc/net/wireless`에 신호를 주지 않아 lxpanel `netstatus`는 쓰지 않는다.
 - **desktop 세션(11.89):** `session.sh`가 세션마다 따로 D-Bus를 띄운다(`dbus-run-session`). fcitx5는 버스마다 하나만 돌기 때문이다. 한/영은 Ctrl+Space, 한/영 키, 오른쪽 Alt다. GPU X(:1, `modules/e850-kms/x-kms.sh`)도 같은 세션을 GPU Mesa 환경으로 띄운다. `/usr/local/bin/firefox`는 :1에서 별도 프로필(`~/.config/mozilla/firefox/gpu`)을 쓴다. 같은 기본 프로필이 :0에 열려 있으면 새 창이 :0에 생기기 때문이다.
 - **dmix 없음:** 이 커널에는 SysV IPC가 없어 ALSA dmix가 안 된다. 44.1 kHz를 그대로 내보내면 약 15% 빨라서 `asound.conf`가 48 kHz로 바꾼다.
-- **dvs(11.97):** `dvs`는 X 터미널에서 실행한다(sudo 비밀번호를 묻는다). 실행하는 동안 `dvslive.service`를 멈추고 끝나면 되살린다. 창은 메모리에 그린 960×720 페이지를 XPutImage로 올린다(SysV IPC가 없어 MIT-SHM 없음). fb0 주소 배너는 X에서 끈다(X도 fb0를 쓴다). 창을 닫거나 q, Esc, Ctrl+C로 끝낸다. 설정 페이지에서 센서 값을 바꾸면 프로세스가 끝나므로 `dvs`를 다시 실행한다. 센서가 없을 때 `fimc-is`를 한 번 올리는데, 이 모듈은 재부팅 전까지 내리지 않는다. 데모 녹화는 번들에 `out/dvs-demo.gz`가 있을 때만 들어간다(git 밖, `dvs_record()` 형식, 7초 stand_up).
+- **dvs(11.97):** `dvs`는 X 터미널에서 실행한다(sudo 비밀번호를 묻는다). 실행하는 동안 `dvslive.service`를 멈추고 끝나면 되살린다. 창은 메모리에 그린 960×720 페이지를 XPutImage로 올린다(SysV IPC가 없어 MIT-SHM 없음). fb0 주소 배너는 X에서 끈다(X도 fb0를 쓴다). 창을 닫거나 q, Esc, Ctrl+C로 끝낸다. 설정 페이지에서 센서 값을 바꾸면 캡처가 끝나고 `dvs`가 2초 뒤 다시 띄운다(11.98). 센서가 없을 때 `fimc-is`를 한 번 올리는데, 이 모듈은 재부팅 전까지 내리지 않는다. 데모 녹화는 번들에 `out/dvs-demo.gz`가 있을 때만 들어간다(git 밖, `dvs_record()` 형식, 7초 stand_up).
 - **desktop:** X는 CPU로 그린다. GPU는 `tools/gpu/`(Mesa panfrost on kbase, 11.82)로 화면 밖 렌더링만 되고, X에 붙이려면 KMS 장치와 dma-buf 공유가 더 필요하다. 그래서 영상은 480p 정도가 현실적이다(11.80의 측정 참고).

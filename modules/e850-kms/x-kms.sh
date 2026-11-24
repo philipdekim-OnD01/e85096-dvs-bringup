@@ -41,4 +41,9 @@ S=/opt/e850-features/desktop/session.sh
 runuser -u $U -- env -i DISPLAY=:1 HOME=/home/$U USER=$U LOGNAME=$U SHELL=$(getent passwd $U | cut -d: -f7) \
     LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin:/bin LD_LIBRARY_PATH=$L LIBGL_DRIVERS_PATH=$L/dri \
     LD_PRELOAD=$L/libpanfrost_kbase_drm_shim.so setsid sh $S >/dev/null 2>&1 </dev/null &
+# the DVS on CN4 (e850-feature dvs, 11.98): its window and settings panel open by themselves when the sensor answers
+if [ -x /usr/local/bin/dvs ]; then
+    systemctl stop e850-dvs 2>/dev/null || true     # one from an X server before this one
+    systemd-run --unit=e850-dvs --collect -E DISPLAY=:1 /usr/local/bin/dvs --auto >/dev/null 2>&1 || true
+fi
 echo "Xorg :1 on vt8 (Ctrl+Alt+F1: text console, F7: the fbdev desktop if it runs; e850-x stop)"
