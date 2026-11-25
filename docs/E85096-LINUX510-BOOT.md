@@ -6970,3 +6970,52 @@ BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. �
   - 두 대 합쳐 약 37 MB/s를 같은 USB 2.0 허브로 받는다. 오류 없이 돌았다.
   - Jetson 화면 캡처(`ximagesrc`)로 두 영상이 나오는 것을 확인했다. fps는 재지 않았다.
 - 끄기: `systemctl --user stop usbcam`.
+
+**카메라 한 대, 아이콘(바꾼 것):** 사용자 "카메라 하나만 뺏어, 다시 나오게 해, 아이콘도 바탕화면에 만들어 주고".
+- 흐린 쪽(1-2.3)을 뺐다. 남은 카메라는 `/dev/video3`(1-2.2)이다. 카메라를 빼면 그때 떠 있던 `usbcam` 유닛이 실패로 끝났다(관찰).
+- `tools/jetson/usbcam`: USB 카메라를 스스로 찾는다(`vi-output` = DVS는 뺌, index 0만). 한 대면 그대로, 두 대면 나란히 띄운다. 없으면 `notify-send`로 알리고, 이미 떠 있으면 flock으로 알린다.
+- `tools/jetson/usbcam.desktop`("USB 카메라", `accessories-camera`)도 만들었다. `deploy.sh`가 두 .desktop을 같은 방식(755 + trusted)으로 넣는다.
+- 확인(관찰): `gst-launch-1.0 … v4l2src device=/dev/video3 … xvimagesink`가 떴다. Jetson 화면 캡처에 영상이 나오고, 바탕화면 오른쪽 위에 "USB camera" 아이콘이 보였다. 사용자도 "잘 나와"라고 했다.
+
+### 11.114 보드6: USB 카메라 아이콘, 현미경·DVS·USB 카메라는 연결됐을 때만 (2026-11-26)
+
+사용자는 다음을 요청했다.
+- "850에도 같은 카메라를 연결했어 나오게 해"(보드6)
+- "현미경이 연결될때만 작동하게해야지, DVS, USB camera도 마찬가지야, 연결될때만 작동하게해"
+- "850에서 카메라 잘 나온다, 이것도 아이콘 바탕화면에 올려줘"
+
+**현미경 뷰어가 다른 카메라를 잡던 것(관찰 → 고침):**
+- 보드6에는 현미경이 없다. 그런데 꽂은 Generic HD camera(1903:8328, 2-1.3, `/dev/video0`)를 `e850-scope`가 바로 잡았다. `v4l2-ctl -d /dev/video0 … --stream-to=-`가 돌았다.
+- 원인: `scope.py`는 USB 쪽 `/dev/video*` 가운데 첫 번째를 현미경으로 본다. 그래서 그 카메라에 SOL 펌웨어 vendor 요청(`sol.diag`, 0xC0 0xD0)도 보낸다.
+- 고침: `usb_id()`가 `04b4:00c3`(EEPROM으로 부팅한 SOL 키트, 11.74)인 장치만 받는다.
+- 보드6에 넣고 `GET /reload`로 `scope.py`만 다시 띄웠다. 서비스를 재시작하면 `scope-run.sh`가 USB 호스트를 내렸다 올리기 때문이다. 그 뒤로 `v4l2-ctl`이 뜨지 않았다(관찰).
+- **보드4(현미경 있는 보드)에는 아직 넣지 않았다.** 거기서는 현미경만 꽂혀 있어 지금 동작이 같다.
+
+**USB 카메라 화면:**
+- `e850-open cam`은 현미경이 아닌 USB 카메라(index 0)를 찾아 `mpv --vo=gpu --profile=low-latency --untimed --title="USB 카메라" av://v4l2:/dev/videoN`으로 띄운다.
+- `--vo=xv`(GLAMOR Xv)는 `BadShmSeg`로 실패했다. Xv·x11 출력은 MIT-SHM을 쓰는데 이 커널에는 SysV IPC가 없기 때문이다(11.97과 같은 원인). `--vo=gpu`는 세션의 GPU shim(`LD_PRELOAD`)으로 돈다.
+- 형식은 장치의 현재 값(640×480 YUYV 30 fps)을 그대로 쓴다.
+- mpv는 한 순간 `top`에서 20%였다(한 번 잰 값).
+
+**바탕화면 아이콘(`features/desktop`):**
+- `e850-cam.desktop`("USB 카메라", `camera-web`)을 더했다. desktop 기능이 늘 넣는다.
+- 보드6 `~/Desktop`에 넣었다. pcmanfm은 위치가 없는 새 아이콘을 DVS 창 뒤(왼쪽 위)에 놓았다. 그래서 사용자 설정에 `x=224 y=860`을 넣고, 세션 환경 그대로 `pcmanfm --desktop`을 다시 띄웠다. DVS, 현미경, USB 카메라 아이콘이 한 줄로 보였다(화면 캡처).
+- `e850-open`은 장치가 있을 때만 연다.
+  - scope: USB에 `04b4:00c3`이 없으면 띄우지 않는다.
+  - cam: 현미경이 아닌 UVC 카메라가 없으면 띄우지 않는다.
+  - 장치가 없으면 `e850-say`(python3-gi GTK 안내 창)로 "…연결되어 있지 않습니다"를 보인다. zenity는 webkit까지 끌어와서 쓰지 않았다.
+- 확인(관찰, 보드6):
+  - cam 아이콘 경로로 창이 떴다. 두 번째 실행은 새 mpv를 띄우지 않고 그 창을 앞으로 가져왔다(mpv 1개).
+  - scope는 한글 안내 창을 띄웠다(화면 캡처).
+
+**DVS도 센서가 있을 때만:**
+- `dvslive.sh`는 이제 늘 `--need-sensor`로 실행한다. 센서가 없으면 종료 코드 3으로 끝나고, 데모 녹화(11.97)는 더 이상 틀지 않는다.
+- `dvslive.service`에 `RestartPreventExitStatus=3`을 넣었다. 센서가 없으면 3초마다 다시 시작하지 않는다.
+- `dvs`(아이콘·터미널)는 센서가 없으면 `e850-say`로 "DVS 센서가 연결되어 있지 않습니다 (CN4)"를 보인다. `--auto`(데스크톱 시작)일 때는 로그에만 남긴다.
+- 보드6에 넣었다(`/usr/local/bin/dvs`, `dvslive.sh`, `dvslive.service` + daemon-reload). 돌던 DVS(`e850-dvs`)는 그대로 두었다.
+- **센서 없는 경로는 시험하지 않았다.** 보드6에는 센서가 있다. 보드4(센서 없음)에는 아직 넣지 않았다.
+
+**CPU7(질문에 답한 것, 관찰):**
+- 5초 동안 잰 보드6 코어 사용률은 CPU0 36, CPU1 38, CPU2 30, CPU3 32, CPU4 71, CPU5 52, CPU6 27, **CPU7 1%**였다. DVS + 분류 + 얼굴 + USB 카메라가 돌고 있었다.
+- CPU7은 11.30에서 사용자가 요청해 웹 전용으로 비워 둔 코어다("웹 서비스를 위해 하나 할당해서 더 빠른 서비스를 제공해"). DVS 설정 페이지 스레드 `dvs-web`과 Wi-Fi IRQ(`scsc_wlbt`, 11.69)가 여기서 돈다. systemd 유닛은 CPU0~6만 쓴다(`e850-cpu7.conf`).
+- 측정할 때 페이지를 연 브라우저가 없어서 1%였다.

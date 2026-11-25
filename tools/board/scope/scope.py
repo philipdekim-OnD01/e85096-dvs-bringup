@@ -103,6 +103,15 @@ def png(gray):
 
 
 # ---------------------------------------------------------------- firmware vendor requests over usbfs
+def usb_id(video):
+    """'vid:pid' of the USB device behind /sys/class/video4linux/videoN, None off USB."""
+    d = os.path.dirname(os.path.realpath(video + "/device"))      # .../2-1.3:1.0 -> .../2-1.3
+    try:
+        return ":".join(open(os.path.join(d, f)).read().strip() for f in ("idVendor", "idProduct"))
+    except OSError:
+        return None
+
+
 class Sol:
     def __init__(self):
         self.path = None
@@ -237,8 +246,9 @@ class Cam:
             while self.pause.is_set():          # a high-resolution still has the camera (grab_still)
                 self.paused.set()
                 time.sleep(0.05)
+            # the SOL kit only (04b4:00c3): another USB camera on the board is not the microscope (11.114)
             dev = next((("/dev/" + os.path.basename(v)) for v in sorted(glob.glob("/sys/class/video4linux/video*"))
-                        if "/usb" in os.path.realpath(v + "/device")), None)
+                        if usb_id(v) == "04b4:00c3"), None)
             if not dev:
                 self.dev, self.still, self.msg = None, None, "현미경을 기다리는 중 · micro-USB 케이블을 빼야 USB 허브가 붙습니다"
                 time.sleep(1)

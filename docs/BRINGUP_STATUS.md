@@ -2,6 +2,15 @@
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다.
 
+**2026-11-26(11.113~11.114):** USB 카메라, "연결됐을 때만".
+- Jetson: 카메라 한 대로 바꿨고, `tools/jetson/usbcam`과 "USB 카메라" 아이콘을 넣었다.
+- 보드6:
+  - 같은 카메라(1903:8328)를 바탕화면 "USB 카메라" 아이콘(`e850-open cam`, mpv `--vo=gpu`)으로 띄운다. 사용자가 확인했다.
+  - 현미경 뷰어 `scope.py`가 아무 USB 카메라나 현미경으로 잡던 것을 고쳤다. 이제 `04b4:00c3`만 받는다.
+  - `e850-open`은 장치가 없으면 안내 창(`e850-say`)을 띄우고 끝난다.
+  - DVS는 센서가 없으면 데모 녹화를 틀지 않고 끝난다(`--need-sensor`, `RestartPreventExitStatus=3`).
+- 보드4에는 아직 넣지 않았다(현미경·DVS 고친 판). 센서 없는 DVS 경로도 시험하지 않았다.
+
 **2026-11-26(11.112):** 보드6 DVS의 Python 캡처 루프, 행동 분류, 얼굴 검출을 C로 옮겼다.
 - 캡처 루프는 `dvsview.c`의 `dvs_capture()`, 분류와 얼굴은 새 파일 `dvsai.c`다. onnxruntime C API를 휠의 so에서 dlopen하고, `-DDVS_AI`로 빌드한다(bundle.sh가 NuGet에서 헤더를 받는다).
 - 보드6에서 30초 측정: 합계 152.7 → 143.1%(코어의 약 10% 감소). 주 스레드 29.9 → 24.9%, `dvs-act` 54 → 52%, `dvs-bin` 23 → 21%, `dvs-face` 41 → 40%. 손실은 0이다.
@@ -58,7 +67,7 @@
 바로 할 일:
 1. **MFC 두 번째 경합을 고친다.** 굽고 난 보드4 첫 부팅이 `mfc_open` → `mfc_alloc_firmware` → `iommu_map_sg` NULL로 패닉했다(trace는 `~/e850-logs/board4-last_kmsg-20261124-b.txt`). 부팅 중 가끔 멈추는 원인이다.
 2. 보드4에서 BT 기기를 다시 페어링하고, DVS 센서를 단다(사용자).
-3. DVS GPU 화면을 눈으로 확인한다(tearing, 전체 화면 f). 센서 없는 demo 재생에서도 본다.
+3. DVS GPU 화면을 눈으로 확인한다(tearing, 전체 화면 f). 센서 없는 demo 재생은 11.114부터 하지 않는다.
 4. 11.100의 남은 일: Wi-Fi 드라이버 근본 수정, 보드3·5 감시, 1 m 얼굴.
 
 git push는 사용자 확인 뒤에 한다. 경과와 측정 결과는 [E85096-LINUX510-BOOT.md](E85096-LINUX510-BOOT.md) 11장에, 대화 요약은 [SESSION-LOG-20261101-02.md](SESSION-LOG-20261101-02.md)에 있다.
@@ -82,7 +91,7 @@ git push는 사용자 확인 뒤에 한다. 경과와 측정 결과는 [E85096-L
 | 골라서 넣는 기능(`features/`) | **2026-11-21(11.76~11.81).** **11.80: desktop 패키지가 `libpam-systemd`를 들이면 로그인마다 `user@UID.service`가 cpu 컨트롤러를 위임받아 cpu cgroup이 9개를 넘고, vendor `ems.ko`(9칸 배열을 `css->id - 1`로 씀)가 커널 패닉을 낸다(보드3에서 X 시작 때, 그 뒤 부팅마다). 수정: 부트 명령줄 `cgroup_disable=cpu`(`build-bootimg.sh`, 지금 이미지에 바로 쓸 판 `~/e850-logs/boot-nocpu/boot.img`), desktop 기능이 apt 전에 `user@.service.d/e850-no-cpu-delegate.conf`. drop-in은 Debian 12 컨테이너에서 cpu css 13 → 1 확인, 보드에서는 아직. 보드3은 `fastboot boot`(이 LK에서 안 됨, 7.3) 시도로 LK가 멈춰 전원 재투입 대기. 보드4 사고도 이것으로 추정(미확인).** 보드에서 `e850-feature install 이름…`. Mac에서 `features/host/bundle.sh` → `deploy.sh`. 유선랜(`smsc95xx`, eth0 MAC 고정, 케이블 없어 링크 미확인), 오디오(패치한 `exynos3830_sound`, 헤드폰 경로, 재생 속도 확인, 귀로 미확인, dmix 불가: SysV IPC 없음), MFC(`/dev/video6`·`7`, 디코딩 미시험), BT(`scsc_bt` → `/dev/vhci` 브리지, hci0·스캔 확인), USB 호스트(`e850-usbhost on`), X(`desktop`, 따로). **BT를 켠 채 WLBT 패닉이 나면 Wi-Fi 복구가 실패하던 vendor 경합을 `modules/scsc-wlan-recovery`로 고쳤다(보드3에서 8.1초 복구 확인). bt 설치가 함께 넣고 다음 부팅부터 쓰인다.** 보드3: ethernet·audio·video·bt 설치, 재부팅 후 모두 정상. **11.81(보드3, boot-nocpu):** 패닉 0회, cpu 컨트롤러 없음, 로그인 세션이 있어도 정상. **vendor `exynos_mfc`가 udev `v4l_id`와 부팅 경합으로 패닉하던 것을 `modules/exynos-mfc`로 고쳤다(부팅 세 번 중 두 번 경합 발생, 고친 판은 견딤). video 기능이 넣는다.** MFC는 MMAP 버퍼를 받지 않아 ffmpeg v4l2m2m 디코딩은 안 된다. X가 뜨지 않던 원인은 desktop 기능에 `kbd`(chvt)·`xserver-xorg-legacy`가 빠진 것과 스크립트 실행 비트(644)였다(고침, 2b5a74e). **보드3에서 X+Openbox+Firefox가 HDMI에 뜬다. X 안 YouTube: 480p 29.9 fps 드롭 1%(CPU 31%), 720p60 55.9 fps 드롭 8%(55%).** headless Firefox YouTube: 480p 30 fps 드롭 0(CPU 35%), 720p60 61 fps 드롭 0.5%(46%). **보드4: desktop 설치 직후 Wi-Fi에서 사라졌고, 전원 재투입 후에도 무선이 안 된다(2026-11-21 08:20). 11.80의 패닉 또는 MFC 경합으로 추정, micro-USB로 boot-nocpu를 굽고 `last_kmsg`로 확인해야 한다.** **11.89(보드3): desktop에 패널(lxpanel 메뉴·작업 표시줄)·파일 관리자(pcmanfm)·한글 입력(fcitx5-hangul, Ctrl+Space/오른쪽 Alt), 세션마다 D-Bus. GPU X(:1)도 같은 세션을 GPU Mesa 환경으로 띄우고, `/usr/local/bin/firefox`가 :1에서 별도 프로필을 쓴다. bt에 bluez-alsa(A2DP, `PrivateUsers=no` 필요: USER_NS 없음). JBL Flip 6 페어링·연결(`pairable on` 필요), `aplay` 실제 속도, 귀로는 사용자 확인 대기. 한 번에 한 프로그램.** **11.90(보드3): 부팅하면 HDMI root 프롬프트 + USB 키보드(usbhost 부팅 때 켬, ACM 없음), dvslive 끔, `e850-x`가 MIF·INT를 최대로 고정하고 GPU 데스크톱을 띄운다(11.82~11.89 측정은 dvslive가 건 이 고정 상태였다). `e850-x`가 GPU도 1001 MHz로 고정(`e850-x stop`이 풂). zram 1.8 GB(lz4). root 콘솔에서 띄우면 메뉴가 비던 것(root `XDG_RUNTIME_DIR`가 넘어감)을 `x-kms.sh`의 `env -i`로 고침. 한글 입력 xdotool 확인. Wi-Fi(wpa_gui, 트레이 신호 아이콘)·BT(blueman) 설정, 음량 아이콘(BT 스피커 믹서). 재부팅 확인 전.** **11.91: 보드3 데스크톱 이미지 `~/e850-logs/clone-20261123/`(boot-nocpu + 8 GiB rootfs 8조각, 절차 BOARD-CLONE.md 11장). 11.92: 보드5(192.168.0.206)에 구워 부팅, 파일 37,094개 md5 일치. `features/usbhost`가 `systemd-networkd-wait-online --any` drop-in을 넣는다(usb0 DOWN이라 2분 대기 뒤 degraded였음). `features/bt`가 쓰지 않는 `bluealsa-aplay`를 끈다. 보드5 HDMI·`e850-x`·BT 재페어링 확인 전. 11.93: 보드6(192.168.0.208)에 같은 이미지 + 현미경 뷰어(`e850-scope`, OpenCV, 호스트 모드는 scope가 맡음) + Cloudflare 임시 터널. 16M 모듈 3.36 fps, 외부 링크 200.** | 11.76~11.81, 11.89~11.91 |
 | 강의 자료(2026-11-23, 11.95) | 16:9 편집 가능 HTML 두 개. `docs/E850-BRINGUP-LECTURE-20261123.html`(26장: 부팅 구조, 드라이버 올린 순서 18단계, X, 최적화, GPU, 복제, 함정)과 `docs/SCOPE-LAB-LECTURE-20261123.html`(21장: 키트 펌웨어, 모듈 3종, USB 호스트, 웹 뷰어, 분석·실험, 고해상도 사진, MIPI 직결). PDF와 함께 메일로 보냈다. 현미경 자료의 시료 사진(08:54) 확대 두 장은 샘플 이미지라 공개해도 된다고 사용자가 확인했다 | 11.95 |
 | BT 검색 고착(2026-11-23, 11.96) | 보드6에서 blueman이 아무것도 못 찾았다. 커널 검색 상태가 STOPPING에 갇혀 있었다(Stop Rejected, Start Busy). 정지 요청의 HCI 명령이 오류로 끝나면 생긴다(커널 소스, 결함 주입으로 재현). `e850-btbridge.py`에 감시 스레드를 넣었다: 검색 중인데 검색 명령이 30초 없으면 가짜 Remote Name Request Complete → 그래도면 어댑터 껐다 켬. **보드에서 감시 동작은 아직 확인 못 함.** **11.100: 보드6 밤샘 끊김의 원인을 찾았다.** 연결된 채 같은 AP로 다시 연결하면(`slsi_connect vifStatus=2`, `wpa_cli reassociate`로 재현 3번) 드라이버 송신 큐가 프레임을 거부해(`no fcq`) DHCP를 못 받는다. 감시 `e850-wifiwatch`(보드6만)가 disconnect+reconnect로 되살린다(1번 시험, 36초). 새 브리지는 2026-11-24 01:01 `e850-bt` 재시작으로 쓰이기 시작했다(JBL 30초 뒤 다시 붙음) | 11.96, 11.98, 11.100 |
-| `dvs` 기능(2026-11-23, 11.97) | `features/dvs`: X 터미널에서 `dvs` → "DVS" 창(960×720, XPutImage) + 웹 :8080. 센서가 없으면 데모 녹화(stand_up 7초)를 되풀이한다(`dvs_replay`). Mac Docker(Xvfb)에서 창과 웹 모두 사람 모양을 확인했다. 보드6에 설치해 확인했다(11.98) | 11.97 |
+| `dvs` 기능(2026-11-23, 11.97) | `features/dvs`: X 터미널에서 `dvs` → "DVS" 창(960×720, XPutImage) + 웹 :8080. 센서가 없으면 데모 녹화(stand_up 7초)를 되풀이했다(`dvs_replay`). 11.114부터는 센서가 없으면 "연결되어 있지 않습니다"를 보이고 끝난다. Mac Docker(Xvfb)에서 창과 웹 모두 사람 모양을 확인했다. 보드6에 설치해 확인했다(11.98) | 11.97 |
 | 보드6 DVS 데스크톱(2026-11-24, 11.98) | 보드6 CN4에 DVS가 있다(현미경은 사용자가 뗐다, `e850-scope`는 그대로 기다림). `dvs`는 캡처가 끝나면 다시 띄운다(130 = 사용자 종료, 3 = 센서 없음, 바로 실패 3번이면 포기). `x-kms.sh`가 데스크톱 시작 때 `dvs --auto`를 `e850-dvs` 유닛으로 띄운다. C 설정 패널 `dvspanel`(GTK 3)이 DVS 창 오른쪽에 뜬다. BT: SBC XQ(452 kbps), ALSA 변환기를 speex로. **귀로 나아졌는지는 미확인** | 11.98 |
 | DVS 패널·어두운 프레임·얼굴(2026-11-24, 11.99) | 패널을 웹 설정창과 같은 내용으로(통계, 행동, 그래프, 녹화, 레지스터 읽기. 레지스터 이름은 비공개 자료라 뺌). 빠른 동작 때 프레임 최대 65%가 비던 것: 잡음 필터를 켜면 지연이 필터 시간을 빼고 계산됐다. 지연을 필터 스레드에서 재고 프레임을 필터가 넘긴 데까지로 해서 고쳤다(13.8만 이벤트/프레임에서 0장/2초, GPU 아님). 얼굴: YuNet CNN(입력 크기를 풀어 134 ms/회), DVS 창에 노란 상자와 `W n cm`(px × 17/960 × 19/3, 1 m 기준). **보드에서 얼굴 검출은 아직 0건(얼굴이 화면 밖이었음)** | 11.99 |
 | HDMI 콘솔 색 | 흰 글씨. dpu.ko 패치로 근본 수정했다(`e850-fbpal`과 rebind는 쓰지 않음). 전원을 껐다 켠 뒤에도 사용자가 화면에서 확인했다 | 11.14~11.16 |

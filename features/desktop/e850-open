@@ -1,16 +1,32 @@
 #!/bin/sh
-# e850-open dvs|scope: what the desktop icons run (e850-feature desktop, docs 11.107). A window already open comes to
-# the front. Else dvs starts e850-dvs-desk.service: root, and the polkit rule lets the desktop user start it, so no
-# password (the sensor's view, or the demo recording without one); scope opens the microscope viewer (:8090,
-# e850-scope.service) as an app window.
+# e850-open dvs|scope|cam: what the desktop icons run (e850-feature desktop, docs 11.107, 11.114). A window already open
+# comes to the front. Each runs only with its device connected, else says so (e850-say):
+#   dvs    e850-dvs-desk.service: root, and the polkit rule lets the desktop user start it, so no password; `dvs` itself
+#          finds out whether the DVS answers on CN4 (it says so without, no demo recording any more)
+#   scope  the microscope viewer (:8090, e850-scope.service) as an app window, with the SOL kit (04b4:00c3) on USB
+#   cam    another USB (UVC) camera in mpv (the GPU output: Xv and the x11 output need MIT-SHM, which this kernel lacks)
 case ${1:-} in
 dvs) T='^DVS$' ;;
 scope) T='^SOL Microscope' ;;
-*) echo "usage: e850-open dvs|scope" >&2; exit 2 ;;
+cam) T='^USB 카메라$' ;;
+*) echo "usage: e850-open dvs|scope|cam" >&2; exit 2 ;;
 esac
 xdotool search --name "$T" windowactivate 2>/dev/null && exit 0
+SCOPE=04b4:00c3
+usb_id() { [ -f "$1/idVendor" ] && echo "$(cat "$1/idVendor"):$(cat "$1/idProduct")"; }
 U=http://127.0.0.1:8090/
 case $1 in
 dvs) systemctl -q is-active e850-dvs || exec systemctl start e850-dvs-desk.service ;;   # e850-dvs: the desktop start's
-scope) command -v google-chrome >/dev/null && exec google-chrome --app=$U; exec firefox $U ;;
+scope)
+    for d in /sys/bus/usb/devices/*; do [ "$(usb_id "$d")" = $SCOPE ] && break; d=; done
+    [ -n "$d" ] || exec e850-say "현미경" "현미경이 연결되어 있지 않습니다. USB-A 포트에 꽂아 주세요."
+    command -v google-chrome >/dev/null && exec google-chrome --app=$U; exec firefox $U ;;
+cam)
+    for v in /sys/class/video4linux/video*; do       # index 1 is a camera's metadata node; the microscope is scope's
+        u=$(usb_id "$(readlink -f "$v/device/..")")
+        [ -n "$u" ] && [ "$u" != $SCOPE ] && [ "$(cat "$v/index")" = 0 ] && break
+        v=
+    done
+    [ -n "$v" ] || exec e850-say "USB 카메라" "USB 카메라가 연결되어 있지 않습니다. USB-A 포트에 꽂아 주세요."
+    exec mpv --vo=gpu --profile=low-latency --untimed --title="USB 카메라" "av://v4l2:/dev/${v##*/}" ;;
 esac

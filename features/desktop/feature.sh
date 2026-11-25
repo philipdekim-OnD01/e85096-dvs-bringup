@@ -49,14 +49,15 @@ install)
     sed "s/DESKTOP_USER/$DESKTOP_USER/" "$H/e850-udisks.rules" > /etc/polkit-1/rules.d/50-e850-udisks.rules
     install -m 644 "$H/80-e850-hide-emmc.rules" /etc/udev/rules.d/80-e850-hide-emmc.rules
     udevadm control --reload && udevadm trigger --subsystem-match=block --action=change || true
-    # desktop icons (pcmanfm draws the desktop, session.sh) for what this board has: the DVS (e850-feature dvs) and the
-    # microscope viewer (tools/board/scope/install.sh); install desktop again after those (11.107)
+    # desktop icons (pcmanfm draws the desktop, session.sh) for what this board has: the DVS (e850-feature dvs), the
+    # microscope viewer (tools/board/scope/install.sh), a USB camera; install desktop again after those (11.107, 11.114)
     install -m 755 "$H/e850-open" /usr/local/bin/e850-open
+    install -m 755 "$H/e850-say" /usr/local/bin/e850-say
     install -D -m 644 "$H/pcmanfm-desktop.conf" /etc/xdg/pcmanfm/e850/desktop-items-0.conf
     DD=$(getent passwd "$DESKTOP_USER" | cut -d: -f6)/Desktop
     install -d -o "$DESKTOP_USER" -g "$(id -gn "$DESKTOP_USER")" "$DD"
-    for a in dvs scope; do
-        case $a in dvs) [ -x /usr/local/bin/dvs ];; scope) [ -d /opt/e850-scope ];; esac || continue
+    for a in dvs scope cam; do
+        case $a in dvs) [ -x /usr/local/bin/dvs ];; scope) [ -d /opt/e850-scope ];; cam) true;; esac || continue
         install -m 644 "$H/e850-$a.desktop" /usr/local/share/applications/
         install -m 644 -o "$DESKTOP_USER" -g "$(id -gn "$DESKTOP_USER")" "$H/e850-$a.desktop" "$DD/"
     done
@@ -84,7 +85,8 @@ remove)
         /usr/local/share/applications/google-chrome.desktop /usr/local/bin/e850-res \
         /usr/local/share/applications/e850-res.desktop /etc/polkit-1/rules.d/50-e850-udisks.rules \
         /etc/udev/rules.d/80-e850-hide-emmc.rules /usr/local/bin/e850-open /usr/local/share/applications/e850-dvs.desktop \
-        /usr/local/share/applications/e850-scope.desktop /etc/polkit-1/rules.d/50-e850-dvs.rules
+        /usr/local/share/applications/e850-scope.desktop /etc/polkit-1/rules.d/50-e850-dvs.rules \
+        /usr/local/bin/e850-say /usr/local/share/applications/e850-cam.desktop
     rm -rf /etc/xdg/pcmanfm/e850; unit_remove e850-dvs-desk.service   # icons in ~/Desktop stay: the user's
     if [ -e /etc/X11/Xwrapper.config.orig ]; then mv /etc/X11/Xwrapper.config.orig /etc/X11/Xwrapper.config
     else rm -f /etc/X11/Xwrapper.config; fi

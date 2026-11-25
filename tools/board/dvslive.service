@@ -9,6 +9,8 @@ ExecStart=/usr/local/bin/dvslive.sh
 # also after a sensor setting from the page, which ends the process on purpose
 Restart=always
 RestartSec=3
+# 3: no DVS on CN4 (dvslive.sh, 11.114): nothing to restart for
+RestartPreventExitStatus=3
 TimeoutStopSec=20
 
 [Install]

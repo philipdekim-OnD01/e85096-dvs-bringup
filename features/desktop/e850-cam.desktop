@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=USB 카메라
+Name[en]=USB camera
+Comment=USB 카메라 화면 (꽂혀 있을 때만)
+Comment[en]=The USB camera's view (only when one is plugged in)
+Exec=/usr/local/bin/e850-open cam
+Icon=camera-web
+Terminal=false
+Categories=AudioVideo;Video;

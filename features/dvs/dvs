@@ -2,8 +2,8 @@
 # dvs: the DVS (S5KRC1S on CN4) in an X window, the settings panel beside it (dvspanel) and the settings page on :8080
 # (docs 11.97, 11.98). From a terminal in X:
 #   dvs [ov5647-cap.py args]      q, Esc, closing the window or Ctrl+C ends it
-#   dvs --auto                    the same, only if the sensor answers (x-kms.sh runs it when the GPU desktop starts)
-# Without the sensor (and not --auto) it shows the demo recording (/var/lib/dvsview/demo.gz) over and over.
+#   dvs --auto                    the same, quietly (x-kms.sh runs it when the GPU desktop starts)
+# Only with the sensor on CN4 (11.114): without it `dvs` says so in a message box (e850-say), --auto only in its log.
 # Runs dvslive.sh as root (sudo asks for the password); dvslive.service is stopped meanwhile and started again after.
 set -u
 [ -n "${DISPLAY:-}" ] || { echo "dvs: no DISPLAY: run it from a terminal in X" >&2; exit 1; }
@@ -11,9 +11,10 @@ if [ "$(id -u)" != 0 ]; then
     exec sudo env DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}" CTL_PORT="${CTL_PORT:-8080}" \
         /usr/local/bin/dvs "$@"
 fi
+auto=
 if [ "${1:-}" = --auto ]; then
     shift
-    export DVS_AUTO=1
+    auto=1
 else
     systemctl stop e850-dvs 2>/dev/null     # the window of the desktop start: this one takes over
 fi
@@ -40,7 +41,11 @@ while :; do
     DVS_X11=1 DVS_LOG=- /usr/local/bin/dvslive.sh "$@" 9>&-
     st=$?
     [ $st = 130 ] && exit 0
-    [ $st = 3 ] && { echo "dvs: no DVS on CN4"; exit 0; }
+    if [ $st = 3 ]; then
+        echo "dvs: no DVS on CN4"
+        [ -n "$auto" ] || ! command -v e850-say >/dev/null || e850-say DVS "DVS 센서가 연결되어 있지 않습니다 (CN4)." 9>&-
+        exit 0
+    fi
     if [ $st = 0 ]; then fails=0; else fails=$((fails + 1)); fi
     [ $fails -ge 3 ] && { echo "dvs: the capture failed $fails times in a row (exit $st)" >&2; exit $st; }
     echo "dvs: capture ended (exit $st), starting again (q or Esc in the window ends it)"

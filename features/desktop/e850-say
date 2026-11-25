@@ -1,0 +1,15 @@
+#!/usr/bin/python3
+"""e850-say TITLE TEXT: a message box on the desktop ($DISPLAY), for the icons' "not connected" (docs 11.114).
+GTK through python3-gi, which the desktop has: zenity would pull in webkit."""
+import os
+import sys
+
+os.environ.setdefault("NO_AT_BRIDGE", "1")
+import gi  # noqa: E402
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk  # noqa: E402
+
+d = Gtk.MessageDialog(message_type=Gtk.MessageType.INFO, buttons=Gtk.ButtonsType.OK, text=sys.argv[2])
+d.set_title(sys.argv[1])
+d.run()

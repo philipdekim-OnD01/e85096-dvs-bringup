@@ -3,7 +3,8 @@
 # The camera modules are the e850-out builds the boards run (fimc-is with the CSI parameters of 11.24/11.28,
 # is-cis-s5krc1s, csis-irqstat). The decoder (libdvsview.so, dvsview.c) and its scripts come from tools/ (bundle.sh).
 # dvslive.service (the view on HDMI at boot) is installed, not enabled: systemctl enable --now dvslive.
-# Without the sensor, `dvs` shows demo.gz (a dvs_record() file) if the bundle has one (docs 11.97). The GPU desktop
+# Without the sensor `dvs` and dvslive.service end (exit 3, 11.114); demo.gz (a dvs_record() file, 11.97) is only for
+# `ov5647-cap.py --replay` by hand now. The GPU desktop
 # (x-kms.sh) runs `dvs --auto` when it starts: the window and panel open by themselves if the sensor answers (11.98).
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd); . "$ROOT/common.sh"; H=$DEST/dvs
