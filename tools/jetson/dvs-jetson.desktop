@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DVS (E850 decoder)
+Name[ko]=DVS (E850 디코더)
+Comment=Live DVS view, settings panel and page :8080 on the E850 C decoder (docs 11.108)
+Comment[ko]=DVS 실시간 영상, 설정 패널, 페이지 :8080 (E850 C 디코더)
+Exec=/home/philip/dvs-jetson/dvs-jetson
+Icon=camera-web
+Terminal=false
+Categories=AudioVideo;Video;
+StartupNotify=false

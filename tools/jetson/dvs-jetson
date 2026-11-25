@@ -8,7 +8,8 @@ D=$(dirname "$(readlink -f "$0")")
 PORT=${CTL_PORT:-8080}
 [ -n "${DISPLAY:-}" ] || { echo "dvs-jetson: no DISPLAY: run it in the desktop" >&2; exit 1; }
 exec 9> "${XDG_RUNTIME_DIR:-/tmp}/dvs-jetson.lock"
-flock -n 9 || { echo "dvs-jetson: already running (q in its window ends it)" >&2; exit 1; }
+flock -n 9 || { echo "dvs-jetson: already running (q in its window ends it)" >&2
+    notify-send -i camera-web "DVS (E850)" "이미 실행 중입니다. 창에서 q를 누르면 끝납니다." 2>/dev/null; exit 1; }
 # the NRV window would show nothing; its receiver holds /dev/video0 and is stopped before each start below (its
 # own stop, as philip): its system service, until disabled, may come up at boot after this login
 systemctl --user stop nrv-dvs-native.service 2>/dev/null
