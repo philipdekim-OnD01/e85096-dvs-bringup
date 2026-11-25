@@ -6787,3 +6787,70 @@ BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. �
 - `/etc/nginx/sites-available/e850-scope`(+ sites-enabled 링크), `/etc/nginx/e850-scope.htpasswd`.
 - `/etc/systemd/system/e850-scope-tunnel.service`(enabled, 지금 실행 중). 끄려면 `sudo systemctl disable --now e850-scope-tunnel`.
 - 비밀번호를 바꾸려면 nginx-scope.conf 머리말의 명령으로 파일을 다시 만든다. nginx는 요청마다 파일을 읽으므로 reload하지 않아도 된다.
+
+**메일(사용자: "현미경 접속 주소와, 아이디 패스워드를 메일로 보내"):** 주소, 아이디, 비밀번호, 주소가 바뀌었을 때 확인하는 법, 터널 끄는 법을 Mail.app으로 사용자의 연세 주소에 보냈다. 보낸편지함에서 2026-11-26 00:34:12 KST로 확인했다. 보내기 직전에 터널 주소가 그대로이고 접속이 200인 것도 확인했다.
+
+### 11.111 Jetson Orin Nano와 E850의 DVS 처리 성능 비교 (2026-11-26)
+
+사용자: "제슨오린나노 와 850 dvs 데이타 처리 성능 비교테이블 만들어".
+
+**방법:**
+- `tools/linux510/dvsbench.py`(새로 만듦):
+  - `dvs_record()` 파일을 127줄 버퍼로 만든다(`dvs_replay()`와 같다). 그것을 각 보드의 `libdvsview.so`에 최대 속도로 넣고, `dvs_ingest()`만 잰다.
+  - 필터 스레드(`dvs-filter`)의 CPU 시간은 `/proc/self/task/*/schedstat`에서 읽는다. 워드 10만 개마다 필터가 따라잡을 때까지 기다리므로, 필터가 앞으로 건너뛰는 일(FLAG 2M)은 없다.
+  - 이벤트 수는 event group 워드의 두 마스크 popcount로 센다. 두 보드에 같은 값이 쓰인다.
+- 녹화 두 개를 두 보드에서 똑같이 돌렸다:
+  - E850 녹화: 보드6 `20261124T005912Z-none.gz`. 8 s, 5,955만 이벤트, margin 17, flush 50. 원시 111 MB.
+  - Jetson 녹화: `20261125T154001Z-none.gz`. 5 s, 7,745만 이벤트, margin 0, flush 50. 원시 135 MB.
+- 재는 동안 각 보드의 실시간 캡처는 멈췄다. CPU1~3을 같이 쓰기 때문이다.
+  - Jetson: `systemctl --user stop dvs-jetson-now`, 끝난 뒤 `dvs-jetson-now2`로 다시 띄웠다.
+  - 보드6: x-kms.sh가 만든 임시 유닛 `e850-dvs`를 stop했다. 끝난 뒤 같은 `systemd-run --unit=e850-dvs --collect -E DISPLAY=:1 dvs --auto`로 다시 띄웠다. 임시 유닛이라 stop하면 사라지고, 그래서 `systemctl start`는 "not found"였다.
+- 해독 CPU의 클럭: E850 2002 MHz(uclamp). Jetson 1344 MHz(전원 모드 25W의 상한, 하드웨어 최대 1728 MHz).
+- 빌드: 같은 dvsview.c를 `-O2`로. E850은 Debian 12 gcc, Jetson은 Ubuntu 24.04 gcc.
+
+**같은 녹화, 이벤트 하나당 CPU 시간(관찰, ns, 낮을수록 빠름):**
+
+| 측정 | 녹화 | E850 A55 2.0 GHz | Jetson A78AE 1.34 GHz | Jetson/E850 |
+|---|---|---:|---:|---:|
+| 해독(필터 끔) | E850 | 15.21 | 10.18 | 1.49배 |
+| 해독(필터 끔) | Jetson | 14.17 | 9.40 | 1.51배 |
+| 해독(필터 5 ms 켬) | E850 | 24.04 | 10.73 | 2.24배 |
+| 해독(필터 5 ms 켬) | Jetson | 20.46 | 9.84 | 2.08배 |
+| 잡음 필터 | E850 | 60.92 | 16.71 | 3.65배 |
+| 잡음 필터 | Jetson | 59.08 | 15.77 | 3.75배 |
+
+- 코어 하나의 처리량(백만 이벤트/s):
+  - 해독: E850 65.7~70.6, Jetson 98.2~106.4.
+  - 필터: E850 16.4~16.9, Jetson 59.8~63.4.
+- 버퍼(127줄)당 해독: E850 2.93~3.01 ms, Jetson 1.96~1.99 ms.
+- 클럭당으로 환산하면(계산): 해독 약 2.2배, 필터 약 5.5배다.
+
+**실시간(관찰). 센서 설정은 같고(scan 495 µs, flush 50~51 µs), 장면과 센서 개체는 다르다:**
+
+| 항목 | E850 보드6 | Jetson |
+|---|---:|---:|
+| 프레임(33 ms)당 이벤트 | 41.4만 | 51.8만 |
+| MIPI 버퍼 | 65.5/s | 72/s |
+| 버퍼당 해독(`ingest_ms`) | 4.3 ms | 2.0 ms |
+| 최신 이벤트와의 지연 | 30 ms | 23 ms |
+| 캡처·해독 주 스레드 CPU | 99.9% | 16.4% |
+| GPU 뷰 `dvsgl` CPU | 22% | 약 4.5% |
+| 함께 도는 것 | 행동 분류 `dvs-act` 55%, `dvs-bin` 30%, 얼굴 `dvs-face` 40% | 없음 |
+| 시작 뒤 누적 손실 | fe_missed 9, short 3, ts_bad 4 (25.6만 버퍼) | 모두 0 |
+
+**해석:**
+- 같은 코드와 같은 데이터로, Jetson 코어 하나가 해독은 약 1.5배, 필터는 약 3.7배 빠르다. 클럭은 67%밖에 안 된다.
+- 필터가 특히 크게 차이 나는 까닭은 가설로, 화소마다 시각을 두는 표를 무작위로 읽는 일이 캐시와 메모리에 묶이기 때문으로 본다. A78AE는 L2 256K/코어, L3 2 MB/클러스터다. E850의 캐시 크기는 보드에서 읽지 못했다(`lscpu -C`가 비어 있음).
+- E850은 필터를 켜면 해독도 15 → 24 ns(+58%)로 느려진다. Jetson은 +5%다. 가설: 필터 스레드(CPU3)가 같은 클러스터의 캐시와 메모리를 두고 다툰다.
+- 용량(계산): E850은 CPU 필터 한계가 코어 하나로 초당 약 1,650만 이벤트다. 바쁜 장면(움직일 때 초당 3,500만, 11.102)에서는 CPU 필터가 뒤처진다. 보드6 데스크톱은 GPU 뷰가 직접 필터하므로 CPU 필터는 쉰다.
+- 보드6 실시간 주 스레드가 99.9%인 까닭은 분석하지 않았다. 해독 자체는 4.3 ms × 65.5/s ≈ 28%다. 남은 것은 Python 캡처 루프, QUERYBUF, 분류기·얼굴 스레드와의 GIL로 짐작한다(가설).
+- 정리: "Jetson이 디코딩을 못 한다"는 느낌은 하드웨어가 아니라 예전 NRV RAW2 파이프라인 탓이었다. 같은 디코더로는 Jetson이 빠르다.
+- MAXN_SUPER(1728 MHz)로 바꾸면 클럭만으로 약 29% 더 빨라질 것이다(계산, 재지 않음).
+
+**Jetson에서 같이 고친 것:**
+- 페이지의 녹화가 507이었다. `dvsctl.Recorder`의 기본 디렉터리가 정의할 때 값(`/var/tmp/dvsrec`)으로 굳어서, dvs-jetson.py가 바꾼 `REC_DIR`을 보지 않았기 때문이다.
+- `dvsctl.start()`가 호출할 때 `REC_DIR`을 넘기도록 고쳤다. E850은 값이 같아 동작이 그대로다. dvs-jetson.py는 `~/dvsrec`을 만든다. `test_dvsctl` 통과.
+
+**보드에 둔 것:**
+- Jetson: `~/bench/{e850,jetson}.gz`, `~/dvs-jetson/dvsbench.py`, `~/dvsrec/20261125T154001Z-none.{gz,json}`.
+- 보드6: `/var/tmp/bench/`(녹화 둘, dvsbench.py).

@@ -2,6 +2,12 @@
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다.
 
+**2026-11-26(11.111):** Jetson과 E850의 DVS 처리 성능을 같은 녹화 두 개로 비교했다(`tools/linux510/dvsbench.py`).
+- 해독(ns/이벤트): E850 A55 2.0 GHz 14.2~15.2, Jetson A78AE 1.34 GHz 9.4~10.2(1.5배).
+- 잡음 필터: E850 59~61, Jetson 16~17(3.7배).
+- E850은 필터를 켜면 해독도 +58% 느려진다(Jetson +5%).
+- 실시간 누적 손실은 Jetson 0, 보드6은 적게 있다.
+
 **2026-11-26(11.110):** 보드4 현미경 뷰어를 밖에서 볼 수 있다.
 - 경로: Cloudflare 임시 터널(`e850-scope-tunnel.service`, enabled) → nginx `127.0.0.1:8091` Basic 인증(사용자 `scope`, 비밀번호는 보드에만) → :8090.
 - 주소는 터널이 시작할 때마다 바뀐다: `sudo journalctl -u e850-scope-tunnel | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1`.

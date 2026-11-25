@@ -171,6 +171,7 @@ sys.path.insert(0, HERE)
 import dvsctl                                       # noqa: E402  (beside this file, as on the E850)
 dvsctl.SAVED, dvsctl.SENSOR = STATE + '/display.json', STATE + '/sensor.json'
 dvsctl.REC_DIR = os.path.expanduser('~/dvsrec')
+os.makedirs(dvsctl.REC_DIR, exist_ok=True)         # the page's recorder needs it for its free-space check
 dvsctl.CIS = RUN + '/'                              # the page's "now": what this process wrote to the sensor
 dvsctl.I2C_DRIVER = 'nrv_dvs'
 dvsctl.WEB_CPU = 5                                  # 6 cores; dvsview.c keeps decode 1, render 2, filter 3

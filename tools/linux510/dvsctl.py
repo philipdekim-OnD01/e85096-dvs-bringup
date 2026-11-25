@@ -395,7 +395,7 @@ def start(lib, port, banner=True):
     lib.dvs_png.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
     lib.dvs_record.argtypes = [ctypes.c_char_p]
     lib.dvs_surface.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
-    rec = Recorder(lib)
+    rec = Recorder(lib, REC_DIR)            # REC_DIR now: dvs-jetson.py sets its own after the import
     hist, reg_lock = History(), threading.Lock()
     atexit.register(rec.close, False)          # SIGTERM is a KeyboardInterrupt in ov5647-cap.py, then sys.exit
     pngbuf = bytearray(W * H * 3 + H + 65536)   # level-1 deflate of the raw rows can come out a little larger
