@@ -6947,3 +6947,26 @@ BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. �
 - Jetson: `sh tools/jetson/deploy.sh philip@192.168.0.195`로 넣었다. 실행 중인 `dvs-jetson.py`를 SIGTERM하니 런처가 새 판으로 다시 띄웠다(79 MIPI 프레임/s, 오류 0, DRAM 그래프 정상, `/act` off).
 - 보드4와 Mac 복제 이미지(`clone-20261124-b6`)에는 아직 예전 판이 들어 있다.
 
+
+### 11.113 Jetson: 바탕화면 아이콘, USB 카메라 두 대 화면 표시 (2026-11-26)
+
+사용자: "바탕화면에 지금 작동하는거 실행 아이콘 만들어줘, 젯슨", 이어서 "잿슨에 USB 카메라 연결했어 실행시키고 화면에 띄워".
+
+**아이콘(바꾼 것):**
+- `tools/jetson/dvs-jetson.desktop`을 만들었다. "DVS (E850 디코더)", 아이콘 `camera-web`, `~/dvs-jetson/dvs-jetson`을 실행한다.
+- `deploy.sh`가 이것을 `xdg-user-dir DESKTOP`에 755로 넣고 `gio set … metadata::trusted true`를 한다. DING은 실행 가능하고 trusted인 .desktop만 실행한다.
+- 이미 떠 있을 때 누르면 런처가 `notify-send`로 "이미 실행 중"을 알리고 끝난다(flock).
+- NRV의 "DVS 디코더" 아이콘(`DVS-Decoder.desktop`, NRV `launch.sh`)은 그대로 두었다.
+- 확인(관찰): `desktop-file-validate` 통과, trusted true. 화면 캡처에서는 창에 가려 아이콘이 보이지 않았다.
+
+**NRV 수신 서비스(정리):**
+- `nrv-dvs-streamer.service`(User=philip, 부팅 때 `run.py start --no-web --settings …Delta_10_2000FPS_RAW2.txt`)는 협력 측의 예전 경로다. 부팅에서 dvs-jetson이 멈출 때까지 31분 동안 CPU 20분 43초를 썼다(약 0.67 코어, 계산).
+- 사용자와 정리해서 끄지 않고 둔다. dvs-jetson이 시작할 때 멈춘다.
+
+**USB 카메라(관찰):**
+- 처음에는 커널에 USB 장치가 들어온 기록이 없었다. USB-C 포트는 `usb2-0-role-switch: device`라서 카메라를 받지 않는다. USB-A에 꽂아 달라고 했다.
+- 꽂힌 뒤: Generic HD camera(1903:8328) 두 대가 USB 2.0 허브의 1-2.3(`/dev/video1`)과 1-2.2(`/dev/video3`)에 잡혔다. 형식은 YUY2 640×480 30/5 fps와 320×240뿐이다(MJPEG 없음).
+- 표시: `systemd-run --user --unit=usbcam -E DISPLAY=:0 -E XAUTHORITY=/run/user/1000/gdm/Xauthority gst-launch-1.0 -e compositor … xvimagesink`. 두 영상을 1280×480 한 창에 나란히 놓았다.
+  - 두 대 합쳐 약 37 MB/s를 같은 USB 2.0 허브로 받는다. 오류 없이 돌았다.
+  - Jetson 화면 캡처(`ximagesrc`)로 두 영상이 나오는 것을 확인했다. fps는 재지 않았다.
+- 끄기: `systemctl --user stop usbcam`.
