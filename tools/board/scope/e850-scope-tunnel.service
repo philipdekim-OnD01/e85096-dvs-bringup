@@ -1,0 +1,17 @@
+# The microscope viewer from outside (docs 11.110): a Cloudflare quick tunnel (no account; a new
+# https://<random>.trycloudflare.com address at each start) to the password page of nginx-scope.conf, never to :8090.
+# The address: journalctl -u e850-scope-tunnel | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1
+# cloudflared: the linux-arm64 release binary in ~philip/bin (11.75).
+[Unit]
+Description=Microscope viewer from outside (Cloudflare quick tunnel to the password page)
+Wants=network-online.target
+After=network-online.target nginx.service
+
+[Service]
+User=philip
+ExecStart=/home/philip/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8091
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

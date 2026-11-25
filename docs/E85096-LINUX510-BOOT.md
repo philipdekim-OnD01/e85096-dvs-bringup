@@ -6657,3 +6657,133 @@ BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. �
 - `build-clone.sh`가 overlay의 `home/<사용자>/` 아래 새 파일을 그 사용자 소유로 바꾼다. Docker에서 `~/Desktop` 소유를 확인했다.
 - 저장소: `features/desktop/{session.sh,feature.sh,e850-open,e850-dvs.desktop,e850-scope.desktop,e850-dvs-desk.service,e850-dvs.rules,pcmanfm-desktop.conf}`, `tools/linux510/build-clone.sh`.
 
+
+### 11.108 Jetson Orin Nano(192.168.0.195)에 E850의 C 디코더와 설정 패널 (2026-11-26)
+
+사용자: "젯슨오린나노가 850보다 dvs 디코딩을 잘 못 하는 것 같아, 지금 사용하는 c로 짠 디코더와 컨트롤러로 바꿔".
+
+**Jetson 상태(관찰, 바꾸기 전):**
+- Orin Nano, JetPack R39.2.1(Ubuntu 24.04, 커널 6.8.12-tegra), 6코어 A78AE. 계정 philip(video, i2c 그룹, sudo는 비밀번호). Mac 키는 사용자가 Jetson 셸에서 `authorized_keys`에 넣었다.
+- NRV 저장소 `~/DVS.JS.ORIN.01`(협력 측 코드, 이 저장소에 넣지 않는다):
+  - 수신기: 시스템 서비스 `nrv-dvs-streamer.service`(enabled, philip으로 실행) → C++ `dvs_streamer`. 설정은 **RAW2** `Delta_10_2000FPS_RAW2.txt`(2880×61, 약 1600 fps, 프레임 주기 624 µs).
+  - 화면: GNOME 자동 시작이 Tk 창 `session.py`(user 서비스 `nrv-dvs-native`)를 띄운다.
+  - 센서 드라이버 `nrv_dvs`(i2c 2-0010), `/dev/video0`(tegra VI). 레지스터는 V4L2 배열 control `nrv_register_writes`에 `(addr << 8) | value` 워드로 넣는다. 드라이버가 STREAMON 때 쓰고, 0x0100은 받지 않는다.
+  - DT `cam1.dts`: mode0 8192×128 RAW8(AER), mode1 2880×61(RAW2), 4 lane, `pix_clk_hz` 1.25 GHz.
+- RAW2 1576초 동안(`run.py status`):
+  - 버퍼 2,515,163개, dropped 0, error_buffers 0.
+  - 디코더 쪽은 `raw2_timestamp_ambiguous` 260, `order_errors` 20, `frame_gaps` 1, `invalid` 1.
+  - CPU는 `dvs_streamer` 71%, `session.py` 55%.
+- Jetson의 AER setfile(`settings/Delta_10_2000FPS.txt`, "Update 10.13")은 E850 setfile과 아래가 다르다. 뜻을 아는 것은 이름(주석)뿐이다.
+  - DTAG 타이밍: 0x3210~15, 0x3219, 0x321A, 0x321C, 0x3225~28, 0x320C(0x3D, E850 0x7D).
+  - 그 밖: 0x3901 = 2A(RAW8 DT), 0x3A10 = 02, PLL 0x30A6/A7 = 8B/F8.
+  - 패킷 형식(event group, column, timestamp, frame end, big-endian, 0 패딩)은 같다. Jetson의 `group_aer_decoder.cpp`에서 확인했다.
+
+**바꾼 방식:**
+- E850의 Exynos 캡처(`ov5647-cap.py`)만 Jetson용 앞단 `tools/jetson/dvs-jetson.py`로 바꿨다. 디코더 `libdvsview.so`(dvsview.c), 설정 페이지 `dvsctl.py`/`dvsctl.html`, X 창 `dvsx11.py`, GPU 뷰 `dvsgl`, 패널 `dvspanel`은 E850 소스 그대로다.
+- 레지스터 목록:
+  - 바탕은 Jetson의 AER setfile이다. 링크(4 lane, PLL)가 이 수신기 DT에 맞춰져 있어서 그대로 쓴다.
+  - 그 위에 E850 드라이버가 setfile 다음에 쓰는 값을 같은 순서로 덧붙인다: 0x391A/B 패킷 127, 0x3912/13 `flush_us`, 0x321D/E `margin`. 값은 패널·페이지의 `sensor.json`에서 온다(dvslive.sh와 같다).
+  - 0x0100은 뺀다. 모두 102 워드다(드라이버 한도 4096).
+  - `--print-regs`로 확인할 수 있다.
+- 캡처:
+  - `S_FMT` 8192×128 RGGB8이면 드라이버가 mode0을 고른다.
+  - USERPTR 버퍼 16개(1 MiB, 캐시 메모리, NRV SDK와 같은 방식).
+  - DQBUF마다 버퍼 전체를 `dvs_ingest()`에 넘긴다. 센서는 0x391A/B보다 한 패킷을 더 보낸다(11.22). 그래서 DT 높이 128 = 127 + 1이다.
+- E850과 다른 값:
+  - 웹 스레드 CPU5. dvsview.c의 해독 1, 그리기 2, 필터 3은 그대로다.
+  - 저장 위치 `~/.config/dvs-jetson/`. 페이지의 "now" 값은 `$XDG_RUNTIME_DIR/dvs-jetson/`.
+  - I2C 드라이버 이름 `nrv_dvs`, 주소 배너 인터페이스는 `wlP1p1s0`·`enP8p1s0`.
+- `dvsx11.py`: `GL_LIB = None`이면 시스템 EGL을 쓴다(Jetson의 NVIDIA). E850 보드의 동작은 그대로다.
+- `tools/jetson/dvs-jetson`(launcher, E850의 `dvs`와 같은 역할):
+  - 패널을 띄운다.
+  - 캡처를 시작하기 전마다 NRV 수신기를 그쪽 `run.py stop`으로 멈춘다.
+  - 종료 코드별 동작: 0(설정 변경), 1(3초 동안 버퍼 없음)이면 다시 띄운다. 130(q, Esc, 창 닫기)이면 끝낸다. 연속 3번 실패하면 10초 간격으로 다시 시도한다.
+- `tools/jetson/deploy.sh`:
+  - Mac Docker `ubuntu:24.04` arm64(glibc 2.39, Jetson과 같다)에서 `libdvsview.so`, `dvsgl`, `dvspanel`을 빌드한다.
+  - 빌드한 것을 `~/dvs-jetson/`에 옆 디렉터리를 거쳐 rename으로 넣는다. 실행 중인 `.so`를 덮어쓰지 않기 위해서다.
+  - `--autostart`를 주면 GNOME 자동 시작을 바꾼다.
+
+**측정(Jetson, 관찰):**
+- 창 없이 22초(flush 50 µs, margin 17 = scan 985 µs):
+  - 버퍼 39.5/s, 해독 0.6~1.2 ms/버퍼.
+  - VI 오류 플래그 0, sequence 손실 0, short 0, fe_missed 0.
+  - `ts_missed` 2009가 시작 직후 한 번 생기고 늘지 않았다. RAW2에서 AER로 처음 바꾼 스트림에서만 봤다. 그다음 시작들에서는 0이었다. 원인은 확인하지 않았다(가설: 센서 첫 2초의 시각 점프).
+- 창·패널과 함께. 사용자가 패널에서 margin 0(scan 495 µs, 약 2000 fps)과 상하 반전을 골랐고, 캡처가 저절로 다시 시작했다.
+  - 프레임당 이벤트 72만~94만, 버퍼 72~75/s, 해독 2.7~3.4 ms/버퍼(한 코어의 약 22%).
+  - 그리기 30 fps, 0.5~0.9 ms. 최신 이벤트와의 지연 21~23 ms.
+  - 누락은 모두 0이다: ts_missed 0, fe_missed 0, short 0, VI 오류 0.
+- `dvsgl`은 `NVIDIA Tegra Orin (nvgpu), OpenGL ES 3.2 NVIDIA 595.78`로 그린다.
+- CPU는 `dvs-jetson.py` 프로세스(해독, 필터, 웹 모두) 23~26%, `dvsgl` 4.5%, `dvspanel` 2%.
+- RAW2(1600 fps 전체 프레임)와 AER(2000 fps scan, 이벤트별 시각)는 출력이 달라서, 위 CPU 숫자를 같은 일의 비교로 볼 수는 없다.
+- 화면을 xwd로 떠서 확인했다. DVS 창에 사람 얼굴 윤곽이 보이고, 패널 그래프가 차고, 웹 주소가 `192.168.0.195:8080`으로 나온다.
+
+**Jetson에 바꾼 것:**
+- `~/dvs-jetson/`(새 디렉터리, root 불필요).
+- `~/.config/autostart/dvs-jetson.desktop`(새로 넣음). NRV 창의 `nrv-dvs-native.desktop`은 `~/.config/autostart-off/`로 옮겼다. 되돌리려면 다시 옮긴다.
+- `~/.config/dvs-jetson/{sensor,display}.json`: 패널이 저장한다.
+- 바꾸기 전 백업은 `~/backup-before-e850-20261126/`이다: autostart, user systemd, 서비스 정의, NRV 저장소 HEAD·status·추적 안 되는 파일 tgz.
+- NRV 수신기는 그쪽 `run.py stop`으로 멈췄다. 시스템 서비스 `nrv-dvs-streamer`는 **아직 enabled**다(끄려면 sudo). 부팅하면 먼저 뜨지만, `dvs-jetson`이 캡처를 시작할 때마다 멈춘다.
+- 지금 도는 인스턴스는 `systemd-run --user --unit=dvs-jetson-now`로 띄웠다. 다음 로그인부터는 자동 시작이 띄운다. 로그인 경로는 아직 시험하지 않았다(Jetson을 재부팅하지 않음).
+- NRV 저장소의 파일은 바꾸지 않았다.
+
+### 11.109 Jetson: htop, 패널의 MIPI·DRAM 그래프 (2026-11-26)
+
+사용자: "젯슨에서도 htop 사용하게 해줘, 그리고 mipi 프레임 데이터를 확인 못 하나?"
+
+**htop:**
+- Jetson에는 없었다. 필요한 라이브러리(libncursesw6, libnl-3, libnl-genl-3)는 있었다.
+- sudo 없이 설치했다: `apt-get download htop`(3.3.0-4build1) → `dpkg -x`로 `~/.local/opt/htop`에 풀고 `~/.local/bin/htop`에 링크.
+- `~/.profile`이 `~/.local/bin`을 PATH에 넣으므로 터미널과 ssh에서 `htop`으로 실행된다.
+- 시스템 전체에 넣으려면 `sudo apt install htop` 하고, 이 링크를 지운다.
+
+**MIPI 그래프가 비어 있던 까닭(관찰):**
+- E850의 패널은 MIPI 프레임·링크 오류를 `csis-irqstat.ko`에서, CRC를 fimc_is sysfs에서, 버퍼 상태를 캡처 루프의 QUERYBUF에서 받는다(11.51). Jetson 앞단에는 셋 다 없었다.
+- Jetson VI5 드라이버(`nvidia-oot/.../vi5_fops.c`, NRV 저장소의 `.cache/pristine`)를 읽었다:
+  - `vbuf->sequence`는 내준 버퍼마다 1씩 는다. 그래서 VI가 버퍼가 없어 받지 못한 MIPI 프레임은 sequence에 드러나지 않는다. 11.108 앞단의 "lost by sequence"는 늘 0일 수밖에 없다. 이름을 "skipped in sequence"로 바꿨다.
+  - 고칠 수 있는 오류(`corr_err`)는 경고와 `err_data`를 `kern.log`에 남긴다(philip은 adm 그룹이라 읽을 수 있다). 그 버퍼는 `VB2_BUF_STATE_ERROR`, 곧 `V4L2_BUF_FLAG_ERROR`로 돌아온다.
+  - 고칠 수 없는 오류(`uncorr_err`: 2.5초 동안 응답 없음 등)는 채널 오류가 된다. 이때는 앞단의 "3초 동안 버퍼 없음"이 캡처를 다시 시작한다. 11-08 NRV 시절 `kern.log`에 이 메시지가 있다.
+  - 링크 오류 비트(CRC, ECC)의 자세한 값은 `err_data`에만 있다. 카운터로 따로 얻을 수 없다(rtcpu trace는 root 필요).
+
+**바꾼 것(`tools/jetson/dvs-jetson.py`):**
+- MIPI 프레임 수: `dvsctl.mipi`를 바꿔, 디코더 링크 통계의 `bufs`를 쓴다(VI가 돌려준 버퍼는 모두 해독한다).
+  - 처음에는 캡처 루프의 실시간 카운터를 썼다. 디코더 통계는 2초마다 찍어 두는 값이라, 같은 행에서 131 차이(약 2초 치)가 났다. 그래서 같은 스냅샷의 값으로 바꿨다.
+- 링크 오류: 오류 플래그가 붙은 버퍼 수.
+- DRAM 그래프: DQBUF마다 다른 버퍼를 QUERYBUF해서 QUEUED(빈 버퍼)와 DONE(처리 대기)을 센다. `frame_bytes`(1 MiB)도 넘긴다. ov5647-cap.py `note_bufs`와 같다.
+- CRC 타일은 값이 없어 "기록 없음"으로 남는다.
+
+**측정(관찰, margin 0, flush 50 µs):**
+- MIPI 프레임 72.1/s, MIPI 데이터량 75.6 MB/s(= 72 × 1 MiB, VI가 받는 줄 전체), 이벤트 데이터 28.5 MB/s, 프레임 채움 37.7%.
+- 빈 버퍼는 16개 중 최소 14~15개, 처리 대기 최대 0~1개, 버퍼 복사(해독) 2~2.9 ms.
+- 링크 오류 0, 짧은 버퍼 0, scan 누락 0, frame_end 누락 0.
+- 패널을 xwd로 떠서 그래프가 차는 것을 확인했다.
+
+### 11.110 현미경 뷰어 외부 접속: 비밀번호 페이지 + Cloudflare 임시 터널 (보드4, 2026-11-26)
+
+사용자: "모두 깃에 각각 기록하고, 현미경 외부에서 접속 가능하게 해줘".
+
+**방식:**
+- 11.106에서는 터널을 띄우려다 권한 검사가 막았다. 뷰어(`scope.py`, :8090)에 인증이 없어서, 링크를 아는 사람은 누구나 노출, LED, 레지스터, 촬영, `/quit`을 쓸 수 있었기 때문이다. 이번에는 비밀번호를 먼저 걸었다.
+- nginx 사이트 `tools/board/scope/nginx-scope.conf`:
+  - `127.0.0.1:8091`에서만 듣고, Basic 인증(사용자 `scope`)을 거친 요청만 :8090으로 넘긴다.
+  - `proxy_buffering off`로 둔다. `/frame.png`의 long poll 응답이 바로 나가게 하기 위해서다.
+  - 비밀번호 파일 `/etc/nginx/e850-scope.htpasswd`(apr1, root:www-data 640)는 보드에만 있고 git에는 넣지 않는다. 비밀번호는 사용자에게만 알렸다.
+- `tools/board/scope/e850-scope-tunnel.service`:
+  - philip 권한으로 `~/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8091`(11.75의 linux-arm64 바이너리, 2026.11.1)을 돌린다.
+  - 계정 없는 trycloudflare 임시 주소라서, 시작할 때마다 주소가 바뀐다. 지금 주소는 `journalctl -u e850-scope-tunnel | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1`로 본다.
+  - enabled 상태라 재부팅해도 다시 뜬다.
+- LAN의 `http://<보드>:8090/`과 데스크톱 아이콘(`e850-open scope`)은 그대로다(인증 없음).
+
+**확인(관찰, Mac에서 외부 주소로):**
+- 인증 없음: 401. 틀린 비밀번호: 401(보드 안에서 시험).
+- 맞는 비밀번호:
+  - 페이지 200(124,345 B, 0.14 s).
+  - `/stat` 200(`streaming`, 2.19 fps).
+  - `/frame.png?fmt=raw` 200(774,144 B 회색 바이트, X-Region 전달, 0.50 s).
+- 터널은 Cloudflare icn06에 등록됐다. ICMP 프록시 경고는 ping 그룹 범위 때문이고, HTTP와는 상관없다.
+- 처음 만든 비밀번호 파일은 비어 있었다. `echo 비밀번호 | sudo -S tee`에서 sudo가 표준 입력을 먼저 가져갔기 때문이다. 임시 파일을 만든 뒤 `sudo install`로 다시 만들었다.
+- 그때 현미경은 타임랩스(30초마다, 48시간, 시료 "고해상도비교실험…")를 찍고 있었다. 건드리지 않았다.
+
+**보드4에 바꾼 것:**
+- `/etc/nginx/sites-available/e850-scope`(+ sites-enabled 링크), `/etc/nginx/e850-scope.htpasswd`.
+- `/etc/systemd/system/e850-scope-tunnel.service`(enabled, 지금 실행 중). 끄려면 `sudo systemctl disable --now e850-scope-tunnel`.
+- 비밀번호를 바꾸려면 nginx-scope.conf 머리말의 명령으로 파일을 다시 만든다. nginx는 요청마다 파일을 읽으므로 reload하지 않아도 된다.

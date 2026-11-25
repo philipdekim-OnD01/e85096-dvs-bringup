@@ -1,0 +1,31 @@
+#!/bin/sh
+# dvs-jetson: the DVS window, the settings panel beside it (dvspanel) and the page on :8080 on the Jetson (docs
+# 11.108), as `dvs` on the E850 (features/dvs/dvs). GNOME starts it at login (dvs-jetson.desktop); from a terminal
+# in the desktop it does the same. q, Esc or closing the DVS window ends it.
+# The capture ends on purpose to start again: a sensor setting from the page (exit 0), no buffer for 3 s (exit 1).
+set -u
+D=$(dirname "$(readlink -f "$0")")
+PORT=${CTL_PORT:-8080}
+[ -n "${DISPLAY:-}" ] || { echo "dvs-jetson: no DISPLAY: run it in the desktop" >&2; exit 1; }
+exec 9> "${XDG_RUNTIME_DIR:-/tmp}/dvs-jetson.lock"
+flock -n 9 || { echo "dvs-jetson: already running (q in its window ends it)" >&2; exit 1; }
+# the NRV window would show nothing; its receiver holds /dev/video0 and is stopped before each start below (its
+# own stop, as philip): its system service, until disabled, may come up at boot after this login
+systemctl --user stop nrv-dvs-native.service 2>/dev/null
+NRV=$HOME/DVS.JS.ORIN.01/app/dvs_streamer/build/GCC-arm64/Release/run.py
+P=
+trap '[ -z "$P" ] || kill $P 2>/dev/null' EXIT
+trap 'exit 130' INT TERM
+NO_AT_BRIDGE=1 "$D/dvspanel" "$PORT" > /dev/null 2>&1 9>&- &
+P=$!
+fails=0
+while :; do
+    [ -f "$NRV" ] && python3 "$NRV" stop > /dev/null 2>&1 9>&-     # nothing running: does nothing
+    python3 "$D/dvs-jetson.py" --x11 --ctl "$PORT" "$@" 9>&-
+    st=$?
+    [ $st = 130 ] && exit 0
+    if [ $st = 0 ]; then fails=0; else fails=$((fails + 1)); fi
+    echo "dvs-jetson: capture ended (exit $st), starting again"
+    # a camera that keeps failing: try again, but not in a tight loop
+    if [ $fails -ge 3 ]; then sleep 10; else sleep 2; fi
+done

@@ -1,6 +1,21 @@
-# E850-96 bring-up 현재 상태 (2026-11-25 KST)
+# E850-96 bring-up 현재 상태 (2026-11-26 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다.
+
+**2026-11-26(11.110):** 보드4 현미경 뷰어를 밖에서 볼 수 있다.
+- 경로: Cloudflare 임시 터널(`e850-scope-tunnel.service`, enabled) → nginx `127.0.0.1:8091` Basic 인증(사용자 `scope`, 비밀번호는 보드에만) → :8090.
+- 주소는 터널이 시작할 때마다 바뀐다: `sudo journalctl -u e850-scope-tunnel | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1`.
+- LAN :8090은 그대로다(인증 없음).
+
+**2026-11-26 00시(11.108):** Jetson Orin Nano(192.168.0.195, `ssh philip@192.168.0.195`)의 DVS를 E850의 C 디코더(`libdvsview.so`)·설정 패널(`dvspanel`, 페이지 :8080)·GPU 뷰(`dvsgl`, NVIDIA GLES)로 바꿨다.
+- 캡처 앞단은 `tools/jetson/dvs-jetson.py`이고, NRV 드라이버의 `nrv_register_writes`와 VI mode0 8192×128 AER을 쓴다. 배포는 `sh tools/jetson/deploy.sh philip@192.168.0.195 [--autostart]`.
+- 측정: 2000 fps scan, 프레임당 이벤트 약 80만에서 누락 0, 한 코어의 약 25%.
+- GNOME 자동 시작을 NRV 창 대신 `dvs-jetson`으로 바꿨다.
+- htop은 `~/.local/bin/htop`(sudo 없이). 패널의 MIPI·DRAM 그래프를 Jetson VI에서 채운다: MIPI 프레임 72/s, 75.6 MB/s, 프레임 채움 38%, 빈 버퍼 15/16, 링크 오류 0. CRC는 값이 없다(11.109).
+- 남은 일:
+  - NRV 시스템 서비스 끄기: 사용자가 `sudo systemctl disable nrv-dvs-streamer`. 끄지 않아도 `dvs-jetson`이 멈춘다.
+  - 로그인 자동 시작 확인(재부팅 필요).
+  - 오래 돌리는 시험.
 
 **2026-11-25 19시 세션 끝 상태(새 세션 시작점, 11.103):**
 - 행동 분류의 이벤트 묶기를 C로 옮겼다(`dvs_act_bin`). 스레드는 `dvs-bin`과 `dvs-act` 둘이고 CPU4~6에 있다. 예전에는 이벤트의 약 70%를 버렸는데 이제 0이다. CPU4가 99%였던 까닭은 예전 Python 묶기였다.
@@ -16,7 +31,7 @@
 - 사용자가 보드6 화면에서 `e850-res`로 2560x1440을 골라 글자 선명도와 DVS 창·Chrome을 확인한다.
 - 보드4가 11:33(UTC)에 오류 기록 없이 멈췄다가 12:27에 다시 부팅했다(원인 모름). 현미경은 정상이다(11.105). SD 지원을 넣는다.
 - 보드4·6 바탕화면에 DVS·현미경 아이콘(pcmanfm, `e850-open`, DVS는 polkit으로 `e850-dvs-desk.service`만), `ifconfig`(net-tools, 세션 PATH에 sbin)(11.107). 보드6 scan 누락은 사용자가 14:14에 MIPI flush를 1 µs로 바꾼 탓이다(초당 버퍼 330개, scan 7% 누락. 50 µs에서는 0, 11.107).
-- 현미경 뷰어 실시간 화면은 회색 바이트 + WebGL2 LUT다(11.106). CPU 257% → 237%. 남은 큰 비용은 Chrome 합성·X(약 0.9코어), USB 수신(0.3), 서버 평균(0.2)이다. 외부 주소(trycloudflare)는 권한 검사가 막아 사용자가 띄우거나 비밀번호부터 넣기로 정해야 한다.
+- 현미경 뷰어 실시간 화면은 회색 바이트 + WebGL2 LUT다(11.106). CPU 257% → 237%. 남은 큰 비용은 Chrome 합성·X(약 0.9코어), USB 수신(0.3), 서버 평균(0.2)이다. 외부 주소는 11.110에서 비밀번호 페이지 뒤에 열었다.
 - 이벤트가 많을 때: `dvsgl`을 이벤트마다 한 번만 올리는 누적 방식으로 바꾸고, 분류기 묶기를 GPU로 옮기는 것을 검토한다(11.105).
 
 **2026-11-24 16시 세션 끝 상태:** 보드6(.208)이 다시 살아났다(11.102). 오늘 한 일:

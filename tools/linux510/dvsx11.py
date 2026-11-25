@@ -103,19 +103,20 @@ def start(lib):
 
 GL = '/usr/local/bin/dvsgl'
 GL_LIB = '/home/philip/gpu/mesa-kbase/lib'      # the GPU Mesa and kbase shim of the desktop boards, as x-kms.sh
+# None: the system's EGL (the Jetson's NVIDIA driver, tools/jetson/dvs-jetson.py)
 
 
 def gl_ready():
     return (os.environ.get('DVS_GL') != '0' and os.access(GL, os.X_OK)
-            and os.path.exists(GL_LIB + '/libpanfrost_kbase_drm_shim.so'))
+            and (GL_LIB is None or os.path.exists(GL_LIB + '/libpanfrost_kbase_drm_shim.so')))
 
 
 def start_gl(lib, fd):
     """the GPU view (dvsgl) of dvs_share()'s memfd fd; when it fails, the CPU page as start(). Call from the main
     thread: dvsgl dies with the thread that started it (PR_SET_PDEATHSIG)."""
     import subprocess
-    env = dict(os.environ, LD_LIBRARY_PATH=GL_LIB, LIBGL_DRIVERS_PATH=GL_LIB + '/dri',
-               LD_PRELOAD=GL_LIB + '/libpanfrost_kbase_drm_shim.so')
+    env = None if GL_LIB is None else dict(os.environ, LD_LIBRARY_PATH=GL_LIB, LIBGL_DRIVERS_PATH=GL_LIB + '/dri',
+                                           LD_PRELOAD=GL_LIB + '/libpanfrost_kbase_drm_shim.so')
     p = subprocess.Popen([GL, str(fd)], pass_fds=(fd,), env=env)
 
     def wait():
