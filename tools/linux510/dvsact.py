@@ -6,18 +6,15 @@ probabilities into a state and writes a JSONL line when the state changes. Binne
 the Mac (frames_of); on the board libdvsview bins the ring by the same rules in C (CBinner, dvs_act_bin, 11.103),
 and test_dvsact checks the two give the same frames.
 
-On the board start() runs it in the capture process (ov5647-cap.py --act FILE --act-model PATH): daemon threads
-"dvs-bin" (frames, in C) and "dvs-act" (the model; onnxruntime uses that thread only) on CPU4-6 at the top clock
-(dvsctl.pin).
+On the board start() runs it in the capture process (ov5647-cap.py --act FILE --act-model PATH), all in C since
+11.112 (libdvsview's dvsai.c, onnxruntime's C API): threads "dvs-bin" (frames) and "dvs-act" (the model, the judge)
+on CPU4-6 at the top clock. Judge, observe and line here stay the reference (the Mac's evaluate.py, test_dvsai).
 """
 import ctypes
 import datetime
 import json
 import os
-import queue
 import sys
-import threading
-import time
 
 import numpy as np
 
@@ -27,7 +24,6 @@ STEP_US = 60000         # one frame, one model step: 16.7 Hz
 GAP_US = 3000000        # no event for this long (a sensor restart): start over, GRU state too
 HOLD = 3                # steps a candidate must hold before the state changes
 FALL_P = 0.6            # fall must be at least this sure to be a candidate
-QUEUE = 8               # frames dvs-bin may be ahead of the model (8 x 60 ms)
 CLASSES_FILE = 'classes'    # beside the model, optional: the classes judged (e.g. "none sit_down stand_up")
 GW, GH = 160, 120
 EV = np.dtype([('t', '<u4'), ('x', '<u2'), ('y', '<u2')])     # libdvsview struct ev
@@ -206,93 +202,31 @@ def _off(why):
     print('[dvsact] off: %s' % why, file=sys.stderr, flush=True)
 
 
-def _softmax(y):
-    e = np.exp(y - y.max())
-    return e / e.sum()
+def ort_lib():
+    """the onnxruntime wheel's libonnxruntime.so (its C API runs the models in libdvsview's dvsai.c, 11.112), found
+    without importing the package; None without the wheel"""
+    import glob
+    import importlib.util
+    spec = importlib.util.find_spec('onnxruntime')
+    f = spec and sorted(glob.glob(os.path.join(os.path.dirname(spec.origin), 'capi', 'libonnxruntime.so*')))
+    return f[0] if f else None
 
 
-def _run(lib, out_path, model_path, cpus):
-    import dvsctl                       # same directory on the board; it imports this module for CLASSES
-    import onnxruntime as ort
-
-    dvsctl.pin(set(cpus), 'dvs-act')    # before the session: its compute then stays on this thread
-    try:
-        o = ort.SessionOptions()
-        o.intra_op_num_threads = o.inter_op_num_threads = 1
-        sess = ort.InferenceSession(model_path, o, providers=['CPUExecutionProvider'])
-        out = open(out_path, 'a')
-    except Exception as e:
-        return _off(e)
-    STATUS['on'] = True
-    lib.dvs_act_bin.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    lib.dvs_stats.restype = ctypes.c_char_p
-    try:                                # CLASSES_FILE beside the model: the classes judged, one line
-        classes = [c for c in open(os.path.join(os.path.dirname(model_path), CLASSES_FILE)).read().split()
-                   if c in CLASSES] or None     # none known: all
-    except OSError:
-        classes = None
-    print('[dvsact] judging %s' % ' '.join(classes or CLASSES), file=sys.stderr, flush=True)
-    # two threads (11.103): dvs-bin counts the ring into frames (in C, without the GIL) while dvs-act runs the model;
-    # in one thread the two filled a core with fast motion. QUEUE frames behind, dvs-bin waits and the ring's
-    # RING / 2 rule skips what it missed (act_lost).
-    frames = queue.Queue(QUEUE)
-    threading.Thread(target=_bin, args=(lib, frames, cpus), name='dvs-bin', daemon=True).start()
-    judge, h = Judge(classes), np.zeros((1, 128), np.float32)
-    ms, t_log = [], time.monotonic()
-    try:
-        while True:
-            try:
-                kind, _, c = frames.get(timeout=2)
-            except queue.Empty:
-                kind = None
-            if kind == 'reset':
-                h[:] = 0
-            elif kind == 'frame':
-                a = time.perf_counter()
-                y, h = sess.run(None, {'x': to_input(c), 'h': h})
-                s = observe(judge, _softmax(y[0]), time.time_ns())
-                ms.append((time.perf_counter() - a) * 1e3)
-                if s:
-                    out.write(s + '\n')
-                    out.flush()
-                    r = STATUS['recent'][0]
-                    print('[dvsact] %s %s p %.2f' % (r['event'], r['state'], r['p']), file=sys.stderr, flush=True)
-            now = time.monotonic()
-            if now - t_log >= 2:
-                lost = json.loads(lib.dvs_stats() or b'{}').get('act_lost', 0)
-                print('[dvsact] steps %d, step median %.1f ms max %.1f ms, queued %d, lost %d' % (
-                    len(ms), float(np.median(ms)) if ms else 0, max(ms, default=0), frames.qsize(), lost),
-                    file=sys.stderr, flush=True)
-                ms, t_log = [], now
-    except Exception as e:
-        _off(e)
-
-
-def _bin(lib, frames, cpus):
-    """dvs-bin: the ring's frames into the queue, every STEP_US"""
-    import dvsctl
-
-    dvsctl.pin(set(cpus), 'dvs-bin')
-    binner, wake = CBinner(lib.dvs_act_bin), time.monotonic()
-    try:
-        while True:
-            for rec in binner.records():        # all that came since the last wake
-                frames.put(rec)
-            wake = max(wake + STEP_US / 1e6, time.monotonic())
-            time.sleep(max(0, wake - time.monotonic()))
-    except Exception as e:
-        _off(e)
+def cpu_mask(cpus):
+    return sum(1 << c for c in cpus)
 
 
 def start(lib, out_path, model_path, cpus=frozenset({4, 5, 6})):
-    """Classify in a daemon thread, one JSON line per state change appended to out_path; None (and why on
-    stderr) without onnxruntime or the model: the live view goes on without the classifier."""
-    try:
-        import onnxruntime  # noqa: F401
-    except ImportError as e:
-        return _off(e)
+    """Classify in libdvsview's C threads dvs-bin and dvs-act (dvsai.c, 11.112; until then the same in Python threads
+    here), one JSON line per state change appended to out_path, the state at GET /act; None (and why on stderr)
+    without onnxruntime or the model: the live view goes on without the classifier."""
+    ort = ort_lib()
+    if not ort:
+        return _off('no onnxruntime')
     if not os.path.isfile(model_path):
         return _off('no model %s' % model_path)
-    th = threading.Thread(target=_run, args=(lib, out_path, model_path, cpus), name='dvs-act', daemon=True)
-    th.start()
-    return th
+    err = ctypes.create_string_buffer(512)
+    lib.dvs_act_start.argtypes = [ctypes.c_char_p] * 3 + [ctypes.c_uint32, ctypes.c_char_p, ctypes.c_int]
+    if lib.dvs_act_start(ort.encode(), model_path.encode(), out_path.encode(), cpu_mask(cpus), err, len(err)):
+        return _off(err.value.decode(errors='replace'))
+    return True

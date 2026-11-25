@@ -3,15 +3,15 @@ face_detection_yunet_2023mar.onnx, MIT; trained on photos; bundle.sh makes its i
 graph has no fixed shape but the input's) on the latest events as an image, the best face boxed on
 the view with its width in cm: the 960 px view shows 17 cm wide on the monitor, and a 19 cm face 1 m away shows 3 cm
 there (the user's measurements, 2026-11-24), so the width holds for a face about 1 m from the sensor.
-A thread on CPU4-6 (with dvsact), about 5 detections/s; ov5647-cap.py --face MODEL starts it.
+A thread on CPU4-6 (with dvsact), about 5 detections/s; ov5647-cap.py --face MODEL starts it. Since
+11.112 the thread is C (libdvsview's dvsai.c, dvs_face_detect); detect() here is its reference (test_dvsai).
 
   python3 dvsface.py --selftest MODEL [IMAGE]   decode and scale checks (IMAGE: a photo with one face)
   python3 dvsface.py --free-size SRC DST        the model with a free input size (needs the onnx package)
 """
 import ctypes
+import os
 import sys
-import threading
-import time
 
 import numpy as np
 
@@ -20,7 +20,6 @@ SCREEN_CM, FACE_CM, FACE_SCREEN_CM = 17.0, 19.0, 3.0
 CM_PER_PX = SCREEN_CM / VIEW_W * FACE_CM / FACE_SCREEN_CM      # cm of a face 1 m away per view px
 WIN_US = 100000                     # events of the last 100 ms make the image: a still face fires little
 THRESH = 0.4                        # edge images of a face scored 0.44..0.53 (a photo 0.95)
-STATUS = {'on': False, 'width_cm': None, 'score': None}
 
 
 def to_input(img):
@@ -47,9 +46,9 @@ def decode(outs, names, w, thresh=THRESH):
         score = np.sqrt(cls * obj)
         for i in np.nonzero(score >= thresh)[0]:
             b = o['bbox_%d' % st][0, i]
-            w, h = np.exp(b[2]) * st, np.exp(b[3]) * st
+            bw, bh = np.exp(b[2]) * st, np.exp(b[3]) * st      # until 11.112 named w: the next stride's n was wrong
             cx, cy = (i % n + b[0]) * st, (i // n + b[1]) * st
-            found.append((float(score[i]), cx - w / 2, cy - h / 2, w, h))
+            found.append((float(score[i]), cx - bw / 2, cy - bh / 2, bw, bh))
     return sorted(found, reverse=True)
 
 
@@ -65,63 +64,20 @@ def label(w_px):
     return 'W %.1f cm' % (w_px * CM_PER_PX)
 
 
-def _run(lib, model, cpus):
-    import dvsctl
-    import onnxruntime as ort
-
-    dvsctl.pin(set(cpus), 'dvs-face')
-    try:
-        o = ort.SessionOptions()
-        o.intra_op_num_threads = o.inter_op_num_threads = 1
-        sess = ort.InferenceSession(model, o, providers=['CPUExecutionProvider'])
-    except Exception as e:
-        return print('[dvsface] off: %s' % e, file=sys.stderr, flush=True)
-    lib.dvs_surface.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
-    lib.dvs_mark.argtypes = [ctypes.c_int] * 4 + [ctypes.c_char_p]
-    lib.dvs_get.argtypes = [ctypes.c_char_p]
-    surf = np.zeros((VIEW_H // 2, VIEW_W // 2), np.uint8)
-    info = (ctypes.c_uint32 * 4)()
-    widths, ms, n_found, t_log = [], [], 0, time.monotonic()
-    STATUS['on'] = True
-    print('[dvsface] on: %s, %.4f cm/px (17 cm view, 19 cm face = 3 cm at 1 m)' % (model, CM_PER_PX),
-          file=sys.stderr, flush=True)
-    while True:
-        time.sleep(0.2)
-        lib.dvs_surface(0, 0, None, info)                      # the newest event's time
-        if lib.dvs_surface(info[0], WIN_US, surf.ctypes.data, info) < 0:
-            continue
-        flip = lib.dvs_get(b'flip')                             # the face as on the screen (upright)
-        img = surf[:, ::-1] if flip & 1 else surf
-        img = img[::-1] if flip & 2 else img
-        a = time.perf_counter()
-        f = detect(sess, np.ascontiguousarray(np.where(img > 0, 255, 0).astype(np.uint8)))
-        ms.append((time.perf_counter() - a) * 1e3)
-        if f:
-            n_found += 1
-            widths = (widths + [f[3] * 2])[-5:]                 # surface px -> view px; median of the last 5
-            w = float(np.median(widths))
-            STATUS.update(width_cm=round(w * CM_PER_PX, 1), score=round(f[0], 2))
-            lib.dvs_mark(*(int(v * 2) for v in f[1:]), label(w).encode())
-        now = time.monotonic()
-        if now - t_log >= 2:
-            print('[dvsface] %d runs, %.0f ms median, %d faces, last %s' % (
-                len(ms), float(np.median(ms)) if ms else 0, n_found,
-                label(float(np.median(widths))) if widths else '-'), file=sys.stderr, flush=True)
-            ms, n_found, t_log = [], 0, now
-
-
 def start(lib, model, cpus=frozenset({4, 5, 6})):
-    """Detect in a daemon thread; None (and why on stderr) without onnxruntime or the model."""
-    import os
-    try:
-        import onnxruntime  # noqa: F401
-    except ImportError as e:
-        return print('[dvsface] off: %s' % e, file=sys.stderr, flush=True)
+    """Detect in libdvsview's C thread dvs-face (dvsai.c, 11.112: the loop of this module's Python thread before);
+    None (and why on stderr) without onnxruntime or the model."""
+    from dvsact import cpu_mask, ort_lib
+    ort = ort_lib()
+    if not ort:
+        return print('[dvsface] off: no onnxruntime', file=sys.stderr, flush=True)
     if not os.path.isfile(model):
         return print('[dvsface] off: no model %s' % model, file=sys.stderr, flush=True)
-    th = threading.Thread(target=_run, args=(lib, model, cpus), name='dvs-face', daemon=True)
-    th.start()
-    return th
+    err = ctypes.create_string_buffer(512)
+    lib.dvs_face_start.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_int]
+    if lib.dvs_face_start(ort.encode(), model.encode(), cpu_mask(cpus), err, len(err)):
+        return print('[dvsface] off: %s' % err.value.decode(errors='replace'), file=sys.stderr, flush=True)
+    return True
 
 
 def free_size(src, dst):

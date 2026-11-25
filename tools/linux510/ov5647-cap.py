@@ -34,8 +34,8 @@ Each file is one VC0 frame: one little-endian u16 per pixel, 10 valid bits (raw1
 import argparse
 import atexit
 import ctypes
+import errno
 import fcntl
-import json
 import mmap
 import os
 import select
@@ -336,13 +336,11 @@ class DvsLive:
             raise OSError(-r, 'dvs_start: ' + os.strerror(-r))
         if a.x11:                               # before the page: no display, no view
             dvsx11.start_gl(self.lib, gl) if gl >= 0 else dvsx11.start(self.lib)
-        self.ctl, self.q_us, self.q_n = None, 0.0, 0
         if a.ctl:
             import dvsctl
             dvsctl.NO_SENSOR = no_sensor and no_sensor + ('; replaying ' + a.replay if a.replay else '')
             try:
                 dvsctl.start(self.lib, a.ctl, banner=not a.x11)
-                self.ctl = dvsctl
                 log('display settings: http://<board>:%d/' % a.ctl)
             except OSError as e:                # port taken: keep the live view without the page
                 log('display settings off: port %d: %s' % (a.ctl, e))
@@ -352,49 +350,48 @@ class DvsLive:
         if a.face:                              # the same: says why on stderr and stays off
             import dvsface
             dvsface.start(self.lib, a.face)
-        self.lib.dvs_stats.restype = ctypes.c_char_p
-        self.next_check = time.monotonic() + 10        # no verdict in the first 10 s
-        self.short = None
 
-    def check(self):
+    def capture(self, cnt):
+        """The capture loop in C (dvs_capture, 11.112; it was Python here, ~5 % of CPU1 and GIL waits) until a.n VC0
+        buffers (0: forever), a.t s without one, or a stuck stream; cnt[0], cnt[1]: VC0 and leader buffers.
+        The sensor sends H + 1 packets a frame (DT H, VRESOL mismatch let through, 11.22); the last one lands after
+        line H; it held a sub timestamp in 3 of 14 raw buffers, a scan lost each time unread (11.46): decoded too."""
+        lib = self.lib
+        lib.dvs_cap_node.argtypes = [ctypes.c_int] * 4 + [ctypes.c_void_p] * 3
+        lib.dvs_cap_shot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        lib.dvs_capture.argtypes = [ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+        self.maps = []                  # the mmaps' exports, alive as long as the process: C reads and writes them
+        for k, node in enumerate((vc0, ldr)):
+            n, pl = len(node.bufs), node.nplanes
+            self.maps += [ctypes.c_char.from_buffer(planes[-k][1]) for planes in node.bufs]   # VC0 plane 0, leader meta
+            r = lib.dvs_cap_node(k, node.fd, n, pl, (ctypes.c_uint32 * pl)(*node.lengths),
+                                 (ctypes.c_int * (n * pl))(*[d for planes in node.bufs for d, _ in planes]),
+                                 (ctypes.c_void_p * n)(*map(ctypes.addressof, self.maps[-n:])))
+            if r:
+                raise OSError(-r, 'dvs_cap_node')
+        for off, n in ((SHOT_MAGIC_OFFSET, 4), (NODE_GROUP, 2 * NODE_SIZE)):    # write_shot's fields
+            lib.dvs_cap_shot(off, n)
+        while a.n == 0 or cnt[0] < a.n:
+            r = lib.dvs_capture(a.W * (a.H + 1), 500, int(a.t * 1000), a.stuck, cnt)
+            if r == -errno.ETIMEDOUT:
+                return log('timeout: no VC0 frame in %.1f s' % a.t)
+            if r == -errno.EPIPE:
+                self.stuck()
+            elif r and r != -errno.EINTR:   # EINTR: a signal; Python raises it now (SIGTERM, SIGINT: KeyboardInterrupt)
+                raise OSError(-r, 'dvs_capture: ' + os.strerror(-r))
+
+    def stuck(self):
         """A Wi-Fi firmware panic can leave the CSIS buffer bookkeeping one slot off for minutes: short buffers,
         contents of the ring's last turn (11.46, 2 of 6 forced panics). Then SIGTERM ourselves like dvsctl's
         /sensor: stream off here, systemd starts dvslive again, a new stream on is in step."""
-        now = time.monotonic()
-        if not a.stuck or now < self.next_check:
-            return
-        self.next_check = now + 2
-        n = json.loads(self.lib.dvs_stats()).get('link', {}).get('short_bufs')
-        if n is not None and self.short is not None and n - self.short >= a.stuck:
-            msg = 'dvslive: stuck capture, %d short buffers in 2 s: restarting the stream' % (n - self.short)
-            log(msg)
-            try:                                # /tmp/dvslive.log starts over with the next process
-                with open('/dev/kmsg', 'w') as k:
-                    k.write(msg + '\n')
-            except OSError:
-                pass
-            os.kill(os.getpid(), signal.SIGTERM)
-        self.short = n
-
-    def note_bufs(self, node, idx):
-        """For the page's DRAM graph (11.51): the other VC0 buffers free for the DMA and waiting to be dequeued"""
-        if not self.ctl:
-            return
-        t = time.monotonic()
-        f = [node.flags(i) for i in range(len(node.bufs)) if i != idx]
-        self.ctl.buf_note(len(node.bufs), sum(x & 2 != 0 for x in f), sum(x & 4 != 0 for x in f), a.W * (a.H + 1))
-        if self.q_n < 1000:                     # its cost, once in the log
-            self.q_us += (time.monotonic() - t) * 1e6
-            self.q_n += 1
-            if self.q_n == 1000:
-                log('QUERYBUF x %d: %.0f us a DQBUF' % (len(node.bufs) - 1, self.q_us / 1000))
-
-    def show(self, buf):
-        p = ctypes.c_char.from_buffer(buf)      # the dma-buf mmap itself: C decodes and zeroes it in place
-        # the sensor sends H + 1 packets a frame (DT H, VRESOL mismatch let through, 11.22); the last one lands
-        # after line H; it held a sub timestamp in 3 of 14 raw buffers, a scan lost each time unread (11.46)
-        self.lib.dvs_ingest(ctypes.addressof(p), a.W * (a.H + 1))
-        del p                                   # drop the buffer export so the mmap can close at exit
+        msg = 'dvslive: stuck capture, %d+ short buffers in 2 s: restarting the stream' % a.stuck
+        log(msg)
+        try:                                # /tmp/dvslive.log starts over with the next process
+            with open('/dev/kmsg', 'w') as k:
+                k.write(msg + '\n')
+        except OSError:
+            pass
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 def stream_off():
@@ -449,8 +446,11 @@ if no_sensor:                   # the page and HDMI say so until dvslive starts 
         leave(130 if user_quit else 1)
 saved = 0
 t0 = last = time.time()
+cnt = (ctypes.c_uint64 * 2)()           # DvsLive.capture's VC0 and leader buffers
 try:
-    while a.n == 0 or saved < a.n:
+    if live and a.raw8:
+        live.capture(cnt)
+    while not (live and a.raw8) and (a.n == 0 or saved < a.n):
         # the OUTPUT (leader) fd can poll writable without a finished buffer: time out on the clock
         if time.time() - last > a.t:
             log('timeout: no VC0 frame in %.1f s' % a.t)
@@ -472,15 +472,11 @@ try:
                 idx, flags, used = vc0.dqbuf()
             except BlockingIOError:
                 continue
-            if live:
+            if live:                            # Live, the OV5647 view (DvsLive runs its loop in C)
                 live.show(vc0.bufs[idx][0][1])
                 saved += 1
                 last = time.time()
-                if a.raw8:
-                    live.note_bufs(vc0, idx)
                 vc0.qbuf(idx)
-                if a.raw8:
-                    live.check()
                 continue
             data = vc0.bufs[idx][0][1][:]           # whole allocation (2x the plane) to see overruns
             name = '%s_%d.raw' % (a.o, saved)
@@ -498,5 +494,6 @@ except KeyboardInterrupt:
     log('interrupted')
 finally:
     stream_off()
+    saved += cnt[0]
     log('stopped after %.1f s, %d VC0 frame(s)' % (time.time() - t0, saved))
 leave(130 if user_quit else 0 if saved else 1)

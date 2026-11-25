@@ -6833,7 +6833,7 @@ BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. �
 | MIPI 버퍼 | 65.5/s | 72/s |
 | 버퍼당 해독(`ingest_ms`) | 4.3 ms | 2.0 ms |
 | 최신 이벤트와의 지연 | 30 ms | 23 ms |
-| 캡처·해독 주 스레드 CPU | 99.9% | 16.4% |
+| 캡처·해독 주 스레드 CPU | 29.9%(처음 99.9%로 적은 것은 잘못 읽은 값, 11.112) | 16.4% |
 | GPU 뷰 `dvsgl` CPU | 22% | 약 4.5% |
 | 함께 도는 것 | 행동 분류 `dvs-act` 55%, `dvs-bin` 30%, 얼굴 `dvs-face` 40% | 없음 |
 | 시작 뒤 누적 손실 | fe_missed 9, short 3, ts_bad 4 (25.6만 버퍼) | 모두 0 |
@@ -6843,7 +6843,7 @@ BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. �
 - 필터가 특히 크게 차이 나는 까닭은 가설로, 화소마다 시각을 두는 표를 무작위로 읽는 일이 캐시와 메모리에 묶이기 때문으로 본다. A78AE는 L2 256K/코어, L3 2 MB/클러스터다. E850의 캐시 크기는 보드에서 읽지 못했다(`lscpu -C`가 비어 있음).
 - E850은 필터를 켜면 해독도 15 → 24 ns(+58%)로 느려진다. Jetson은 +5%다. 가설: 필터 스레드(CPU3)가 같은 클러스터의 캐시와 메모리를 두고 다툰다.
 - 용량(계산): E850은 CPU 필터 한계가 코어 하나로 초당 약 1,650만 이벤트다. 바쁜 장면(움직일 때 초당 3,500만, 11.102)에서는 CPU 필터가 뒤처진다. 보드6 데스크톱은 GPU 뷰가 직접 필터하므로 CPU 필터는 쉰다.
-- 보드6 실시간 주 스레드가 99.9%인 까닭은 분석하지 않았다. 해독 자체는 4.3 ms × 65.5/s ≈ 28%다. 남은 것은 Python 캡처 루프, QUERYBUF, 분류기·얼굴 스레드와의 GIL로 짐작한다(가설).
+- (11.112에서 고침) 보드6 주 스레드의 99.9%는 `top -H -p`가 잘못 보인 값이었다. `/proc/<pid>/task/*/stat`로 30초를 재면 29.9%이고, 그중 해독이 약 23%(3.5 ms × 65.8/s)다.
 - 정리: "Jetson이 디코딩을 못 한다"는 느낌은 하드웨어가 아니라 예전 NRV RAW2 파이프라인 탓이었다. 같은 디코더로는 Jetson이 빠르다.
 - MAXN_SUPER(1728 MHz)로 바꾸면 클럭만으로 약 29% 더 빨라질 것이다(계산, 재지 않음).
 
@@ -6854,3 +6854,96 @@ BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. �
 **보드에 둔 것:**
 - Jetson: `~/bench/{e850,jetson}.gz`, `~/dvs-jetson/dvsbench.py`, `~/dvsrec/20261125T154001Z-none.{gz,json}`.
 - 보드6: `/var/tmp/bench/`(녹화 둘, dvsbench.py).
+
+### 11.112 보드6 DVS: 캡처 루프·행동 분류·얼굴 검출을 C로 (2026-11-26)
+
+사용자: "비교는 새로운 세션에서 하자, 저장하고, 새로운 세션 가기 전에, 파이썬 캡처 루프, 분류기 얼굴 검출 등을 c로 최적화해".
+
+**먼저 잰 것(관찰).** 보드6, 30초, `/proc/<pid>/task/*/stat`의 utime+stime(`thrcpu.sh`). 프레임당 약 28만 이벤트, 버퍼 65.8/s:
+
+| 스레드 | CPU(코어 하나 = 100%) | 하는 일 |
+|---|---:|---|
+| 주 스레드(`python3`) | 29.9% | Python 캡처 루프 + `dvs_ingest` 해독(3.5 ms × 65.8/s ≈ 23%) |
+| `dvs-act` | 54.3% | Python: numpy 변환, onnxruntime, 판정. 한 단계 33 ms |
+| `dvs-face` | 40.7% | Python: numpy 변환, YuNet. 한 번 120~135 ms |
+| `dvs-bin` | 23.0% | C 묶기(`dvs_act_bin`) + Python 큐 |
+| `dvs-render` | 3.9% | C |
+| 합계 | 152.7% | |
+
+- 11.111 표의 "주 스레드 99.9%"는 `top -H -b -p`가 보인 값을 잘못 읽은 것이었다. 위 표가 맞다.
+- 보드4에서 모델만 따로 재면(CPU5, 1스레드, ORT 1.31.1 프로파일): 분류 26.8 ms(Conv 55%, FusedConv 30%), 얼굴 110.9 ms(Conv 55%, FusedConv 39%). 시간 대부분이 onnxruntime 합성곱이다. 따라서 C로 옮겨 줄일 수 있는 것은 그 바깥(Python 루프, numpy 변환, GIL 대기)뿐이라고 보고 시작했다.
+
+**바꾼 것(저장소):**
+- `tools/linux510/dvsview.c`:
+  - `dvs_capture()`: ov5647-cap.py `--live --raw8`의 캡처 루프를 C로 옮겼다. Python은 노드 준비·버퍼 할당·stream on까지 하고, `dvs_cap_node`·`dvs_cap_shot`으로 버퍼를 넘긴 뒤 `dvs_capture(len, 500 ms, …)`를 되풀이해 부른다.
+  - C 루프가 하는 일(GIL 없이): VC0 DQBUF, `dvs_ingest`, 다른 버퍼 QUERYBUF 집계(`dvs_buf_note`), QBUF. leader(메타) 버퍼는 shot 필드를 되써서 다시 QBUF한다(예전 `write_shot`).
+  - 신호가 오면 `-EINTR`로 돌아가서 Python이 SIGTERM/SIGINT를 처리한다. VC0 버퍼가 `-t`초 없으면 `-ETIMEDOUT`, 2초 창에 짧은 버퍼가 `--stuck`개 이상이면 `-EPIPE`(예전 `check()`)를 돌려준다.
+  - `dvs_buf_note`/`dvs_buf_take`: 페이지 DRAM 그래프의 버퍼 수를 C에 둔다. dvsctl의 `buf_note`/`BUFS`를 대신한다. Jetson의 dvs-jetson.py도 이것을 부른다.
+  - `pin()`을 CPU 마스크를 받는 `dvs_pin()`으로 내보냈다.
+- `tools/linux510/dvsai.c`(새 파일): `-DDVS_AI`로 빌드하면 dvsview.c가 포함한다.
+  - onnxruntime C API를 Python 휠의 `libonnxruntime.so.1.31.1`에서 dlopen한다. 그래서 libdvsview.so에 링크 의존성이 생기지 않는다(`dvsact.ort_lib()`가 경로를 찾는다).
+  - 스레드는 CPU4~6, 최고 클럭(uclamp), onnxruntime 1스레드로 돈다.
+  - `dvs-bin`: 60 ms마다 링을 묶어 큐(8)에 넣는다.
+  - `dvs-act`: log1p → 모델(GRU 상태 h) → softmax → `dvs_act_observe`(dvsact.observe와 같은 판정, JSONL 줄, `/act` 상태).
+  - `dvs-face`: 200 ms마다 `dvs_surface` 100 ms를 화면 방향으로 뒤집고 0/255로 만들어 YuNet에 넣는다(`dvs_face_detect`, 출력 9개만 받음). 최고 점수 상자에 최근 5개 중앙값 너비를 붙여 `dvs_mark`로 표시한다.
+  - 로그 형식은 예전과 같다(`[dvsact] steps …`, `[dvsface] N runs …`).
+- `dvsact.py`·`dvsface.py`: `start()`가 C를 부른다. Python 스레드(`_run`, `_bin`)는 지웠다. `Binner`, `Judge`, `observe`, `line`, `detect`, `decode`는 Mac 학습·평가와 비교 시험의 기준으로 남겼다.
+- `ov5647-cap.py`: `DvsLive.capture()`가 C 루프를 부른다. `stuck()`은 로그·kmsg·SIGTERM만 한다. OV5647 `Live` 경로는 그대로 Python이다.
+- `dvsctl.py`: `/act`는 `dvs_act_status()`를 그대로 보낸다(없는 libdvsview면 off JSON). DRAM 그래프는 `dvs_buf_take()`에서 읽는다.
+- `features/host/bundle.sh`: onnxruntime 1.31.1 헤더를 NuGet 패키지에서 받아(sha256 고정, `out/ort/`, git에는 넣지 않음) `-DDVS_AI -I… -ldl`로 빌드한다. GitHub의 microsoft/onnxruntime은 404였다(2026-11-26).
+- `tools/jetson/deploy.sh`는 그대로다. dvsai 없이 빌드하므로 Jetson의 `/act`는 off다.
+
+**찾아서 고친 버그(관찰):**
+- `dvsface.decode`(Python, 11.99부터): 안쪽 루프가 상자 너비를 `w`에 넣는데, `w`는 입력 너비이기도 했다. 그래서 한 stride에서 후보가 나오면 다음 stride의 격자 너비 `n = w // st`가 틀렸다.
+  - 결과: stride 16·32 후보의 위치가 틀렸다. 그 후보가 점수 최고면 얼굴 표시가 엉뚱한 곳에 갔을 수 있다. 보드에서 실제로 그랬는지는 확인하지 않았다.
+  - C 판과 비교 시험이 이것을 잡았다(문턱 0에서 Python이 nan/inf). Python 쪽 변수 이름을 고쳤다.
+
+**검증(관찰):**
+- `tools/linux510/test_dvsai.py`(새 파일): 시험 4개.
+  - 판정: 3000단계 × 2(모든 클래스 / `none sit_down stand_up`). JSONL 줄과 `/act` JSON이 Python과 글자까지 같았다.
+  - 모델 한 단계: 40프레임, 중간에 리셋. 확률 차이 최대 1e-5 미만.
+  - YuNet: 합성 영상 12장, 문턱 0과 0.4. 상자가 rtol 1e-4 안에서 같았다.
+  - 버퍼 통계.
+- 다른 시험: `test_dvsact` + `test_dvsctl`(`test_buf_note`는 test_dvsai로 옮김)과 합쳐 27개 통과. Mac Docker는 Debian 12 arm64 + ORT 1.31.1 + numpy 1.24, 보드6은 16개.
+- 스레드까지 붙인 전체 경로: Docker에서 `sit_down` 녹화(1,282만 이벤트)를 `dvs_replay`로 실시간으로 넣었다. 같은 링을 Python `CBinner`도 읽어 예전 Python 경로로 돌렸다.
+  - 20초(332프레임) 동안 상태 변화 5개가 p 값까지 같았다(appear stand_up 0.79, sit_down 0.77, stand_up 0.81, sit_down 0.86, stand_up 0.71).
+- 함께 본 것(관찰, 따로 원인을 보지 않음): 같은 녹화도 라이브러리 경로(`dvs_replay` → `dvs_ingest`)와 시험 도구 `dvsview --replay`(줄마다 `decode`)의 이벤트가 다르다. 34번째 60 ms 프레임에서 87,326 대 88,722로 1.6% 차이였다.
+  - Mac 학습 자료(`.bin`)는 시험 도구 경로로 만든다. 그래서 보드 추론과 학습 사이에 작은 차이가 있다는 뜻이다.
+
+**보드6에서 잰 결과(관찰).** 같은 방법으로 30초, 프레임당 약 28만 이벤트, 버퍼 66/s:
+
+| 스레드 | 전(Python) | 후(C) | 차이 |
+|---|---:|---:|---:|
+| 주 스레드(캡처 + 해독) | 29.9% | 24.9% | −5.0 |
+| `dvs-act` | 54.3% | 52.0% | −2.3 |
+| `dvs-bin` | 23.0% | 21.3% | −1.7 |
+| `dvs-face` | 40.7% | 40.3% | −0.4 |
+| `dvs-render` | 3.9% | 3.9% | 0 |
+| 합계 | 152.7% | 143.1% | −9.6 |
+
+- 해독(`ingest_ms`)은 3.5~3.6 ms로 그대로다. 주 스레드가 줄어든 5%가 Python 루프 몫이다.
+- 손실: 30초 동안 짧은 버퍼, fe_missed, ts_missed, ts_bad 모두 0. 버퍼는 1974개(65.8/s)였다.
+- 단계 시간(로그): 분류 34~35 ms, 얼굴 119~129 ms. 모델 계산이 그대로라 거의 같다.
+- `/act`, `/history`의 `vc0_n 8, free 6, wait 1`, 상태 변화 JSONL이 나오는 것을 확인했다.
+- 처음 배포한 판은 `dvs-act` 스레드에서 `dvs_pin`을 빠뜨렸다. 이름이 `python3`이고, CPU 0~7 아무 데서나 uclamp 없이 58%를 썼다. 고쳐서 다시 넣은 판이 위 표다.
+  - 그 판에서는 해독이 2.4 ms로 빨랐다. 까닭은 보지 않았다(가설: 분류기가 클러스터0에서 돌아 클러스터1의 메모리 경합이 줄었다).
+
+**실패하거나 쓰지 않은 실험(관찰, 보드4 CPU5):**
+- FP16 모델(onnxconverter-common, GRU·Gemm·Softmax는 FP32로 둠):
+  - 분류는 27.0 → 21.3 ms(1.26배)였지만 출력 차이가 최대 0.022였다. 프로파일에서 FP16 Mul 30%, Cast 9%, Transpose 8%가 이득을 먹었다.
+  - 얼굴은 MaxPool(opset 11)에 FP16 커널이 없어 세션을 만들지 못했다.
+  - 판정이 바뀔 위험에 비해 이득이 작아 쓰지 않는다.
+- YuNet 입력 3채널(모두 같은 흑백)을 첫 합성곱에서 1채널로 접는 방법: 첫 Conv가 얼굴 시간의 10.2%라서 줄어드는 몫은 약 7%(코어의 3%)다. 모델 변환 단계를 더할 만하지 않아 하지 않았다.
+
+**정리:**
+- Python을 C로 옮겨서 줄어든 것은 합계로 코어 하나의 약 10%(152.7 → 143.1%)다. 남은 분류 52%와 얼굴 40%는 onnxruntime의 FP32 합성곱이다.
+- 더 줄이려면 동작을 바꿔야 한다. 예를 들어 얼굴 검출 횟수를 줄이거나(지금 약 3회/s), 이벤트가 적을 때 건너뛰거나, 더 작은 입력을 쓴다. 이는 사용자가 정할 일이다.
+
+**보드에 바꾼 것:**
+- 보드6:
+  - 설치: `/usr/local/lib/libdvsview.so`(DVS_AI), `/usr/local/bin/ov5647-cap.py`, `/usr/local/share/dvsview/{dvsctl,dvsact,dvsface}.py`.
+  - 예전 파일은 `/var/tmp/pre-11112/`에 있다. 시험 파일과 `thrcpu.sh`(저장소 `tools/board/thrcpu.sh`)는 `/var/tmp/`에 있다.
+  - `e850-dvs`는 `systemd-run --unit=e850-dvs --collect -E DISPLAY=:1 /usr/local/bin/dvs --auto`로 다시 띄웠다.
+- Jetson: `sh tools/jetson/deploy.sh philip@192.168.0.195`로 넣었다. 실행 중인 `dvs-jetson.py`를 SIGTERM하니 런처가 새 판으로 다시 띄웠다(79 MIPI 프레임/s, 오류 0, DRAM 그래프 정상, `/act` off).
+- 보드4와 Mac 복제 이미지(`clone-20261124-b6`)에는 아직 예전 판이 들어 있다.
+

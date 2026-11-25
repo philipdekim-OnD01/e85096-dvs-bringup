@@ -3,9 +3,9 @@
  * dvsview: S5KRC1S compressed AER packets -> event frames on /dev/fb0 at a fixed frame rate (11.27),
  * and box size measurement on the same frames (11.29).
  *
- * ov5647-cap.py --live --raw8 hands every VC0 buffer to dvs_ingest() through ctypes (the GIL is released
- * for the call): the buffer is copied out of the uncached dma-buf, decoded into a ring of (t, x, y,
- * polarity) events and zeroed. A render thread draws, every 1/fps s, the events of one frame period by
+ * ov5647-cap.py --live --raw8 sets the capture up and runs its loop here (dvs_capture, 11.112; before, it handed
+ * every VC0 buffer to dvs_ingest() through ctypes): the buffer is copied out of the uncached dma-buf, decoded into
+ * a ring of (t, x, y, polarity) events and zeroed. A render thread draws, every 1/fps s, the events of one frame period by
  * *sensor timestamp*, a playout delay behind real time. A VC0 buffer holds ~70 ms of events in a sparse
  * scene and buffers come ~14/s (11.25), so drawing per buffer can not reach 30 fps; drawing by
  * timestamp shows a new 33 ms slice every frame, ~one buffer period late.
@@ -38,13 +38,17 @@
  *     apt-get -qq install -y gcc zlib1g-dev >/dev/null &&
  *     gcc -O2 -Wall -shared -fPIC -o /s/libdvsview.so /s/dvsview.c -lpthread -lm -lz &&
  *     gcc -O2 -Wall -DDVSVIEW_TEST -o /tmp/t /s/dvsview.c -lpthread -lm -lz && /tmp/t [capture.raw]'
+ * The boards' build adds the classifier and the face width (dvsai.c, 11.112): -DDVS_AI -I<onnxruntime include> ... -ldl
+ * (features/host/bundle.sh; tools/jetson/deploy.sh builds without).
  */
 #define _GNU_SOURCE			/* sched_setaffinity, CPU_SET */
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <linux/futex.h>
+#include <linux/videodev2.h>
 #include <math.h>
+#include <poll.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
@@ -361,9 +365,9 @@ static void filter(uint64_t from, uint64_t to, uint32_t baf)
 	}
 }
 
-/* This thread on cpu only, at its cluster's top clock while it runs (uclamp, as dvsctl.pin does for the page,
- * 11.30), renamed unless name is NULL; a CPU taken offline (hotplug) leaves it where it was. */
-static void pin(int cpu, const char *name)
+/* This thread on the CPUs of mask only, at its cluster's top clock while it runs (uclamp, as dvsctl.pin does for
+ * the page, 11.30), renamed unless name is NULL; a CPU taken offline (hotplug) leaves it where it was. */
+void dvs_pin(uint32_t mask, const char *name)
 {
 	struct { uint32_t size, policy; uint64_t flags; int32_t nice; uint32_t prio; uint64_t rt, dl, per;
 		 uint32_t umin, umax; } a = { sizeof(a), 0, 0x08 | 0x10 | 0x20, 0, 0, 0, 0, 0, 1024, 1024 };
@@ -374,10 +378,13 @@ static void pin(int cpu, const char *name)
 	if (syscall(SYS_sched_setattr, 0, &a, 0))	/* KEEP_POLICY | KEEP_PARAMS | UTIL_CLAMP_MIN */
 		fprintf(stderr, "dvsview: uclamp: %s\n", strerror(errno));
 	CPU_ZERO(&set);
-	CPU_SET(cpu, &set);
+	for (int c = 0; c < 32; c++)
+		if (mask >> c & 1)
+			CPU_SET(c, &set);
 	if (sched_setaffinity(0, sizeof(set), &set))
-		fprintf(stderr, "dvsview: CPU%d: %s\n", cpu, strerror(errno));
+		fprintf(stderr, "dvsview: CPUs 0x%x: %s\n", mask, strerror(errno));
 }
+#define pin(cpu, name) dvs_pin(1u << (cpu), name)
 
 /* Events from display time first on became drawable now: the playout delay has to cover them (the decoder after
  * each buffer, or with the filter on the filter thread after each chunk: under heavy motion the filter took long
@@ -1794,6 +1801,176 @@ page:
 		S.back[i] = BLACK;
 	return start_filter() ?: -pthread_create(&th, NULL, render, NULL);
 }
+
+/*
+ * The page's DRAM graph (11.51): at each VC0 DQBUF the capture loop (dvs_capture, or dvs-jetson.py) counts the other
+ * n - 1 buffers QUEUED (the driver's, free for the DMA) and DONE (filled, waiting to be dequeued); dvs_buf_take()
+ * (dvsctl's sample thread) gives n, the fewest free and the most waiting since the last take (-1: no DQBUF since),
+ * and the frame bytes.
+ */
+static _Atomic int bn_n, bn_free = -1, bn_wait = -1, bn_bytes;
+
+void dvs_buf_note(int n, int free, int wait, int frame_bytes)
+{
+	int v = atomic_load(&bn_free);
+
+	atomic_store(&bn_n, n);
+	atomic_store(&bn_bytes, frame_bytes);
+	while ((v < 0 || free < v) && !atomic_compare_exchange_weak(&bn_free, &v, free))
+		;
+	v = atomic_load(&bn_wait);
+	while (wait > v && !atomic_compare_exchange_weak(&bn_wait, &v, wait))
+		;
+}
+
+void dvs_buf_take(int *v)
+{
+	v[0] = atomic_load(&bn_n);
+	v[1] = atomic_exchange(&bn_free, -1);
+	v[2] = atomic_exchange(&bn_wait, -1);
+	v[3] = atomic_load(&bn_bytes);
+}
+
+/*
+ * The capture loop of ov5647-cap.py --live --raw8 (11.112). Python opens the Pablo nodes, allocates and queues the
+ * dma-bufs and turns the sensor on, hands the buffers over (dvs_cap_node, dvs_cap_shot), then calls dvs_capture()
+ * again and again. Here, without the GIL: each VC0 buffer is decoded (dvs_ingest), the others counted for the page
+ * (dvs_buf_note) and the buffer queued again; each leader (meta) buffer gets its shot fields back and is queued
+ * again. In Python the loop took ~5 % of CPU1 beside the decoding, and waited for the GIL behind the page and the
+ * classifier threads.
+ */
+#define CAP_BUFS 32
+static struct {
+	int fd[2], n[2], planes[2];		/* [0] VC0 (CAPTURE_MPLANE), [1] leader (OUTPUT_MPLANE) */
+	uint32_t len[2][VIDEO_MAX_PLANES];
+	int dfd[2][CAP_BUFS][VIDEO_MAX_PLANES];	/* the dma-buf of each plane */
+	uint8_t *map[2][CAP_BUFS];		/* VC0: plane 0 (decoded); leader: its last plane (the shot meta) */
+	uint32_t shot_off[4], shot_len[4], nshot;
+	uint8_t *shot[4];			/* bytes of leader buffer 0 that every leader QBUF gets again */
+	int64_t last, next_check;		/* the last VC0 buffer, the next stuck check */
+	int64_t short0;				/* short buffers at the last check, -1 before it */
+} CAP = { .short0 = -1 };
+
+/* leader 0: VC0, else the leader node; len[planes]; dfd[n][planes]; map[n] (see CAP) */
+int dvs_cap_node(int leader, int fd, int n, int planes, const uint32_t *len, const int *dfd, uint8_t *const *map)
+{
+	int k = !!leader;
+
+	if (n < 1 || n > CAP_BUFS || planes < 1 || planes > VIDEO_MAX_PLANES)
+		return -EINVAL;
+	CAP.fd[k] = fd;
+	CAP.n[k] = n;
+	CAP.planes[k] = planes;
+	memcpy(CAP.len[k], len, planes * sizeof(*len));
+	for (int i = 0; i < n; i++) {
+		memcpy(CAP.dfd[k][i], dfd + i * planes, planes * sizeof(*dfd));
+		CAP.map[k][i] = map[i];
+	}
+	return 0;
+}
+
+/* Bytes [off, off + len) of every leader buffer's meta as they are now in buffer 0 (ov5647-cap.py write_shot): the
+ * driver clears capture[].request when it drops a VC0 frame, and a stale 0 stops VC0 for good. */
+int dvs_cap_shot(uint32_t off, uint32_t len)
+{
+	if (CAP.nshot == 4 || !CAP.map[1][0] || !(CAP.shot[CAP.nshot] = malloc(len)))
+		return -EINVAL;
+	memcpy(CAP.shot[CAP.nshot], CAP.map[1][0] + off, len);
+	CAP.shot_off[CAP.nshot] = off;
+	CAP.shot_len[CAP.nshot++] = len;
+	return 0;
+}
+
+static int cap_ioctl(int k, unsigned long req, int i, int *idx, uint32_t *flags)
+{
+	struct v4l2_plane pl[VIDEO_MAX_PLANES] = { { 0 } };
+	struct v4l2_buffer b = { .index = i, .memory = V4L2_MEMORY_DMABUF, .m.planes = pl, .length = CAP.planes[k],
+				 .type = k ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE };
+
+	if (req == VIDIOC_QBUF) {
+		for (int p = 0; p < CAP.planes[k]; p++) {
+			pl[p].bytesused = pl[p].length = CAP.len[k][p];
+			pl[p].m.fd = CAP.dfd[k][i][p];
+		}
+		for (uint32_t s = 0; k && s < CAP.nshot; s++)
+			memcpy(CAP.map[1][i] + CAP.shot_off[s], CAP.shot[s], CAP.shot_len[s]);
+	}
+	if (ioctl(CAP.fd[k], req, &b))
+		return -errno;
+	if (idx)
+		*idx = b.index;
+	if (flags)
+		*flags = b.flags;
+	return 0;
+}
+
+/*
+ * Capture for up to ms. Returns 0 then, -EINTR on a signal (Python handles it, then calls again), -ETIMEDOUT after
+ * timeout_ms without a VC0 buffer, -EPIPE when stuck: at least stuck short buffers in one 2 s window after the
+ * first 10 s (a Wi-Fi firmware panic left the CSIS buffer bookkeeping one slot off, 11.46: the caller restarts the
+ * stream; 0: no check), else -errno of an ioctl. count[0] and [1] add the VC0 and the leader buffers.
+ */
+int dvs_capture(size_t len, int ms, int timeout_ms, int stuck, uint64_t *count)
+{
+	int64_t now = now_us(), end = now + ms * 1000LL;
+
+	if (!CAP.last) {
+		CAP.last = now;
+		CAP.next_check = now + 10000000;
+	}
+	while ((now = now_us()) < end) {
+		/* the OUTPUT (leader) fd can poll writable without a finished buffer: DQBUF then says EAGAIN */
+		struct pollfd p[2] = { { .fd = CAP.fd[0], .events = POLLIN }, { .fd = CAP.fd[1], .events = POLLOUT } };
+		uint32_t flags, nfree = 0, nwait = 0;
+		int i, r;
+
+		if (now - CAP.last > timeout_ms * 1000LL)
+			return -ETIMEDOUT;
+		if (poll(p, 2, 200) < 0)
+			return -errno;
+		if (p[1].revents) {
+			r = cap_ioctl(1, VIDIOC_DQBUF, 0, &i, NULL);
+			if (r == -EAGAIN)
+				usleep(5000);
+			else if (r || (r = cap_ioctl(1, VIDIOC_QBUF, i, NULL, NULL)))
+				return r;
+			else
+				count[1]++;
+		}
+		if (!p[0].revents)
+			continue;
+		r = cap_ioctl(0, VIDIOC_DQBUF, 0, &i, NULL);
+		if (r == -EAGAIN)
+			continue;
+		if (r)
+			return r;
+		dvs_ingest(CAP.map[0][i], len);
+		count[0]++;
+		CAP.last = now_us();
+		for (int j = 0; j < CAP.n[0]; j++) {
+			if (j == i || cap_ioctl(0, VIDIOC_QUERYBUF, j, NULL, &flags))
+				continue;
+			nfree += !!(flags & V4L2_BUF_FLAG_QUEUED);
+			nwait += !!(flags & V4L2_BUF_FLAG_DONE);
+		}
+		dvs_buf_note(CAP.n[0], nfree, nwait, len);
+		if ((r = cap_ioctl(0, VIDIOC_QBUF, i, NULL, NULL)))
+			return r;
+		if (stuck && CAP.last >= CAP.next_check) {
+			int64_t s = atomic_load(&S.lk.short_bufs);
+
+			CAP.next_check = CAP.last + 2000000;
+			if (CAP.short0 >= 0 && s - CAP.short0 >= stuck)
+				return -EPIPE;
+			CAP.short0 = s;
+		}
+	}
+	return 0;
+}
+
+#ifdef DVS_AI
+#include "dvsai.c"			/* the classifier and the face width in C (11.112): needs onnxruntime_c_api.h */
+#endif
 
 #ifdef DVSVIEW_TEST
 static int nev(void)

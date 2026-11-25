@@ -16,7 +16,7 @@ threads, all on CPU7 at the top clock (pin(), 11.30):
   GET  /sensor     sensor settings: saved and in the CIS module now, with ranges (11.29)
   POST /sensor     {"margin": int, "flush_us": int}: save to SENSOR and restart (dvslive.service brings the
                    stream back in ~5 s with them; dvslive.sh writes them to the CIS module before stream on)
-  GET  /act        the person action classifier now (dvsact.STATUS, 11.45): on, state, top class and p, newest changes
+  GET  /act        the person action classifier now (dvsai.c, 11.45/11.112): on, state, top class and p, newest changes
   GET  /rec        the recorder: {"state": idle|countdown|recording, "left_s", "last"}
   POST /rec        {"label": one of dvsact.CLASSES, "s": 1-30}: after a 3 s countdown, the packets of s seconds to
                    REC_DIR/<UTC>-<label>.gz (dvs_record) and a .json beside it, for the action classifier (11.39)
@@ -70,10 +70,10 @@ IRQSTAT = '/sys/module/csis_irqstat/parameters/'
 MIPI_KEYS = ('mipi_fs', 'mipi_fe', 'mipi_err')
 # DRAM (11.51): the VC0 buffers, n in all; at each DQBUF the capture loop counts the other buffers QUEUED (the
 # driver's, free for the DMA) and DONE (filled, waiting to be dequeued): the fewest free and the most waiting
-# since the last sample
+# since the last sample (libdvsview's dvs_buf_note / dvs_buf_take, 11.112)
 BUF_KEYS = ('vc0_n', 'vc0_free', 'vc0_wait')
 HIST_COLS = ('t',) + HIST_KEYS + ('crc',) + LINK_KEYS + MIPI_KEYS + BUF_KEYS
-BUFS = {'n': None, 'free': None, 'wait': None, 'frame_bytes': None}
+FRAME_BYTES = [None]                        # the VC0 buffer's bytes, for /history
 I2C_ADDR, I2C_DRIVER = 0x10, 'S5KRC1S'      # 7-0010 on the current DT (i2c-7, HSI2C2)
 # the address banner on HDMI (11.50): glyphs from tools/host/hangul-atlas.py (not in git: a Mac system font's)
 FONT = os.path.join(HERE, 'dvsfont.json')
@@ -107,12 +107,21 @@ def read_int(path):
         return None
 
 
-def buf_note(n, free, wait, frame_bytes):
-    """ov5647-cap.py at each VC0 DQBUF: free and wait among the other n - 1 buffers (see BUF_KEYS)"""
-    b = BUFS
-    b['n'], b['frame_bytes'] = n, frame_bytes
-    b['free'] = free if b['free'] is None else min(b['free'], free)
-    b['wait'] = wait if b['wait'] is None else max(b['wait'], wait)
+def buf_take(lib):
+    """{'vc0_n', 'vc0_free', 'vc0_wait'} since the last take (None: no DQBUF since), and FRAME_BYTES"""
+    v = (ctypes.c_int * 4)()
+    lib.dvs_buf_take(v)
+    FRAME_BYTES[0] = v[3] or None
+    return {'vc0_n': v[0] or None, 'vc0_free': None if v[1] < 0 else v[1], 'vc0_wait': None if v[2] < 0 else v[2]}
+
+
+ACT_OFF = b'{"on": false, "state": "none", "top": null, "p": 0.0, "recent": []}'
+
+
+def act_status(lib):
+    """GET /act: the classifier's state (libdvsview's dvsai.c); off in a libdvsview built without it"""
+    buf = ctypes.create_string_buffer(8192)
+    return buf.value if hasattr(lib, 'dvs_act_status') and lib.dvs_act_status(buf, len(buf)) > 0 else ACT_OFF
 
 
 def mipi():
@@ -447,8 +456,7 @@ def start(lib, port, banner=True):
             elif path == '/sensor':
                 self.send(json.dumps(sensor()).encode())
             elif path == '/act':
-                import dvsact               # the classifier's module in this process; 'on' false without it
-                self.send(json.dumps(dvsact.STATUS).encode())
+                self.send(act_status(lib))
             elif path == '/rec':
                 self.send(json.dumps(rec.status()).encode())
             elif path == '/history':
@@ -457,7 +465,7 @@ def start(lib, port, banner=True):
                 except ValueError:
                     return self.send(b'{"error": "since: epoch seconds"}', code=400)
                 self.send(json.dumps({'keys': HIST_COLS, 'rows': hist.since(t),
-                                      'frame_bytes': BUFS['frame_bytes']}).encode())
+                                      'frame_bytes': FRAME_BYTES[0]}).encode())
             elif path == '/reg':
                 try:
                     a, n = reg_args(self.path.partition('?')[2])
@@ -537,9 +545,7 @@ def start(lib, port, banner=True):
         while True:
             st = json.loads(lib.dvs_stats())
             if 'fps' in st:                     # "{}" before the first stats period
-                b = {'vc0_n': BUFS['n'], 'vc0_free': BUFS['free'], 'vc0_wait': BUFS['wait']}
-                BUFS['free'] = BUFS['wait'] = None      # a race with buf_note loses one DQBUF's count at most
-                hist.add(time.time(), st, read_int(CRC), dict(mipi(), **b))
+                hist.add(time.time(), st, read_int(CRC), dict(mipi(), **buf_take(lib)))
             time.sleep(HIST_S)
 
     srv = http.server.ThreadingHTTPServer(('', port), Handler)

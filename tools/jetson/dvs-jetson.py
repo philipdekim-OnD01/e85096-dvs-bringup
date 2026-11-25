@@ -209,9 +209,9 @@ def buf_flags(i):
 
 
 def note_bufs(idx):
-    """dvsctl's DRAM graph: the other buffers QUEUED (free for VI) and DONE (waiting), as ov5647-cap.py"""
+    """dvsctl's DRAM graph: the other buffers QUEUED (free for VI) and DONE (waiting), as dvs_capture (dvsview.c)"""
     f = [buf_flags(i) for i in range(n) if i != idx]
-    dvsctl.buf_note(n, sum(x & 2 != 0 for x in f), sum(x & 4 != 0 for x in f), size)
+    lib.dvs_buf_note(n, sum(x & 2 != 0 for x in f), sum(x & 4 != 0 for x in f), size)
 
 
 def stream_off():

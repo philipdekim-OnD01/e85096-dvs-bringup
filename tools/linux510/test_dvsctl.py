@@ -6,7 +6,6 @@ import tempfile
 import time
 import unittest
 
-import dvsctl
 import zlib
 
 from dvsctl import HIST_COLS, History, Recorder, banner_rows, evframe, evframe_args, rec_check, reg_args
@@ -99,12 +98,6 @@ class TestPage(unittest.TestCase):
         self.assertEqual(rows[0], bytearray([255, 0, 255]))   # 'b' unknown -> '?', clipped at w 3
         self.assertEqual(rows[1], bytearray([0, 255, 255]))
         self.assertEqual(rows[2], bytearray([128, 0, 0]))      # level 128 scales the alpha
-
-    def test_buf_note(self):
-        dvsctl.BUFS.update(free=None, wait=None)
-        for free, wait in ((6, 0), (4, 2), (7, 1)):
-            dvsctl.buf_note(8, free, wait, 1 << 20)
-        self.assertEqual((dvsctl.BUFS['free'], dvsctl.BUFS['wait'], dvsctl.BUFS['n']), (4, 2, 8))
 
     def test_history(self):
         h = History(n=3)
