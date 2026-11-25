@@ -1,7 +1,7 @@
 #!/bin/sh
-# usbcam: the USB (UVC) cameras on the Jetson's screen, two side by side, one alone (docs 11.113); desktop icon
-# usbcam.desktop (deploy.sh). The window closes it.
-# shortcut: YUY2 640x480 30 fps only, all the Generic HD cameras (1903:8328) give; another camera: decodebin + scale.
+# usbcam: the USB (UVC) cameras on the Jetson's screen (docs 11.113, 11.115); desktop icon usbcam.desktop (deploy.sh).
+# The same viewer and options as the E850's desktop icon (features/desktop/e850-open cam, 11.114), so the two boards
+# compare like with like: mpv --vo=gpu, the camera's own format. Two cameras: side by side (hstack). The window closes it.
 exec 9> "${XDG_RUNTIME_DIR:-/tmp}/usbcam.lock"
 flock -n 9 || { notify-send -i accessories-camera "USB 카메라" "이미 화면에 떠 있습니다." 2>/dev/null; exit 1; }
 devs=
@@ -11,7 +11,7 @@ for d in /sys/class/video4linux/video*; do
 done
 set -- $devs
 [ $# -gt 0 ] || { notify-send -i accessories-camera "USB 카메라" "연결된 USB 카메라가 없습니다. USB-A 포트에 꽂아 주세요." 2>/dev/null; exit 1; }
-caps=video/x-raw,format=YUY2,width=640,height=480,framerate=30/1
-[ $# = 1 ] && exec gst-launch-1.0 -e v4l2src device=$1 ! $caps ! videoconvert ! xvimagesink sync=false
-exec gst-launch-1.0 -e compositor name=c sink_1::xpos=640 ! videoconvert ! xvimagesink sync=false \
-    v4l2src device=$1 ! $caps ! queue ! c.sink_0 v4l2src device=$2 ! $caps ! queue ! c.sink_1
+command -v mpv >/dev/null || { notify-send -i accessories-camera "USB 카메라" "mpv가 없습니다: sudo apt install mpv" 2>/dev/null; exit 1; }
+[ $# = 1 ] && exec mpv --vo=gpu --profile=low-latency --untimed --no-terminal --title="USB 카메라" "av://v4l2:$1"
+exec mpv --vo=gpu --profile=low-latency --untimed --no-terminal --title="USB 카메라" "av://v4l2:$1" --external-file="av://v4l2:$2" \
+    --lavfi-complex='[vid1][vid2]hstack[vo]'

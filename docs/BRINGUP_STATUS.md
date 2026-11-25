@@ -10,6 +10,7 @@
   - `e850-open`은 장치가 없으면 안내 창(`e850-say`)을 띄우고 끝난다.
   - DVS는 센서가 없으면 데모 녹화를 틀지 않고 끝난다(`--need-sensor`, `RestartPreventExitStatus=3`).
 - 보드4에는 아직 넣지 않았다(현미경·DVS 고친 판). 센서 없는 DVS 경로도 시험하지 않았다.
+- 두 보드의 USB 카메라 뷰어를 똑같이 `mpv --vo=gpu --profile=low-latency --untimed --no-terminal`으로 맞췄다(Jetson `usbcam`, 보드6 `e850-open cam`). 다음 세션의 비교에서는 DVS와 이 카메라를 두 보드에 함께 건다.
 
 **2026-11-26(11.112):** 보드6 DVS의 Python 캡처 루프, 행동 분류, 얼굴 검출을 C로 옮겼다.
 - 캡처 루프는 `dvsview.c`의 `dvs_capture()`, 분류와 얼굴은 새 파일 `dvsai.c`다. onnxruntime C API를 휠의 so에서 dlopen하고, `-DDVS_AI`로 빌드한다(bundle.sh가 NuGet에서 헤더를 받는다).

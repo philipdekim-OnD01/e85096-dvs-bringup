@@ -28,5 +28,5 @@ cam)
         v=
     done
     [ -n "$v" ] || exec e850-say "USB 카메라" "USB 카메라가 연결되어 있지 않습니다. USB-A 포트에 꽂아 주세요."
-    exec mpv --vo=gpu --profile=low-latency --untimed --title="USB 카메라" "av://v4l2:/dev/${v##*/}" ;;
+    exec mpv --vo=gpu --profile=low-latency --untimed --no-terminal --title="USB 카메라" "av://v4l2:/dev/${v##*/}" ;;
 esac

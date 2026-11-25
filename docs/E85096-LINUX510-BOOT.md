@@ -7019,3 +7019,14 @@ BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. �
 - 5초 동안 잰 보드6 코어 사용률은 CPU0 36, CPU1 38, CPU2 30, CPU3 32, CPU4 71, CPU5 52, CPU6 27, **CPU7 1%**였다. DVS + 분류 + 얼굴 + USB 카메라가 돌고 있었다.
 - CPU7은 11.30에서 사용자가 요청해 웹 전용으로 비워 둔 코어다("웹 서비스를 위해 하나 할당해서 더 빠른 서비스를 제공해"). DVS 설정 페이지 스레드 `dvs-web`과 Wi-Fi IRQ(`scsc_wlbt`, 11.69)가 여기서 돈다. systemd 유닛은 CPU0~6만 쓴다(`e850-cpu7.conf`).
 - 측정할 때 페이지를 연 브라우저가 없어서 1%였다.
+
+**두 보드의 카메라 뷰어를 같게(바꾼 것):**
+- 사용자: "왜 다른 뷰어를 사용했어, 같은걸로 해". 비교 시험에 DVS와 USB 카메라를 두 보드에 똑같이 연결하기로 했다.
+- 그때까지 Jetson은 `gst-launch … xvimagesink`, 보드6은 mpv였다. 보드마다 먼저 되는 것을 쓴 결과다. 보드6에는 GStreamer가 없고, Xv는 MIT-SHM이 없어서 안 된다.
+- 두 보드 모두 `mpv --vo=gpu --profile=low-latency --untimed --no-terminal --title="USB 카메라" av://v4l2:/dev/videoN`으로 맞췄다.
+  - Jetson: `tools/jetson/usbcam`을 mpv로 바꿨다. 카메라가 두 대면 `--external-file` + `--lavfi-complex=[vid1][vid2]hstack[vo]`로 나란히 띄운다(두 대일 때는 시험하지 않았다).
+  - 보드6: `e850-open cam`.
+- mpv는 사용자가 Jetson에 설치했다(`sudo apt install mpv`, 0.37.0, 패키지 19개). 보드6은 0.35.1이다.
+- `--no-terminal`을 넣은 이유(관찰): 유닛으로 띄우면 mpv 상태 줄(`V: …`)이 거의 매초 journal에 쌓였다. 그러면 journald 부하가 Jetson에만 더해진다. 두 보드에 같이 넣었다.
+- Jetson에서 이전 mpv 유닛을 멈춘 직후에 새로 띄우면 두 번 바로 끝났다(종료 코드 2). 2초 기다린 뒤에는 정상으로 떴다. 원인은 확인하지 않았다(장치 해제가 늦었을 가능성, 가설).
+- 확인(관찰): 두 화면 캡처 모두 "USB 카메라" 창에 영상이 나왔다. mpv CPU를 `top`으로 1초씩 한 번 쟀더니 Jetson 11%, 보드6 26%였다. 비교 측정이 아니다. 비교는 다음 세션에서 같은 부하로 한다.
