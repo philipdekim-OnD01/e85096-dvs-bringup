@@ -8,8 +8,9 @@
 #      /x/manifest.md5: md5 of every file under the static trees, to compare with the new board after it boots.
 # Whole procedure: docs/BOARD-CLONE.md.
 # Same size, label and UUID as the source filesystem (tune2fs -l).
-# Changed: a new machine-id (so the clone gets its own DHCP lease; the Wi-Fi MAC comes from the SoC id anyway)
-# and no systemd random seed. Kept: everything else, ssh host keys and the Wi-Fi settings included.
+# Changed: a new machine-id (so the clone gets its own DHCP lease; the Wi-Fi MAC comes from the SoC id anyway;
+# -e MACHINE_ID=<the target's own id> keeps it when a board is flashed again) and no systemd random seed.
+# Kept: everything else, ssh host keys and the Wi-Fi settings included.
 set -eu
 BLOCKS=${BLOCKS:-786432}     # 4 KiB blocks = 3 GiB, mmcblk0p24 of the first board
 UUID=${UUID:-de77216b-a7d7-4c77-9fec-51c801b1fb77}
@@ -25,13 +26,16 @@ mke2fs -q -t ext4 -L rootfs -U $UUID -b 4096 $I $BLOCKS
 mkdir -p $R
 mount -o loop $I $R
 tar -x -p --xattrs --xattrs-include='*' --acls --numeric-owner -f /x/rootfs.tar -C $R
-od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > $R/etc/machine-id
-echo >> $R/etc/machine-id
+# MACHINE_ID: a board flashed again keeps its own id (and so its DHCP address); a new random one otherwise
+echo "${MACHINE_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}" > $R/etc/machine-id
 cp $R/etc/machine-id $R/var/lib/dbus/machine-id
 rm -f $R/var/lib/systemd/random-seed
 # files changed on the source since the tar (BOARD-CLONE.md 4), at their paths under /x/overlay; cp onto an
 # existing file keeps its owner and mode
 if [ -d /x/overlay ]; then cp -r /x/overlay/. $R/; echo "overlay: $(cd /x/overlay && find . -type f | wc -l) file(s)"; fi
+# new files and directories under home/<user> belong to that user, not to root (~/Desktop, 11.107)
+for h in /x/overlay/home/*/; do [ -d "$h" ] || continue; u=$(basename "$h")
+    (cd /x/overlay && find "home/$u" -mindepth 1) | while read -r f; do chown --reference="$R/home/$u" "$R/$f"; done; done
 echo "machine-id $(cat $R/etc/machine-id), $(df -h $R | tail -1)"
 (cd $R && find usr lib var/tmp root home opt -xdev -type f -print0 | sort -z | xargs -0 md5sum) > /x/manifest.md5
 umount $R

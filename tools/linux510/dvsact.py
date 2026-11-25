@@ -1,17 +1,20 @@
 """Person action from the S5KRC1S event stream (11.37): 60 ms count frames -> MobileNetV3-small + GRU -> judge.
 
-Events come from libdvsview (dvs_events(), the decoded ring before the HDMI renderer). Every 60 ms of sensor
-time becomes a 2 x 120 x 160 count frame (ON, OFF; 6 x 6 px cells), log1p, one model step; the judge turns
-the class probabilities into a state and writes a JSONL line when the state changes. The same Binner makes
-the training frames on the Mac (frames_of), so training and the board see one definition of a frame.
+Events come from libdvsview's decoded ring (before the HDMI renderer). Every 60 ms of sensor time becomes a
+2 x 120 x 160 count frame (ON, OFF; 6 x 6 px cells), log1p, one model step; the judge turns the class
+probabilities into a state and writes a JSONL line when the state changes. Binner makes the training frames on
+the Mac (frames_of); on the board libdvsview bins the ring by the same rules in C (CBinner, dvs_act_bin, 11.103),
+and test_dvsact checks the two give the same frames.
 
-On the board start() runs it in the capture process (ov5647-cap.py --act FILE --act-model PATH), one daemon
-thread "dvs-act" on CPU4-6 at the top clock (dvsctl.pin); onnxruntime uses that thread only.
+On the board start() runs it in the capture process (ov5647-cap.py --act FILE --act-model PATH): daemon threads
+"dvs-bin" (frames, in C) and "dvs-act" (the model; onnxruntime uses that thread only) on CPU4-6 at the top clock
+(dvsctl.pin).
 """
 import ctypes
 import datetime
 import json
 import os
+import queue
 import sys
 import threading
 import time
@@ -24,6 +27,7 @@ STEP_US = 60000         # one frame, one model step: 16.7 Hz
 GAP_US = 3000000        # no event for this long (a sensor restart): start over, GRU state too
 HOLD = 3                # steps a candidate must hold before the state changes
 FALL_P = 0.6            # fall must be at least this sure to be a candidate
+QUEUE = 8               # frames dvs-bin may be ahead of the model (8 x 60 ms)
 CLASSES_FILE = 'classes'    # beside the model, optional: the classes judged (e.g. "none sit_down stand_up")
 GW, GH = 160, 120
 EV = np.dtype([('t', '<u4'), ('x', '<u2'), ('y', '<u2')])     # libdvsview struct ev
@@ -50,17 +54,11 @@ class Binner:
     """Events in time order -> one ('frame', t0_us, counts) per STEP_US bin that has events, on a grid set by
     the first event; ('reset', t_us, None) when the stream had a gap over GAP_US (the bin then is dropped).
     t is the uint32 display clock: steps are unwrapped from the previous event (the clock never goes back).
-    push(t, x, y, pol) counts with numpy (training, any w x h); push_ev(struct ev records) is the board's path,
-    960 x 720, counted by cells (libdvsview dvs_cells) when given: numpy took 25-50 ms for the 150-300 k events
-    of a busy 60 ms on the A55, C ~1 (11.38)."""
+    push(t, x, y, pol) counts with numpy (training, any w x h)."""
 
-    def __init__(self, w=960, h=720, cells=None):
+    def __init__(self, w=960, h=720):
         self.gx = (np.arange(w) * GW // w).astype(np.int32)        # cell of a column, of a row (x GW)
         self.gy = (np.arange(h) * GH // h * GW).astype(np.int32)
-        self.cells = cells
-        if cells:
-            cells.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
-            cells.restype = None
         self.acc = np.zeros(2 * GH * GW, np.uint32)                # counts of the current bin
         self.any = False
         self.last = None        # uint32 t of the last event (an int)
@@ -78,13 +76,6 @@ class Binner:
         cell = self.gx[x] + self.gy[y] + np.asarray(pol, np.int32) * (GH * GW)
         return self._push(t, lambda i, j: np.add(self.acc, np.bincount(cell[i:j], minlength=len(self.acc)),
                                                  out=self.acc, casting='unsafe'))
-
-    def push_ev(self, ev):
-        if self.cells:
-            ev = np.ascontiguousarray(ev)
-            return self._push(ev['t'], lambda i, j: self.cells(ev.ctypes.data + i * EV.itemsize, j - i,
-                                                               self.acc.ctypes.data))
-        return self.push(*split(ev))
 
     def _push(self, t, add):
         """bin edges by searchsorted on the sorted clock; add(i, j) counts events i..j-1 into acc"""
@@ -119,6 +110,31 @@ class Binner:
                 i = j
             self.last, self.tu = int(t[b - 1]), tua + ((int(t[b - 1]) - ta) & 0xffffffff)
         return out
+
+
+class Bin(ctypes.Structure):
+    _fields_ = [('cur', ctypes.c_uint64), ('t0', ctypes.c_int64), ('tu', ctypes.c_int64), ('out', ctypes.c_int64),
+                ('start', ctypes.c_uint32), ('last', ctypes.c_uint32), ('flags', ctypes.c_uint32),
+                ('step', ctypes.c_uint32), ('gap', ctypes.c_uint32), ('pad', ctypes.c_uint32)]   # struct dvs_binner
+
+
+class CBinner:
+    """Binner's records from libdvsview, 960 x 720: run(state, acc) is dvs_act_bin (the decoder's ring; it starts at
+    the newest event) or dvs_bin_run on an array (the test). ctypes drops the GIL for the call. In Python, the
+    copy, search and loop per 64 k events took a whole core with fast motion (11.103)."""
+
+    def __init__(self, run):
+        self.run, self.s = run, Bin(cur=2**64 - 1, step=STEP_US, gap=GAP_US)
+        self.acc = np.zeros(2 * GH * GW, np.uint32)
+
+    def records(self):
+        """what the events so far completed; the next call to run() zeroes acc after a frame or a reset"""
+        while True:
+            r = self.run(ctypes.byref(self.s), self.acc.ctypes.data)
+            if not r:
+                return
+            yield ('frame', self.s.out, np.minimum(self.acc, 65535).astype(np.uint16).reshape(2, GH, GW)) \
+                if r == 1 else ('reset', self.s.out, None)
 
 
 def frames_of(t, x, y, pol, w, h):
@@ -208,45 +224,61 @@ def _run(lib, out_path, model_path, cpus):
     except Exception as e:
         return _off(e)
     STATUS['on'] = True
-    lib.dvs_events.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_uint64)]
+    lib.dvs_act_bin.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     lib.dvs_stats.restype = ctypes.c_char_p
-    buf = np.empty(65536, EV)
-    cur = ctypes.c_uint64(2**64 - 1)    # UINT64_MAX: start at the newest event
     try:                                # CLASSES_FILE beside the model: the classes judged, one line
         classes = [c for c in open(os.path.join(os.path.dirname(model_path), CLASSES_FILE)).read().split()
                    if c in CLASSES] or None     # none known: all
     except OSError:
         classes = None
     print('[dvsact] judging %s' % ' '.join(classes or CLASSES), file=sys.stderr, flush=True)
-    binner, judge, h = Binner(cells=lib.dvs_cells), Judge(classes), np.zeros((1, 128), np.float32)
+    # two threads (11.103): dvs-bin counts the ring into frames (in C, without the GIL) while dvs-act runs the model;
+    # in one thread the two filled a core with fast motion. QUEUE frames behind, dvs-bin waits and the ring's
+    # RING / 2 rule skips what it missed (act_lost).
+    frames = queue.Queue(QUEUE)
+    threading.Thread(target=_bin, args=(lib, frames, cpus), name='dvs-bin', daemon=True).start()
+    judge, h = Judge(classes), np.zeros((1, 128), np.float32)
     ms, t_log = [], time.monotonic()
-    wake = t_log
     try:
         while True:
-            n = len(buf)
-            while n == len(buf):        # all that came since the last wake, 65536 at a time
-                n = lib.dvs_events(buf.ctypes.data, len(buf), ctypes.byref(cur))
-                for kind, _, c in binner.push_ev(buf[:n]):
-                    if kind == 'reset':
-                        h[:] = 0
-                        continue
-                    a = time.perf_counter()
-                    y, h = sess.run(None, {'x': to_input(c), 'h': h})
-                    s = observe(judge, _softmax(y[0]), time.time_ns())
-                    ms.append((time.perf_counter() - a) * 1e3)
-                    if s:
-                        out.write(s + '\n')
-                        out.flush()
-                        r = STATUS['recent'][0]
-                        print('[dvsact] %s %s p %.2f' % (r['event'], r['state'], r['p']), file=sys.stderr, flush=True)
+            try:
+                kind, _, c = frames.get(timeout=2)
+            except queue.Empty:
+                kind = None
+            if kind == 'reset':
+                h[:] = 0
+            elif kind == 'frame':
+                a = time.perf_counter()
+                y, h = sess.run(None, {'x': to_input(c), 'h': h})
+                s = observe(judge, _softmax(y[0]), time.time_ns())
+                ms.append((time.perf_counter() - a) * 1e3)
+                if s:
+                    out.write(s + '\n')
+                    out.flush()
+                    r = STATUS['recent'][0]
+                    print('[dvsact] %s %s p %.2f' % (r['event'], r['state'], r['p']), file=sys.stderr, flush=True)
             now = time.monotonic()
             if now - t_log >= 2:
                 lost = json.loads(lib.dvs_stats() or b'{}').get('act_lost', 0)
-                print('[dvsact] steps %d, step median %.1f ms max %.1f ms, lost %d' % (
-                    len(ms), float(np.median(ms)) if ms else 0, max(ms, default=0), lost), file=sys.stderr,
-                    flush=True)
+                print('[dvsact] steps %d, step median %.1f ms max %.1f ms, queued %d, lost %d' % (
+                    len(ms), float(np.median(ms)) if ms else 0, max(ms, default=0), frames.qsize(), lost),
+                    file=sys.stderr, flush=True)
                 ms, t_log = [], now
-            wake = max(wake + STEP_US / 1e6, now)
+    except Exception as e:
+        _off(e)
+
+
+def _bin(lib, frames, cpus):
+    """dvs-bin: the ring's frames into the queue, every STEP_US"""
+    import dvsctl
+
+    dvsctl.pin(set(cpus), 'dvs-bin')
+    binner, wake = CBinner(lib.dvs_act_bin), time.monotonic()
+    try:
+        while True:
+            for rec in binner.records():        # all that came since the last wake
+                frames.put(rec)
+            wake = max(wake + STEP_US / 1e6, time.monotonic())
             time.sleep(max(0, wake - time.monotonic()))
     except Exception as e:
         _off(e)

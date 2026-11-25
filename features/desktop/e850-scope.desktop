@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=현미경
+Name[en]=Microscope
+Comment=SOL 현미경 뷰어 (실시간, 사진, 실험)
+Comment[en]=SOL microscope viewer (live view, photos, experiments)
+Exec=/usr/local/bin/e850-open scope
+Icon=applications-science
+Terminal=false
+Categories=Science;Education;

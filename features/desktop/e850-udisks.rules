@@ -1,0 +1,12 @@
+// e850-feature desktop (11.105): the desktop user mounts, unmounts and ejects SD cards and USB disks in the file
+// manager (udisks2 through gvfs). The X sessions (e850-desktop, x-kms.sh) have no logind seat, so udisks2's
+// allow_active does not apply and every mount asked for a password with no agent to ask it. DESKTOP_USER: set at install.
+polkit.addRule(function (action, subject) {
+    var a = action.id;
+    if (subject.user == "DESKTOP_USER" &&
+        (a.indexOf("org.freedesktop.udisks2.filesystem-mount") == 0 ||
+         a.indexOf("org.freedesktop.udisks2.filesystem-unmount-others") == 0 ||
+         a.indexOf("org.freedesktop.udisks2.eject-media") == 0 ||
+         a.indexOf("org.freedesktop.udisks2.power-off-drive") == 0))
+        return polkit.Result.YES;
+});

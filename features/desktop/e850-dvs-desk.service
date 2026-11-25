@@ -1,0 +1,10 @@
+# The DVS window of the desktop icon (e850-open dvs, docs 11.107) on the GPU desktop (:1). Not enabled: the icon
+# starts it; the polkit rule 50-e850-dvs.rules lets the desktop user start and stop only this unit.
+[Unit]
+Description=DVS window on the GPU desktop, from its desktop icon
+
+[Service]
+Environment=DISPLAY=:1
+ExecStart=/usr/local/bin/dvs
+# 130: closed by the user (q, Esc, the window's close)
+SuccessExitStatus=130

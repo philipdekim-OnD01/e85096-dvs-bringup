@@ -9,7 +9,7 @@ import unittest
 
 import numpy as np
 
-from dvsact import CLASSES, EV, STATUS, Binner, Judge, counts, line, observe, split, start, to_input
+from dvsact import CLASSES, EV, STATUS, Binner, CBinner, Judge, counts, line, observe, split, start, to_input
 
 LIB = os.environ.get('DVSVIEW_LIB', '/usr/local/lib/libdvsview.so')
 
@@ -32,15 +32,6 @@ def random_ev(seed, n=20000):
     ev['x'] = rng.integers(0, 960, n)
     ev['y'] = rng.integers(0, 720, n) | rng.integers(0, 2, n) << 15 | rng.integers(0, 2, n) << 14
     return ev
-
-
-def push_chunks(b, ev, ev_path=False, seed=0):
-    rng, out, i = np.random.default_rng(seed), [], 0
-    while i < len(ev):
-        j = i + int(rng.integers(1, 3000))
-        out += b.push_ev(ev[i:j]) if ev_path else b.push(*split(ev[i:j]))
-        i = j
-    return out
 
 
 def onehot(k, p):
@@ -97,17 +88,22 @@ class TestDvsact(unittest.TestCase):
             m = (rel - rel[0] >= t0) & (rel - rel[0] < t0 + 60000)
             self.assertTrue((c == counts(x[m], y[m], p[m])).all())
 
-    def test_push_ev(self):         # the board's path (struct ev records, cells counted in C or numpy) = push()
-        ev, frames = random_ev(3), lambda out: [(k, t0, c.tolist()) for k, t0, c in out]
-        self.assertEqual(frames(push_chunks(Binner(), ev, ev_path=True)), frames(push_chunks(Binner(), ev)))
-
     @unittest.skipUnless(os.path.exists(LIB), 'no libdvsview.so (DVSVIEW_LIB)')
-    def test_push_ev_c(self):       # dvs_cells() in libdvsview counts as numpy does
-        lib = ctypes.CDLL(LIB)
-        ev, frames = random_ev(4), lambda out: [(k, t0, c.tolist()) for k, t0, c in out]
-        out = push_chunks(Binner(cells=lib.dvs_cells), ev, ev_path=True)
-        self.assertTrue(out)
-        self.assertEqual(frames(out), frames(push_chunks(Binner(), ev)))
+    def test_cbinner(self):         # the board's C binning (dvs_bin_run = dvs_act_bin on any ring) = Binner.push:
+        lib = ctypes.CDLL(LIB)      # events arriving in chunks, the uint32 wrap, a gap over GAP_US
+        lib.dvs_bin_run.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_void_p]
+        a, b = random_ev(4), random_ev(5)
+        b['t'] += np.uint32(5400000)
+        ev = np.concatenate([a, b])
+        rng, wr, out = np.random.default_rng(0), 0, []
+        cb = CBinner(lambda s, acc: lib.dvs_bin_run(s, ev.ctypes.data, len(ev), wr, acc))
+        cb.s.cur = 0
+        while wr < len(ev):
+            wr = min(len(ev), wr + int(rng.integers(1, 3000)))
+            out += list(cb.records())
+        frames = lambda out: [(k, t0, None if c is None else c.tolist()) for k, t0, c in out]
+        self.assertEqual([k for k, *_ in out].count('reset'), 1)
+        self.assertEqual(frames(out), frames(Binner().push(*split(ev))))
 
     def test_judge(self):
         j, P = Judge(), lambda k, p=0.9: onehot(CLASSES.index(k), p)

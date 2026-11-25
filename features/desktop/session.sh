@@ -7,8 +7,11 @@
 export GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx XMODIFIERS=@im=fcitx SDL_IM_MODULE=fcitx XDG_MENU_PREFIX=lxde-
 # Qt programs (wpa_gui) take the GTK icon theme: Adwaita has the Wi-Fi signal icons
 export QT_QPA_PLATFORMTHEME=gtk3
+export PATH="$PATH:/usr/sbin:/sbin"   # ifconfig, iw ... in the terminal: Debian leaves sbin out for users (11.107)
 xset s off -dpms 2>/dev/null
+e850-res --apply 2>/dev/null   # the desktop size picked in e850-res (11.103)
 "$HOME/.local/bin/xbg" "$HOME/.local/share/wallpaper.bgrx" 2>/dev/null || xsetroot -solid '#24323f' 2>/dev/null
+pcmanfm --desktop --profile e850 2>/dev/null &   # the desktop's icons (~/Desktop) over the wallpaper (11.107)
 fcitx5 -d 2>/dev/null
 lxpanel --profile e850 &
 blueman-applet 2>/dev/null &

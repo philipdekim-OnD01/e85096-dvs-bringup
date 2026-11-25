@@ -4,7 +4,7 @@
 # SHOT=/out/panel.png (with -v <dir>:/out): also a screenshot of the panel running against the stub.
 set -e
 export DEBIAN_FRONTEND=noninteractive
-P="gcc libc6-dev pkg-config libgtk-3-dev libcjson-dev xvfb python3"
+P="gcc libc6-dev pkg-config libgtk-3-dev libcjson-dev xvfb python3 fonts-nanum"   # the boards' font: the height check
 dpkg -s $P >/dev/null 2>&1 || { apt-get -qq update && apt-get -qq install -y $P >/dev/null; }
 cd /tmp
 gcc -O2 -Wall -Werror -o dvspanel /s/dvspanel.c $(pkg-config --cflags --libs gtk+-3.0 libcjson) -lm
@@ -46,7 +46,9 @@ class H(http.server.BaseHTTPRequestHandler):
                                'pll': '00 8b b0 word 0x08bb0 P=4 M=374 S=0 rate=2244 rate_s=2244'},
                     '/act': {'on': True, 'state': 'stand_up', 'top': 'sit_down', 'p': 0.75,
                              'recent': [{'t_us': 1795478312081726, 'event': 'move', 'state': 'sit_down',
-                                         'prev': 'stand_up', 'p': 0.55}]},
+                                         'prev': 'stand_up', 'p': 0.55}] +  # more than the panel shows (5)
+                                       [{'t_us': 1795478300000000 - 10**6 * k, 'event': 'appear', 'state': 'stand_up',
+                                         'prev': 'none', 'p': 0.6} for k in range(6)]},
                     '/rec': {'state': 'idle', 'left_s': 0, 'last': None}}[path])
     def do_POST(self):
         got.append((self.path, json.loads(self.rfile.read(int(self.headers['Content-Length'])))))

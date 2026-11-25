@@ -6046,3 +6046,614 @@ A의 단계와 어려움:
 **다음.**
 - 사용자가 1 m에서 얼굴을 넣고 고개를 움직이며 시험한다. 못 찾으면 순서대로 해 본다: 이진화 대신 time surface 밝기, 필터를 통과한 이벤트만, 창 길이 50~200 ms, 점수 기준.
 - 거리도 원하면, 얼굴 19 cm를 가정해 거리를 추정해 함께 보일 수 있다.
+
+### 11.100 보드6: Wi-Fi "붙었는데 주소 없음"의 원인(같은 AP 재연결), 감시, 어두운 프레임 재확인, 얼굴 기록, BT 브리지 재시작 (2026-11-24)
+
+BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. 사용자는 보드 앞에 있었고, 손 흔들기·Wi-Fi 시험·BT 재시작·sudo를 허락했다(sudo 비밀번호는 명령에만 썼다).
+
+**1. 빠른 동작 때 어두운 프레임(11.99 고침의 확인).**
+- 관찰(`/history`, 09:20~09:45, 고친 판): kB/버퍼 500~710, 57 fps인 39행에서 dips 중앙값 10/2초(9%), 90%값 32, 최대 63. 41 이상은 39행 중 2행. 고치기 전(11.99)에는 같은 구간에서 41~74였다.
+- dips는 "최근 평균의 절반 미만인 프레임"이다. 화면이 검다는 뜻이 아니다.
+- 센서 시각 분석(Mac): 손을 빠르게 흔드는 8초를 녹화했다(`POST /rec`, 5,955만 이벤트, 초당 750만, `~/e850-logs/dvsrec-dips/`). 보드 디코더(`tools/host/act/replay.sh`)로 풀어 센서 시각의 창으로 나눴다.
+  - 시각은 982 µs마다 단조로 늘고 빈틈이 없다.
+  - 같은 dips 규칙: 35 fps 4~6개/8초(창 위상 9가지), 57 fps 28~38개(7%), 120 fps 83개(8.7%). 평균의 5% 미만인(거의 검은) 창은 0개.
+  - 같은 8초의 보드 지표(35 fps): 약 9개.
+  - 11-08 앉기·서기 녹화 2개(초당 190만): 57 fps에서 0~1개.
+- 판단: 고친 뒤 남은 dips는 손이 방향을 바꿀 때 이벤트가 실제로 줄어드는 것으로 본다. 렌더 코드에서 고친 뒤 dips가 생기려면 창 안의 데이터가 적어야 한다(디코더가 링을 4M 이벤트 넘게 앞서는 경우는 빼고). 보드 지표가 센서 시각 분석보다 약 1.5~2배인 것은 설명하지 못했다(창 끝이 멈춤·건너뜀으로 고르지 않은 탓으로 추정, 확인 안 함).
+- 실패한 방법: `/evframe`으로 창을 이어서 읽는 프로브. Wi-Fi 왕복으로도, 보드 localhost에서도 큰 움직임 때 뒤처져 창 대부분이 링에서 밀렸다(1,735개 중 1,678개). 그래서 녹화로 바꿨다.
+- 따로 보지 않은 것: `/stats`의 `act_lost`가 912,011,387이다(행동 분류 리더가 놓친 이벤트 누계).
+
+**2. 얼굴 가로 길이(11.99) 기록.** journal(00:20 이후 약 8,000번 검출)에서 얼굴을 찾은 2초 구간은 5번이고, W 20.5~23.6 cm였다. 사용자 시험(00:57) 때 찍은 화면 4장은 모두 손 흔들기 장면이었고 상자가 없었다. 머리는 화면 왼쪽 위에 약 80 px로 작게 보였다(1 m보다 먼 것으로 추정). 1 m 정면 시험은 아직 못 했다. 가만히 있는 얼굴은 DVS 이벤트가 적다.
+
+**3. BT 브리지 재시작(사용자 허락).** 01:01:48에 `systemctl restart e850-bt`를 했다. JBL Flip 6은 30초 뒤(01:02:19) A2DP SBC 44.1 kHz로 다시 붙었다. MX Master는 재시작 전에도 연결돼 있지 않았다. 이제 11.96 감시 스레드가 든 브리지가 돈다. 감시가 실제로 STOPPING을 푸는지는 아직 못 봤다.
+
+**4. Wi-Fi "붙었는데 주소 없음".**
+- 감시 `tools/linux510/e850-wifiwatch.sh` + `e850-wifiwatch.service`. wlan0에 IPv4가 180초 동안 없으면 단계를 하나 밟고, 180초마다 다음 단계로 간다.
+  1. `wpa_cli disconnect` 다음 `reconnect`
+  2. `wpa_supplicant@wlan0` 재시작 + `networkctl reconfigure wlan0`
+  3. AP에 붙어 있을 때(COMPLETED)만, 끊김마다 한 번: WLBT 펌웨어 재시작(`mx_panic`, 11.31. BT도 함께 끊긴다)
+  - 그다음 다시 1부터. 단계마다 journal에 남는다(`journalctl -u e850-wifiwatch`).
+  - 새 이미지는 `build-rootfs.sh`가 넣는다.
+  - 시험 `tools/linux510/e850-wifiwatch-test.sh`(대역 명령, 14개 통과). "한 번만" 규칙을 지운 판, 주소 확인을 망가뜨린 판에서는 실패하는 것을 봤다.
+- 보드6 시험(root).
+  - 시험 A(`tools/board/wifiwatch-trial.sh`, 01:03): tc로 DHCP를 막고 주소를 지웠다. WAIT 60. 이때 단계 1은 `reassociate`였다. 60초의 reassociate 뒤 networkd는 `Lost carrier`, `DHCP lease lost`, `Gained carrier`를 남기고 DHCP를 다시 하지 않았다. 81초에 막음을 풀어도 그대로였다. 단계 2(약 120초) 뒤 128초에 주소가 돌아왔다.
+  - 시험 B(01:06): 막음 없이, 정상 연결에서 `wpa_cli reassociate`만 했다. 주소가 사라졌다. 60초의 `networkctl reconfigure`만으로는 안 됐다. 감시 단계 1(reassociate, 01:09)도 안 됐다. 단계 2(01:12:28) 뒤 7초 만에 DHCP 주소를 받았다. 보드는 약 6분 동안 네트워크에 없었다.
+  - 커널 로그: reassociate마다 `slsi_connect ... vifStatus=2`이고 `CurrBssid`와 `NewBssid`가 같다. 연결된 채 같은 AP로 connect가 오면 드라이버는 `slsi_set_roam_reassoc()`(펌웨어 로밍 경로)로 간다. 그 뒤 `no fcq for 33:…, drop Tx frame`이 28번 났다(tx.c:546, AP 피어의 `scsc_wifi_fcq_transmit_data()`가 음수). wpa 재시작 때는 DEAUTH 다음 `vifStatus=0`(새 연결)이었고 바로 DHCP가 됐다.
+  - **11.98 밤샘 끊김(11-23 13:58:45)도 `vifStatus=2`, 같은 BSSID였다**(지난 부팅의 커널 로그).
+  - 결론(관찰 근거): 밤샘 끊김의 원인은 연결된 채 같은 AP로 다시 연결한 것이다. 그러면 SCSC 드라이버의 송신 큐가 프레임을 거부하고, DHCP 브로드캐스트가 나가지 못한다. 11.98의 "networkd가 아무것도 남기지 않았다"도 같은 모습이다. 그날 wpa_supplicant가 왜 다시 연결했는지는 모른다.
+  - 그래서 단계 1을 disconnect+reconnect로 바꿨다. 시험 C(01:15): reassociate로 고장 냈다(12초부터 주소 없음). 28초에 disconnect+reconnect를 하자 DEAUTH, `vifStatus=0`이 찍혔고 carrier 1초 뒤 DHCP를 받았다(36초에 주소). 한 번 시험했다.
+- **보드6에 바꾼 것.** `/usr/local/bin/e850-wifiwatch.sh`(새 단계 1), `/etc/systemd/system/e850-wifiwatch.service`(enable, active). 시험 파일과 기록은 `/var/tmp/{wifiwatch-trial,reassoc-trial,fresh-trial}.*`. tc 막음은 지워졌다(clsact 없음). `mx_recovery_count`는 0이다. 다른 보드에는 넣지 않았다.
+
+**확인하지 못한 것.** 감시가 실제 밤샘 끊김을 되살리는지(재현은 reassociate로만 했다). 드라이버 근본 수정. 1 m 얼굴 시험. BT 감시 스레드의 실제 동작.
+
+**다음.**
+- 드라이버: `slsi_set_roam_reassoc()`로 같은 BSS에 다시 붙은 뒤 AP 피어의 fcq가 왜 열리지 않는지 찾는다. `scsc_wlan`은 다시 올리면 패닉하므로(11.78) 바꾼 모듈은 재부팅해야 쓰인다(허락 필요).
+- 다른 데스크톱 보드(3, 5)에도 감시를 넣는다(sudo).
+- 얼굴: 1 m 정면에서 고개를 움직이며 시험한다. 안 되면 11.99 "다음"의 순서대로 해 본다.
+
+### 11.101 보드6 고장, 보드4에 보드6 상태를 다시 만들기 (2026-11-24)
+
+**사용자 알림(11:1x KST):** "보드가 쇼트가 나서 죽었어. 내 실수로, 다시 다른 보드를 연결했으니 이미지와 어플리케이션 지금까지 했던 거 그대로 복사해." 죽은 보드는 보드6(192.168.0.208)이다.
+
+**새 보드 찾기.**
+- Mac에 ACM·USB 네트워크가 없고, Wi-Fi에서는 보드1(.236)만 응답했다. UART(A5069RR4)는 전원을 다시 넣어도 한 글자도 나오지 않았다. 이 보드에 UART가 제대로 꽂혀 있지 않은 것으로 본다(확인 안 함).
+- `fastboot devices`에 `00000bf40c9c23e0`(보드4)이 보였다.
+- **두 세션이 겹쳤다.** 다른 세션(`features-20261121`, 보드4 기능 작업)이 11-21부터 보드4를 기다리는 감시를 걸어 두었다. 사용자가 USB를 꽂은 11:20에 그 세션이 boot-nocpu를 굽고 video·bt를 설치한 뒤 재부팅 시험을 하고 있었다. 이 세션이 모르고 11:25에 `fastboot flash boot boot-nocpu`를 보냈다. 그 명령이 멈춰 11:27에 껐다. 그 세션이 boot 파티션 앞 64,933,888 B의 md5가 boot-nocpu(`25643a9a…`)와 같음을 확인했다. 그다음 보드4를 넘겨받았다.
+- **보드4 부팅 실패의 원인(그 세션의 판단).** 그 전 두 부팅의 journal이 22.6 s와 26.5 s에서 끊겼다. 커널 마지막 줄은 24.07 s의 MFC release였다. `extra/`에 고친 `exynos_mfc`가 없었으니 11.81의 vendor MFC와 udev `v4l_id` 부팅 경합으로 본다. `/proc/last_kmsg`에는 LK 로그뿐이었다. 11.80(cgroup cpu) 때문인지 이것 때문인지는 그 세션이 boot-nocpu와 고친 MFC를 함께 넣어서 가르지 못했다. 11-21부터 보드4가 Wi-Fi에서 사라진 것도 이 부팅 패닉 때문으로 본다.
+
+**보드4 자료 백업(사용자 선택: 덮어쓰기 전에 백업).** 11:30~11:37에 ssh에서 root tar로 Mac `~/e850-logs/board4-backup-20261124/board4.tar`에 받았다(3,154,319,360 B, md5 `282cbe11…`, 항목 4,037개). 담은 것: `/var/lib/e850-scope`(파일 1,122개, `scope.db` 포함. 11-19 실험 #1 사진), `/var/tmp`(DVS 녹화 42개 등), `/home/philip`, `/root`, `/var/lib/{dvsview,dvsact,bluetooth}`, `/opt`, `/etc`. 비밀 값(비밀번호 해시, ssh 키, Wi-Fi 비밀번호, BT 링크 키)이 들어 있으니 Mac에만 둔다.
+
+**굽기.** `build-clone.sh`로 보드4용 이미지를 새로 만들었다(machine-id `606a4996…`, 경고 0). 보드6에 구웠던 조각은 `clone-20261123/board6-old/`로 옮겼다. `to-fastboot`으로 fastboot에 넣었다(11:37:28 → 11:38:58). boot는 이미 boot-nocpu라 굽지 않았다. userdata 8조각은 `fbmini`로 구웠다.
+조각마다 걸린 시간은 190, 345, 86, 127, 224, 171, 182, 39초로 모두 OKAY였다(11:39~12:01). 12:01:51에 `fbmini reboot`를 보냈다.
+
+**첫 부팅.** HDMI에는 root 프롬프트가 떴다(사용자 확인). 그런데 6분 동안 Wi-Fi에도 fastboot에도 나타나지 않았다. 사용자가 키보드로 `e850-usbhost off`를 쳤고, 그 뒤(보드 기준 13:56쯤 다시 부팅) .244로 붙었다. 처음 6분 동안 왜 안 붙었는지는 보지 못했다(UART 출력 없음, 그 부팅의 journal은 보지 않음).
+
+**보드6 추가분 넣기**(`~/e850-logs/scope-board4/board4-setup.sh`, root, `systemd-run`으로 실행, 14:00).
+- 11.92의 두 수정(wait-online `--any`, `bluealsa-aplay` 끄기).
+- `e850-usbhost` disable. 현미경 뷰어가 부팅 때 USB를 맡는다.
+- 현미경 뷰어: 저장소 현재 판(`scope_still.py` 포함, 11.94)과 11.93의 OpenCV·`e850-hubpwr.ko`. 묶음 `scope-inst.tgz`(md5 `be312f98…`).
+- `resize2fs`로 54 GB.
+- Wi-Fi 감시 `e850-wifiwatch`(11.100 판, enable).
+- `x-kms.sh` 자동 실행 판. 복제본의 판과는 DVS 4줄만 다르다. 원본은 `x-kms.sh.prev-11.98`로 남겼다.
+- `e850-feature install bt dvs`(묶음 `94731b4e`, 보드6에 쓴 것): `libasound2-plugins`(+`libspeexdsp1`), SBC XQ, speex 변환, 감시 스레드가 든 BT 브리지, `dvs`, `dvspanel`, `libdvsview.so`, 얼굴 모델.
+- 화면 설정 `/var/lib/dvsview/display.json`을 보드6의 마지막 값으로 맞췄다(fps 35, `filter_ms` 4, 좌우 뒤집기, `margin_ms` 15. 원본 `.prev-11.101`).
+- 결과: `system running`, 현미경 active, usbhost disabled, 감시 active.
+
+**재부팅 뒤 확인(14:01).**
+- `running`, 실패한 유닛 0. `cgroup_disable=cpu`.
+- `e850-scope`, `e850-wifiwatch`, `e850-bt`, `bluealsa`, `e850-wifi` 모두 active.
+- `scsc_wlan`·`exynos_mfc`는 `extra/`의 고친 판이 올라왔다. hci0 UP(BD `9C:23:E0:0B:F4:0C`). `mx_recovery_count` 0.
+- zram 1.8 GB. 현미경 페이지 :8090은 Mac에서 200.
+- `sudo e850-x`로 GPU 데스크톱(:1)이 떴다(glamor, DRI3).
+- **DVS는 뜨지 않았다.** 자동 실행된 `dvs --auto`가 `no I2C response at 0x10` → "no DVS on CN4"로 설계대로 조용히 끝났다. 보드4 CN4에 지금 DVS 센서가 없다. 센서는 전원을 끈 채 옮겨 달아야 한다(MIPI).
+
+**보드6에서 되살리지 못한 것.** Firefox 기록·북마크(복제본의 프로필이다), 보드6 `/var/tmp`의 녹화와 시험 파일, BT 페어링. 새 보드는 BD 주소가 달라 JBL과 MX Master를 다시 페어링해야 한다.
+
+**하지 않은 것.** Cloudflare 임시 터널(:8090 외부 공개). 띄우려 했으나 이 세션의 권한 검사가 막았다(인증 없는 외부 공개). 사용자가 결정한다. 보드6과 같이 하려면 philip으로 `~/bin/cloudflared tunnel --no-autoupdate --url http://localhost:8090`을 띄운다(바이너리 `~/e850-logs/scope-board6/cloudflared-linux-arm64`, 11.93).
+
+**보안.** 보드4에 사용자가 임시로 만든 `/etc/sudoers.d/90-claude-temp`(NOPASSWD)는 userdata를 덮으면서 사라졌다(14:00 확인, README만 있음). 그 세션에 알렸다.
+
+### 11.102 보드4 부팅의 MFC 두 번째 경합 흔적, 보드6 되살아남, GPU 데스크톱에서 Chrome이 멈춤, 보드6을 보드4로 다시 복제 (2026-11-24)
+
+**보드4가 굽고 난 첫 부팅에서 멈춘 것(관찰).**
+- 그 부팅(journal `-b -3`)은 23.78 s에 `Internal error: Oops: 96000005 [#1] PREEMPT SMP`(CPU5, 주소 0x8 읽기)로 끝났다. 바로 앞 줄은 `abox_if_cmpnt_probe`였다. `panic_on_oops=1`과 `panic=0`이라 그 자리에서 멈췄다. call trace는 journal에 남지 않았고 pstore도 비어 있었다.
+- 그다음 부팅의 커널 로그(`/proc/last_kmsg`, Mac `~/e850-logs/board4-last_kmsg-20261124.txt`)에 MFC 경합이 있었다. 이 보드에는 11.81에서 고친 `exynos_mfc`(`extra/`)가 올라가 있었다.
+  1. 23.354 s: `mfc_core_probe is called`(modprobe 601).
+  2. 23.353 s: udev `v4l_id`(625)가 `/dev/video6`을 열었다. `There is no main core`로 실패했다. 이것은 11.81에서 고친 경로이고 패닉은 없었다.
+  3. 23.640 s: 다른 `v4l_id`(623)가 열기 경로에서 `mfc_alloc_firmware`를 불렀다. 펌웨어를 IOVA 0x10000000(PA 0x8a2400000)에 맵했다. 이때 probe는 아직 끝나지 않았다.
+  4. 23.682 s: probe 자신의 `mfc_alloc_firmware`가 두 번째 버퍼(PA 0x8a2500000)를 같은 IOVA에 맵하려 했다. `Trying mapping 1MB@0x10000000 on valid FLPD` WARN(`samsung-iommu.c:590`)이 났고 `-EADDRINUSE`(-98)로 실패했다. 그래도 `mfc_core_probe is completed`.
+- 해석(가설, 확인 안 함):
+  - 11.81과 다른 두 번째 경합이다. `mfc_core_probe`가 core를 등록한 뒤 펌웨어를 잡기 전까지 틈이 있고, 그 틈에 열기 경로가 펌웨어를 먼저 잡는다.
+  - `mfc_alloc_firmware`는 `core->fw_buf.sgt`가 있으면 바로 돌아간다. 그런데 probe가 두 번째 버퍼를 할당했다. 열기가 실패하면서 `fw_buf`를 풀고 IOVA는 남겼는지, 두 호출이 검사를 동시에 지났는지는 소스로 가르지 않았다.
+  - 23.78 s Oops가 이 경합에서 나왔는지는 모른다(trace 없음). 같은 보드의 다음 굽기 뒤 부팅에서 23.84 s에 같은 경합으로 패닉한 trace가 남았다(아래 "보드6을 보드4로 다시 복제"의 부팅 A).
+- trace를 남기려면 다음에 멈췄을 때 전원을 끊지 않고 워치독 리셋을 기다린다. 그래야 `last_kmsg`가 남는다. 보드4 UART도 다시 꽂아 본다.
+
+**보드6 되살아남(14:1x KST).** 사용자: "보드6 살아 났어, 그대로 복사해 똑 같이". 보드6(.208, machine-id `f580f9d9…`)이 ssh에 응답했다(가동 4분, 루트 54 GB 중 6.8 GB 사용). 화면에는 DVS 창(얼굴)과 BT `JBL Flip 6` 연결이 보였다.
+
+**GPU 데스크톱(:1)에서 Chrome이 뜨지 않음.** 사용자: "보드6에서 크롬브라우저가 안되네".
+- 관찰:
+  - `google-chrome-stable` 158.0.8127.36 arm64가 설치되어 있다(dpkg 11-23 13:55, 저장소 기능에는 없음).
+  - lxpanel이 띄운 `chrome`은 스레드 1개로 CPU 95%를 1분 넘게 썼다. 자식 프로세스도 창도 없었다.
+  - 그 환경에는 GPU 세션이 모든 클라이언트에 넣는 `LD_PRELOAD=…/libpanfrost_kbase_drm_shim.so`가 있었다(`x-kms.sh`).
+- 시험:
+  - `chrome --version`은 shim 없이 바로 끝났다. shim이 있으면 20초 시간 초과였다.
+  - strace로 보면 라이브러리를 다 올리고 `getrandom` 네 번 뒤로는 시스템 호출 없이 돈다.
+- 가설(확인 안 함): Chrome은 malloc을 자기 할당기(PartitionAlloc)로 바꾼다. 그 초기화 중에 shim이 가로챈 함수가 다시 malloc을 불러, 초기화 잠금에서 도는 것으로 본다.
+- 해결: Chrome만 shim 없이 띄운다.
+  - `features/desktop/google-chrome` 래퍼(`env -u LD_PRELOAD -u LD_LIBRARY_PATH -u LIBGL_DRIVERS_PATH`)를 둔다.
+  - 보드에는 `/usr/local/bin/google-chrome`, `google-chrome-stable`(링크), `/usr/local/share/applications/google-chrome.desktop`(Exec만 바꿈)이 생긴다.
+  - desktop 기능은 Chrome이 깔려 있을 때만 이것들을 넣는다. Firefox 우회(11.89)와 같은 방식이다.
+- 확인:
+  - shim 없이 띄운 Chrome 창이 :1에 그려졌다(xshot).
+  - 래퍼를 넣은 뒤 사용자가 메뉴에서 띄운 Chrome(부모 lxpanel, 환경에 `LD_PRELOAD` 없음)이 "Sign in to Chrome" 화면을 띄웠다.
+  - GPU 프로세스는 EGL 초기화에 실패하고(`GLX is not present`) 소프트웨어로 그렸다.
+- 보드6에 바꾼 것: 위 세 파일을 넣었다. 멈춰 있던 chrome 2개(2054, 2689)를 껐다.
+
+**Chrome GPU 가속(사용자: "크롬GPU가속해").**
+- 원인 확인(소스): drm-shim의 `mmap()`/`mmap64()`는 먼저 `init_shim()`을 부른다(`src/drm-shim/drm_shim.c`). `init_shim()`은 처음 불릴 때 `_mesa_set_create`, `asprintf`로 메모리를 잡는다. Chrome의 PartitionAlloc은 초기화 도중(`getrandom` 뒤) 주소 공간을 `mmap`으로 잡는다. 그래서 초기화 중인 할당기로 malloc이 다시 들어가 돈다. strace 모양과 맞는다.
+- 수정(Mesa 패치 `tools/gpu/mesa-kbase-g52-e850.patch`):
+  - `fd < 0`(익명 매핑)이면 `init_shim()` 없이 `syscall(SYS_mmap, …)`로 바로 넘긴다.
+  - shim fd는 렌더 노드를 열 때만 생기므로 음수일 수 없다.
+  - shim만 다시 빌드했다(`build.sh`, 묶음 `mesa-kbase.tgz`의 shim md5 `505496dc…`).
+- 시험(보드6):
+  - 고친 shim으로 `chrome --version`이 바로 끝났다(전에는 20초 시간 초과).
+  - `run-test.sh`의 세 검사(gles-test 정확도, subtex, inst)가 옛 shim과 새 shim에서 모두 PASS였다(1080p 368 → 351 fps, 같은 수준).
+  - Firefox를 새 shim으로 headless 시작해 화면을 저장했다(종료 코드 0). GPU 창 Firefox는 다시 시험하지 않았다.
+- Chrome 설정:
+  - X :1에는 GLX가 없다(`xorg-kms.conf`가 끔). ANGLE 기본값(GLX)으로는 실패한다.
+  - `--use-gl=angle --use-angle=gl-egl`이면 ANGLE이 Mesa EGL을 쓴다.
+  - `--disable-gpu-sandbox`, `--ignore-gpu-blocklist`는 필요 없었다.
+- CDP `SystemInfo.getInfo` 결과:
+  - 렌더러 `ANGLE (Panfrost, Mali-G52 (Panfrost), OpenGL ES 3.1 Mesa 22.2.0-devel)`, `ANGLE_OPENGL_EGL`, Skia GaneshGL, `sandboxed: True`.
+  - `gpu_compositing`, `rasterization`, `webgl`, `2d_canvas`, `video_decode`가 `enabled`이고, `video_encode`는 software다.
+- 측정과 확인(DVS 라이브 CPU 약 180%와 사용자 YouTube가 같이 돌 때):
+  - WebGL Aquarium(물고기 500, 캔버스 1024×1024)은 10~13 fps이고 그림이 정상이다.
+  - 한글 위키백과 페이지는 글자·표가 깨지지 않는다(xshot).
+  - GPU 샌드박스를 켠 채로 GPU 프로세스가 1분 47초 동안 죽지 않았다.
+  - YouTube는 GPU Chrome에서 재 보지 않았다.
+- 래퍼 `features/desktop/google-chrome`: `DISPLAY`가 `:1`이면 shim 환경을 그대로 두고 `--use-gl=angle --use-angle=gl-egl`을 붙인다. 그 밖에서는 전처럼 shim을 뺀다. 메뉴에서 띄운 판으로 확인했다(GPU, 샌드박스 켬).
+- 보드6에 바꾼 것:
+  - `~/gpu/mesa-kbase/lib/libpanfrost_kbase_drm_shim.so`를 새 판으로 바꿨다. 이전 판은 `.prev-11.102`로 남겼다. 이미 떠 있는 Xorg :1과 프로그램은 옛 판을 쓴다.
+  - `/usr/local/bin/google-chrome`을 새 래퍼로 바꿨다.
+  - 시험용은 `~/gpu/shim-test/`에 남겼다.
+  - 이미 떠 있던 사용자 Chrome은 소프트웨어 판이다. 닫고 다시 띄워야 GPU를 쓴다.
+
+**DVS 화면을 GPU로 그림.** 사용자: "dvs쪽으로 들어오는 영상이 매우 빨라서 이미지 처리를 잘 못 해 GPU를 잘 활용해서 깨짐없이 보이도록 해".
+- 전 상태(관찰, 보드6, 공이 도는 장면):
+  - 프레임당 이벤트는 약 95만~107만이다. 창이 한 프레임(28.6 ms, 35 fps)이니 초당 약 3,500만 이벤트다.
+  - CPU 렌더는 21 ms(최대 23.7)였고 최신 이벤트보다 88~118 ms 늦었다. 디코더, 필터, act 스레드가 각각 코어 하나를 다 썼다.
+  - 필터는 이벤트당 39 ns(11.45)다. 초당 3,500만 이벤트면 코어 1.4개 분량이라 따라가지 못한다.
+  - 링(4M 이벤트)은 약 115 ms 분량이다. 재생 지연, 창, 필터 되돌아보기를 합하면 110 ms 안팎이었다. 그래서 렌더러가 읽는 동안 디코더가 덮어쓰는 경계에 있었다. 이것이 잘린 프레임의 원인인지는 따로 재지 않았다(가설).
+  - 코드 구조상 CPU 화면은 그린 페이지를 XPutImage로 보내는 동안(약 20 ms) 다음 프레임을 같은 페이지에 그린다.
+- 구조:
+  - `dvsview.c` `dvs_share()`: 이벤트 링과 프레임 정보를 memfd 하나에 둔다(헤더, 960×720 오버레이, 링). 렌더 스레드는 프레임마다 [l, a, b), end, 설정을 seqlock으로 쓰고 futex로 깨운다.
+  - `dvsgl.c`(새 프로그램): X 창 "DVS"에 GLES 3.1 compute로 그린다.
+    - pass 1: 이벤트마다 저장 버퍼에 `atomicMax`로 픽셀별 마지막 이벤트(시각, 극성)를 남긴다. 이 Mesa에는 `imageAtomicMax`가 없어서(셰이더 오류 `no function with name 'imageAtomicMax'`) 이미지 대신 저장 버퍼를 쓴다.
+    - pass 2: 픽셀마다 이웃 8개의 마지막 이벤트가 filter_ms 안에 있으면 그린다. 배경 잡음 필터를 GPU에서 하는 것이다. fade도 여기서 한다.
+    - pass 3: 오버레이(상자, 얼굴 표시)를 얹어 창 크기에 맞춘다.
+    - 키: q, Esc, 창 닫기는 종료 0이다. f, F11은 전체 화면이다.
+  - GPU 뷰어가 따라오는 동안(16 프레임 안) CPU는 8장에 1장만 그린다. 웹 페이지 `/frame.png`용이고 필터를 하지 않는다. 그동안 CPU 필터 스레드는 쉬고, 재생 지연은 디코더가 정한다.
+  - `dvsx11.py` `start_gl()`:
+    - `ov5647-cap.py --x11`이 `dvs_share()` 뒤 `dvsgl FD`를 GPU Mesa 환경(`/home/philip/gpu/mesa-kbase/lib`, kenv와 같음)으로 띄운다.
+    - dvsgl이 0이 아닌 값으로 끝나면 예전 XPutImage 창으로 돌아간다. `DVS_GL=0`이면 GPU 뷰어를 쓰지 않는다.
+    - GPU Mesa나 `/usr/local/bin/dvsgl`이 없는 보드는 전과 같이 동작한다.
+- 보드에서 찾아 고친 것(순서대로):
+  1. 처음 띄웠을 때 dvsgl은 초당 6.7장이었고 10초에 258번 "lapped"였다(복사하는 사이 디코더가 덮어씀). 링 4M(약 115 ms)이 모자랐다. 그래서 `RING`을 1<<24(16M 이벤트, 128 MB, 약 450 ms)로 키웠다.
+  2. 그러자 지연이 77 ms에서 약 290 ms로 늘었다. 필터 스레드는 `RING / 2`만큼 뒤처질 때까지 건너뛰지 않는다. 필터가 켜져 있으면 재생 지연은 필터가 지난 곳에서 정해진다(11.99). 고친 것은 두 가지다.
+     - 필터가 건너뛰는 한도를 `FLAG` 2M(예전 `RING / 2` 값)으로 링 크기와 뗐다.
+     - GPU 뷰어가 있으면 디코더가 지연을 정하고 필터는 쉰다.
+  3. 렌더 스레드가 19 ms(최대 45 ms)로 주기 28.6 ms를 넘었다. a, b, l, m 네 포인터를 이벤트 하나씩 넘기며 프레임마다 약 400만 항목을 읽었기 때문이다. 링의 시각은 순서대로다(`S.t`는 dt ≥ 0으로만 는다). 그래서 이분 탐색 `seek()`로 바꿨고 1.2 ms가 됐다.
+  4. 8장에 한 번 CPU 프레임(약 25 ms)을 그리는 동안 GPU 발행이 밀렸다. 발행을 CPU 그리기 앞으로 옮겼다.
+- 결과(보드6, 같은 장면, 1분):
+  - dvsgl은 초당 35.0~35.1장으로 렌더 35 fps와 같다. 프레임당 이벤트는 약 122만(창과 필터 되돌아보기)이고, CPU+GPU 시간은 프레임당 22.5 ms, lapped는 0이다.
+  - 최신 이벤트보다 31~35 ms 늦다(전에는 77~118 ms). 어두운 프레임은 0이다.
+  - 렌더 스레드는 평균 3.6 ms다. 최대 30~34 ms는 8장에 한 번 그리는 웹용 CPU 프레임이다.
+  - dvs-filter 스레드가 top에서 빠졌다(전에는 100%). dvsgl은 CPU 25~37%를 쓴다.
+  - xshot으로 보면 GPU 창은 공 전체와 배경 윤곽이 빠짐없이 나온다. 웹 `/frame.png`는 필터가 없어 바탕에 잡점이 있다.
+- 시험:
+  - `dvsgl --selftest`: 합성 장면 10가지(링 감김 포함). 보드6에서 kenv로 돌려 ok.
+  - dvsview 테스트: 모두 ok(`share ok`, `gl view ok`). `seek()`를 일부러 틀리게 바꾸면 실패한다.
+  - `dvsx11.py --selftest`(Xvfb): dvsgl이 실패하면 CPU 창, 0으로 끝나면 SIGINT인 시험을 더했고 ok.
+- 확인하지 않은 것:
+  - 눈으로 본 tearing 여부. 창 모드에서는 X가 복사하고, e850-kms에는 vblank가 없다.
+  - 전체 화면(f)에서 flip하는지.
+  - 센서 없이 demo를 재생할 때.
+  - 메모리: 링이 128 MB라 python RES가 105 MB에서 220 MB로 늘었다.
+- 보드6에 바꾼 것:
+  - `/usr/local/lib/libdvsview.so`, `/usr/local/bin/ov5647-cap.py`, `/usr/local/bin/dvsgl`(새), `/usr/local/share/dvsview/dvsx11.py`.
+  - 이전 판은 `/var/tmp/dvs-prev-11.102/`에 있다. 시험 파일은 `/var/tmp/dvsgl-test/`에 있다.
+  - 캡처를 SIGTERM으로 다시 시작했다(`dvs`가 다시 띄움).
+- 저장소: `tools/linux510/dvsgl.c`(새), `dvsview.c`, `dvsx11.py`, `ov5647-cap.py`, `features/host/bundle.sh`(dvsgl 빌드), `features/dvs/feature.sh`(설치와 삭제).
+
+**보드6을 보드4로 다시 복제, 이미지를 Mac에 저장.** 사용자: "보드6 살아 났어, 그대로 복사해 똑 같이", "향후 이 전체를 복사할 수 있도록 이미지로 만들어서 맥에 저장해둬". 11.101에서 다시 만든 보드4 대신 보드6 루트 파일시스템 전체를 쓴다.
+- 받기:
+  - 14:17~15:07 KST에 `rootfs-send`(root, Nice 10)로 받았다. 7,430,318,080 B, 약 2.4 MB/s.
+  - Mac 쪽 md5 `7b2c7466…`가 보드6 값과 같다.
+- tar를 뜬 뒤 바뀐 파일(`find / -xdev -newermt`)에서 6개를 `overlay/`에 넣었다.
+  - 넣은 것: shim, Chrome 래퍼, dvsgl, libdvsview.so, ov5647-cap.py, dvsx11.py.
+  - 넣지 않은 것: 시험 사본(`/var/tmp/dvsgl-test`, `~/gpu/shim-test`), 로그, BT 캐시.
+- 이미지:
+  - `build-clone.sh`에 `MACHINE_ID` 환경 변수를 더했다. 같은 보드에 다시 구울 때 그 보드의 id(그래서 DHCP 주소)를 유지한다.
+  - `BLOCKS=2621440`(10 GiB), 보드4 id `606a4996…`. e2fsck 정상, 7.0 GB 사용.
+  - 700 MiB 조각 11개로 나눴다.
+- 보드4를 fastboot에 넣기:
+  - 부팅 때 `e850-scope`가 USB 호스트를 맡아서 Mac에는 아무것도 보이지 않았다.
+  - `systemctl stop e850-scope`로 gadget이 되자 ACM이 보였다. 그래서 케이블이 Mac에 꽂혀 있음을 알았다.
+  - 덮기 전에 `board4-setup.{sh,log}`와 `.bash_history`를 `~/e850-logs/board4-backup-20261124/before-b6-clone/`에 남겼다.
+  - `to-fastboot` 15:24:42 → fastboot 15:25:25.
+- 굽기: 11조각 모두 OKAY였다(15:25~15:53, 조각당 127~335초, 합계 1,704초). 15:53:56에 reboot를 보냈다.
+- 굽고 난 뒤 부팅(관찰, last_kmsg는 Mac `~/e850-logs/board4-last_kmsg-20261124-b.txt`):
+  1. 부팅 A: 21.03 s에 루트를 마운트했다. 23.84 s에 `v4l_id`(635)에서 Oops가 나 `Kernel panic - not syncing`이 됐다.
+     - trace: `mfc_open` → `mfc_rm_instance_init` → `mfc_alloc_firmware` → `mfc_iommu_map_firmware` → `iommu_map_sg` → `__iommu_map_sg+0x4c`, 주소 0x8 NULL 역참조.
+     - 같은 때 `modprobe`(594)가 `mfc_core_probe`를 돌고 있었다(`[QoS]-------------------Default table` 줄 바로 뒤).
+     - 이 절 첫머리의 "MFC 두 번째 경합"이 실제로 패닉을 낸다는 것이 확인됐다. probe가 끝나기 전에 열기 경로가 IOMMU 맵을 부른다. 그 시점에 무엇이 NULL인지는 소스로 확인하지 않았다.
+  2. 부팅 B:
+     - 5 s부터 eMMC `cqhci: error IRQ … cmd error -110`과 `I/O error`(sector 122142712 등)가 났다.
+     - 28.5 s에 initramfs가 `mounting /dev/mmcblk0p24 on /newroot failed: Invalid argument`로 셸에 떨어졌다.
+     - ACM으로 본 슈퍼블록은 정상이었다(UUID, 라벨, 블록 수). 그 셸에서 dd로 읽자 다시 시간 초과가 났고, 워치독 리셋으로 fastboot에 들어갔다(16:02).
+  3. 부팅 C: `fastboot reboot` 뒤 정상이었다. `running`, eMMC 오류 0.
+  - 해석(가설): 패닉 뒤 리셋을 거치면서 eMMC가 command queue 상태를 풀지 못하고 다음 부팅까지 이어졌다(전원은 끊기지 않았다). 11.101 첫 부팅의 6분 공백도 같은 것이었는지는 모른다.
+- 확인(부팅 C):
+  - machine-id `606a4996…`, 주소 .244. `resize2fs`로 54 GB가 됐다.
+  - `e850-scope`, `e850-wifiwatch`, `e850-hdmi`, nginx는 active다. `e850-usbhost`와 dvslive는 disabled다. failed 유닛은 0이다.
+  - overlay 파일의 md5가 보드6과 같다.
+  - 전체 manifest 대조(42,074개): 모두 같다(`md5sum -c --quiet` 출력 없음, rc 0).
+- Mac 이미지: `~/e850-logs/clone-20261124-b6/`(권한 700)에 README.txt, MD5SUMS, boot.img(boot-nocpu)를 같이 두었다. 절차는 BOARD-CLONE.md 12장이다.
+- 보드4에 바꾼 것: userdata 전체(보드6 상태). boot는 그대로 boot-nocpu다.
+
+### 11.103 보드6: 행동 분류의 이벤트 묶기를 C로, 캡처 종료 때 exit 134, 화면 해상도 고르기(배율) (2026-11-25)
+
+**CPU4가 99%인 까닭.** 사용자: "cpu번이 거의 99% 이상 사용중이고 7번은 놀고 있는데 이유는?"
+- [관찰] CPU4~6에는 행동 분류(`dvs-act`)와 얼굴(`dvs-face`)이 있다. 20초 동안 스레드 CPU를 재 보니 `dvs-act`가 94.9%였다. CPU7은 웹(`dvs-web`)과 Wi-Fi IRQ 전용이라(11.30, 11.45, 11.69) 거의 0이다.
+- [관찰] 예전 `dvs-act`는 Python에서 `dvs_events()`로 이벤트를 받아 numpy로 60 ms 칸에 셌다. 이것이 센서 속도를 따라가지 못해 링 규칙으로 건너뛰었다. 45초 실행에서 `lost 1084759148`이었다(그때 추정한 전체 약 16억 개의 약 70%).
+
+**이벤트 묶기를 C로.** 사용자: "좋아 c로 해야지".
+- `dvsview.c`:
+  - `struct dvs_binner`, `dvs_bin_run(s, ring, size, wr, acc)`, `dvs_act_bin(s, acc)`를 넣었다. 60 ms(`STEP_US`)마다 2×120×160 칸을 세고, 3초(`GAP_US`) 넘게 비면 처음부터 다시 센다.
+  - `dvs_events()`와 `dvs_cells()`는 지웠다.
+- 속도(같은 이벤트 약 210만 개, `binbench.py`):
+  - 첫 판은 30~35 ns/이벤트였다. 구조체 필드 별칭 때문에 매번 메모리를 읽었고, 이벤트마다 `%`를 계산했다.
+  - 로컬 변수와 링의 연속 구간 단위로 바꾸자 22.5 ns가 됐다.
+  - 칸 안의 이벤트만 세는 빠른 안쪽 루프를 넣자 약 20 ns가 됐다.
+- `dvsact.py`: 스레드를 둘로 나눴다. 둘 다 CPU4~6에 고정한다(`dvsctl.pin`).
+  - `dvs-bin`: C 묶기를 60 ms마다 돈다.
+  - `dvs-act`: `queue.Queue(8)`에서 받아 onnxruntime 추론과 판정을 한다.
+  - 2초마다 `[dvsact] steps N, step median …, queued Q, lost L`을 찍는다.
+- 결과(보드6, 같은 장면, 스레드 CPU 20초, A/B):
+
+| | 예전 | 새 판 |
+|---|---|---|
+| 스레드 CPU | `dvs-act` 94.9% | `dvs-bin` 75.2% + `dvs-act` 59.8% |
+| 판정 | 칸을 건너뜀(위의 lost) | 2초에 33~35번(기대 33.3), step 중앙값 34~38 ms, 최대 50~90 ms |
+| 대기열 | 없음 | 0~1 |
+| lost | 약 70% | 0 |
+| 코어별 사용률(CPU4/5/6, 1초 표본) | 95~100 / 30~55 / 0~30 | 85~93 / 60~88 / 16~35 |
+
+  - CPU7은 두 판 모두 0~3%다. dvsview와 dvsgl은 그대로 35 fps이고, 최신 이벤트보다 약 31 ms 늦다.
+  - 사용률이 는 것은 예전 판이 버리던 이벤트를 이제 모두 세기 때문이다.
+- 시험:
+  - `test_dvsact.py`는 12개 모두 OK(debian:12 arm64 Docker).
+  - 새 `test_cbinner`: 무작위 이벤트, 5.4초 공백, uint32 시각 감김, 무작위 조각 단위의 쓰기. 결과가 Python `Binner`의 프레임과 같다. `s->t0 = tu`로 일부러 틀리게 하면 실패한다.
+  - dvsview C 시험은 모두 ok다. 새로 읽는 곳에서 시작하는 경우, 링을 한 바퀴 넘겨 잃는 경우도 시험한다.
+
+**캡처 종료 때 exit 134.**
+- [관찰] SIGTERM으로 재시작할 때 가끔 `terminate called without an active exception`(SIGABRT, exit 134)가 났다. 09:39~09:55에 6번 중 2번이었다.
+- `dvs`는 연속 3번 실패하면 멈춘다.
+- [가설] onnxruntime 안의 daemon 스레드가 인터프리터 종료 정리와 부딪친다.
+- 고침: `ov5647-cap.py`의 `leave(code)`는 atexit 함수를 돌리고 출력을 비운 뒤 `os._exit(code)`로 끝낸다.
+- 결과: 고친 뒤 SIGTERM 재시작 10번이 모두 exit 0이었다.
+
+**화면 해상도.** 사용자: "화면 해상도를 더 높일 수 있나? 그 어플도 설치해 해상도 변경하는".
+- HDMI 신호는 1080p보다 높일 수 없다.
+  - [관찰] 보드6 :1의 `xrandr`는 `HDMI-1` 1920x1080 60 Hz 한 모드만 보인다. EDID는 0바이트이고, e850-kms는 fb0의 모드 하나만 낸다(11.85).
+  - LT8912B(MIPI DSI → HDMI 브리지)는 1080p60이 최대다. 출처: [Adafruit LT8912B](https://learn.adafruit.com/adafruit-lt8912b-dsi-to-dvi-converter?view=all), [커널 바인딩 lontium,lt8912b](https://www.kernel.org/doc/Documentation/devicetree/bindings/display/bridge/lontium%2Clt8912b.yaml).
+- 할 수 있는 것은 X의 배율이다. `xrandr --scale-from WxH`는 데스크톱을 다른 크기로 배치하고, X가 1080p 신호에 맞게 늘이거나 줄인다. 보드4 :1(modesetting + glamor)에서 시험했다.
+  - 2560x1440:
+    - rc 0, 화면 2560x1440, Xorg 로그 `Allocate new frame buffer 2560x1440`.
+    - DRM 평면은 1920x1080 fb(35)를 내보내고, 2560x1440 fb(37)는 따로 있다. 그래서 X가 줄인 그림을 내보낸다고 본다.
+  - 처음에는 배경이 바둑판처럼 반복됐다. `xbg`가 1920x1080 픽스맵을 root에 걸기 때문이다. `xbg`를 화면 크기에 맞춰 늘이도록 고쳤다(가장 가까운 화소, `xbg 파일 [폭 높이]`). 다시 찍은 xshot에서는 배경이 화면을 채운다.
+  - `--scale 1x1`로 1920x1080에 돌아온다.
+  - `gles-x11 1280 720 7 egl`(vsync 없음)을 화면 크기별로 돌렸다:
+
+| 화면 크기 | gles-x11 fps | Xorg CPU |
+|---|---|---|
+| 1920x1080 | 294~310 | 약 54% |
+| 2560x1440 | 252~272 | 약 44% |
+| 1280x720(창이 화면 전체) | 159~177 | 약 35% |
+
+    화면에 실제로 바뀌어 보이는 것은 e850-kms의 30 fps 상한(11.85)이다. 그래서 이 숫자는 GPU 여유를 비교할 뿐이다.
+- 앱 `e850-res`(`features/desktop`, Python GTK3):
+  - 이미 있는 `python3-gi`를 써서 새 패키지가 없다. zenity는 webkit, gstreamer 등 100개 넘는 패키지를 끌어와서 쓰지 않았다. lxrandr와 arandr는 모드 목록(1920x1080 하나)만 보여서 소용없다.
+  - 고를 수 있는 크기: 1280x720(크게), 1600x900, 1920x1080(실제 해상도), 2240x1260, 2560x1440(작게, 덜 선명).
+  - 고른 값은 `~/.config/e850-res`에 남는다. `session.sh`의 `e850-res --apply`가 X가 시작될 때 다시 건다.
+  - 메뉴(설정)에 "Screen resolution (화면 해상도)"가 있다. 명령줄로는 `e850-res 2560x1440`이다.
+  - `--selftest`는 ok다(xrandr 출력 해석, 잘못된 크기 거부).
+  - 보드4에서 창을 띄워 xshot으로 봤다. 한글 라벨과 지금 크기가 보인다.
+- 확인하지 않은 것:
+  - HDMI 화면을 눈으로 보지 않았다(원격). 2560x1440에서 글자가 얼마나 선명한지도 모른다.
+  - 창의 "적용" 버튼을 눌러 보지 않았다(명령줄 경로만 시험했다). 패널 메뉴에 항목이 실제로 보이는지도 보지 않았다.
+  - 배율을 켠 채 DVS GPU 창, Chrome, 전체 화면을 써 보지 않았다.
+  - :0(fbdev X)에는 RandR 변환이 없어 오류가 날 것이다(시험하지 않음).
+- 보드에 바꾼 것:
+  - 보드6:
+    - 행동 분류: `/usr/local/lib/libdvsview.so`, `/usr/local/share/dvsview/dvsact.py`, `/usr/local/bin/ov5647-cap.py`. 이전 판은 `/var/tmp/dvs-prev-11.103/`에 있다.
+    - 해상도: `/usr/local/bin/e850-res`, `/usr/local/share/applications/e850-res.desktop`, `/opt/e850-features/desktop/{session.sh,e850-res,e850-res.desktop}`, `~/.local/bin/xbg`. 이전 판은 `/var/tmp/xbg.prev`와 `/var/tmp/session.sh.prev`에 있다.
+    - 화면 크기는 바꾸지 않았다(고른 값 없음).
+  - 보드4:
+    - 위와 같은 파일을 넣었다(DVS 파일 3개의 이전 판은 `/var/tmp/dvs-prev-11.103/`).
+    - 시험하려고 띄운 X는 `e850-x stop`으로 내렸다. `~/.config/e850-res`는 1920x1080이다.
+- Mac 이미지 `~/e850-logs/clone-20261124-b6/overlay`에 위 파일을 넣었다(13개). MD5SUMS와 README도 고쳤다. `rootfs.simg`와 `part.simg.*`는 11.102 overlay로 만든 그대로다. 다음 복제 때 `build-clone.sh`를 다시 돌린다.
+- 저장소: `tools/linux510/{dvsview.c,dvsact.py,test_dvsact.py,ov5647-cap.py}`, `features/desktop/{e850-res,e850-res.desktop,session.sh,feature.sh}`, `tools/board/wallpaper/xbg.c`.
+
+### 11.104 DVS 설정 패널을 높이 700으로, 그래프 두 열·기간 1분, DVS 창을 왼쪽 끝에 (2026-11-25)
+
+사용자: "dvs control pannel이 세로로 너무 길어, 세로 길이를 70%로 줄이도록 UI/UX를 변경해, 가로 폭은 적당해". 이어서: "아직 콘트롤 패널 공간이 남으니 그래프를 가로크기를 반으로 줄여서 다 보이게 해줘, 그래프 기간은 1분을 추가하고 1분이 디폴트로".
+- [관찰] 전: 보드6의 `dvspanel` 창은 940x1022였다(기본값 940x1000). 작업 영역(높이 1014)을 넘었다. 왼쪽 열 끝의 "센서 설정 적용" 버튼이 화면 밖에 있었고, 오른쪽은 그래프 12개가 아래로 길게 이어졌다.
+- 바꾼 것(`tools/linux510/dvspanel.c`):
+  - 창은 940x700이다(`PANEL_W`, `PANEL_H`). 폭은 그대로다.
+  - 왼쪽 열:
+    - 제목과 지금 판정을 한 줄에 둔다.
+    - 프리셋 버튼을 "표시 (바로 적용)" 줄에 붙였다.
+    - 설정마다 있던 설명 줄은 풍선 도움말(tooltip)로 옮겼다.
+    - 색과 뒤집기를 한 줄에 둔다.
+    - 센서 "적용" 버튼을 MIPI flush 줄에 붙였다.
+    - 최근 판정 변화는 8줄에서 5줄로 줄였다.
+  - 오른쪽은 탭 두 개다.
+    - "그래프" 탭:
+      - 기간, CSV, 타일이 있다. 타일은 값과 범위를 한 줄에 쓰고, 개수 타일 밑의 "최근 N분"은 뺐다(기간은 위에 있다).
+      - 그래프 12개는 두 열(반 폭)이고 높이는 40이다. 범위(최대·최소)는 그래프 안 왼쪽 위와 아래에 작은 글씨로 그린다.
+    - "통계·녹화·레지스터" 탭: 통계 글(숫자 대부분이 그래프·타일과 겹침), 행동 녹화, 레지스터 읽기가 있다.
+  - 기간에 1분을 더했고 1분이 기본이다(1분, 2분, 10분, 30분, 1시간).
+- DVS 창 위치(`dvsgl.c`):
+  - [관찰] `e850-dvs`를 다시 띄우면 DVS 창이 패널보다 먼저 떴다. 그러면 openbox가 빈 화면 가운데(480,154)에 놓아 패널이 가렸다.
+  - 캡처만 다시 시작하면 남은 왼쪽 영역의 가운데(4,154)에 놓였다.
+  - 고침: `dvsgl`이 창에 USPosition (0,0)을 준다. 다시 띄운 뒤 (1,20)에 놓였다. CPU 대체 창(`dvsx11.py`)은 고치지 않았다.
+- 시험:
+  - `dvspanel-test.sh`(Docker Debian 12 arm64, Xvfb):
+    - 보드와 같은 글꼴(fonts-nanum)을 넣었다. 대역 서버의 최근 판정을 7개로 늘렸다(5줄만 보이는지 시험).
+    - 자체 시험은 940x700에 배치한 뒤 왼쪽 열과 그래프 탭에 스크롤이 생기지 않는지 본다.
+    - 통과했다. 그래프 탭은 17 px 남는다.
+    - 그래프 높이를 70으로 바꾸면 "graph tab needs 824 px, shows 661"로 실패한다. 높이 한도를 500으로 바꾸면 왼쪽 열(632 px)에서 실패한다.
+    - 첫 판의 높이 검사(`gtk_widget_get_preferred_height`)는 가장 좁은 폭 기준이라 785 px로 잘못 쟀다. 실제 배치의 스크롤 범위로 바꿨다.
+  - 보드6 `dvsgl --selftest`(kenv): ok.
+  - 보드6 화면(xshot): 패널 940x700, 왼쪽은 "적용" 버튼까지 보인다. 그래프 탭은 12개가 다 보이고 기간은 1분이다. DVS 창은 (1,20)에 있다.
+- 모르는 것:
+  - [관찰] 10:36에 띄운 패널이 10:40쯤 940x989(작업 영역 높이)가 돼 있었다. 다시 띄운 뒤 캡처 재시작과 1분 관찰에서는 700을 유지했다.
+  - 원인은 모른다. 사용자가 창 크기를 바꿨을 수도 있다. 예전 판의 1022도 기본값 1000보다 크다.
+- 보드에 바꾼 것:
+  - 보드6과 보드4: `/usr/local/bin/dvspanel`, `/usr/local/bin/dvsgl`. 이전 판은 `/var/tmp/dvs-prev-11.104/`에 있다.
+  - 보드6: `e850-dvs`를 세 번 다시 띄웠다(stop 뒤 x-kms.sh와 같은 `systemd-run`). 캡처를 SIGTERM으로 한 번 재시작했다.
+  - 센서 설정(이 절의 마지막 화면에서 margin 2, flush 988 µs)은 건드리지 않았다.
+  - Mac 이미지 overlay에 두 파일을 넣었다(14개). MD5SUMS와 README도 고쳤다.
+- **고친 회귀(같은 날):**
+  - [관찰] 새 패널은 CPU를 30~34% 썼다(보드6, 20초). 같은 때 띄운 예전 판은 9%였다. `Xorg`도 70%였다.
+  - 원인: `draw_chart()`가 그리는 도중에 값 라벨을 `gtk_label_set_text`로 바꿨다. GTK는 그때마다 창을 다시 배치하고 다시 그린다. 예전에는 화면에 보이는 그래프가 4~5개라 비용이 작았지만, 12개가 다 보이자 커졌다.
+  - 고침: 그리기는 그리기만 한다. 값 라벨은 `redraw_graphs()`에서 새 기록을 받을 때 한 번, 글자가 바뀔 때만 바꾼다.
+  - Xvfb 대역 서버에서 잰 CPU: 예전 판 1%, 고치기 전 33%, 고친 뒤 1%. 보드6: 패널 9%, `Xorg` 15%(전 70%).
+- 저장소: `tools/linux510/{dvspanel.c,dvspanel-test.sh,dvsgl.c}`.
+
+### 11.105 센서 2000 fps·MIPI flush 988 µs의 영향, CPU와 GPU, DRAM 버퍼 16개, SD 카드 (2026-11-25)
+
+사용자: "2000fps로 내가 변경함, mipi flush 최대로 키웠는데 어떤 영향이 있는거야? cpu usage는 왜 올라간거야? GPU사용이 잘 안돼?", "디램버퍼를 8개에서 16개로 늘리는것은 ?", "sdcard 인식되도록 드라이버 설치해".
+
+**센서 설정 A/B**(보드6, 설정마다 다시 시작 25초 뒤 20초, `/var/tmp/dvsmeasure.sh`, `dvsab.sh`). 장면은 맞추지 않았다(공이 움직이는 정도가 바뀐다). 오전(09:51, 1000 fps·50 µs)에는 프레임당 약 100만 이벤트였다.
+
+| scan / flush | 프레임당 이벤트(31 fps) | 버퍼/s × kB | MB/s | 늦음 | CPU0~7 % | `dvs-bin` | 분류기가 잃은 이벤트 |
+|---|---|---|---|---|---|---|---|
+| 2000 fps / 988 µs(사용자 설정) | 162만 | 64.5 × 1024 | 66 | 39 ms | 58 76 59 54 85 89 73 4 | 99.8% | 초당 1,640만(약 33%) |
+| 2000 fps / 50 µs | 235만 | 88.5 × 777 | 68.8 | 33 ms | 67 95 67 62 83 89 76 6 | 95.8% | 초당 3,570만(약 49%) |
+| 1000 fps / 50 µs | 193만 | 57.5 × 778 | 44.7 | 35 ms | 68 76 68 72 87 90 78 6 | 100.5% | 초당 1,650만(약 27%) |
+| 2000 fps / 988 µs(되돌린 뒤) | 234만 | 67.0 × 1024 | 68.6 | 40 ms | (재시작 중) | | 초당 3,300만(약 45%) |
+
+- 잃은 비율은 `[dvsact] lost`의 2초 증가분을 (프레임당 이벤트 × 31)로 나눈 추정이다.
+- scan 2000 fps(495 µs):
+  - 시간 분해능이 두 배다.
+  - 1000 fps보다 이벤트는 약 22%, MIPI 데이터는 약 54% 많다(scan마다 붙는 시각 워드로 추정).
+  - 버퍼가 초당 88.5개(전 57.5개)라 디코더 코어(CPU1)가 95%(전 76%)다.
+- flush 988 µs:
+  - 데이터 양은 같다(68.6 대 68.8 MB/s). 버퍼가 늘 꽉 찬 1 MB(프레임 채움 100%)로 덜 자주 온다.
+  - 바쁜 장면에서는 늦음이 33 → 40 ms다(한 번씩 잼).
+  - 조용한 장면(11:34, 13 MB/s)에서는 버퍼가 초당 12.4개뿐이었다. 최신 이벤트보다 71 ms 늦었고, 1분에 어두운 프레임 17장, 데이터 있는 시간 80%였다. [가설] 버퍼가 차기를 기다리는 동안 화면 프레임(32 ms)에 새 이벤트가 없다.
+  - 꽉 찬 버퍼가 센서 쪽에서 이벤트를 잃게 하는지는 재지 못했다.
+- CPU가 오른 까닭:
+  1. 장면 이벤트가 오전의 약 2배다(1000 fps에서도 193만 대 100만).
+  2. 2000 fps의 데이터 증가.
+  3. 11.104 패널 회귀(패널 30%, `Xorg` 70%). 고쳤다.
+  - 묶기 스레드 `dvs-bin`은 약 20 ns/이벤트라 초당 약 5,000만 개가 한계다. 그래서 세 설정 모두 한 코어를 다 쓰고 이벤트를 잃는다.
+- GPU:
+  - GPU는 DVS 창(`dvsgl`)만 그린다. 세 설정 모두 23~25 fps였고(오전 35 fps), 프레임당 2,097,152개였다. 이것은 `CAP`(1<<21, 최신 것부터) 한도다. 프레임당 CPU+GPU 시간은 약 40 ms다.
+  - 그래서 GPU 창은 한계에 있고, 한도를 넘는 이벤트는 그리지 않는다.
+  - MIPI 해독, 분류기 묶기·추론, 얼굴 검출은 CPU에서 돈다.
+  - kbase `utilization`은 같은 부하에서 0과 100을 오가서 쓸 수 없다(GPU DVFS 사용률을 모으지 않음, 11.82).
+
+**DRAM(VC0) 버퍼 8개 대 16개**(2000 fps·988 µs, `dvs --auto -b 16`, 다시 시작 75초 뒤 1분 기록, `/var/tmp/bufab.sh`):
+- vendor 한도는 `IS_MAX_BUFS = VIDEO_MAX_FRAME`(32)다.
+- 8개: 빈 버퍼 최소 7, 처리 대기 최대 0, MIPI 프레임 1389 / 버퍼 1392.
+- 16개: 빈 버퍼 최소 15, 대기 최대 0, 1230 / 1229. MemAvailable 약 22 MB 줄었다.
+- 늦음은 둘 다 43 ms다. `is_sensor_group_tag fail(-22)`는 둘 다 스트림을 시작할 때 난다.
+- 디코더가 받는 대로 풀어서 한 번에 1개 넘게 쌓이지 않았다. 앞서 그래프의 "빈 버퍼 최소 0, 처리 대기 7"은 다시 시작한 직후 구간이었다.
+- 그래서 16개의 이득은 재지 못했다. 표준 `-b 8`로 되돌렸다.
+
+**SD 카드:**
+- [관찰] 커널에는 이미 다 있다. dw_mmc(`13500000.dwmmc2`, card-detect GPIO), exFAT·FAT·FUSE가 내장돼 있다.
+  - 10:57:21에 꽂은 카드를 바로 알아챘다(`mmc1: card inserted`, SDR104 200 MHz SDHC, 튜닝 오류 한 번 뒤 성공).
+  - `mmcblk1` 29.7 GiB, exFAT 파티션 하나.
+  - 빠진 것은 마운트해서 보여 주는 사용자 공간이었다.
+- desktop 기능에 넣은 것:
+  - 패키지 `udisks2 gvfs exfatprogs dosfstools`(추천 패키지 없이 29개, `libpam-systemd`는 새로 들지 않음).
+  - polkit 규칙 `/etc/polkit-1/rules.d/50-e850-udisks.rules`: 데스크톱 사용자가 마운트, 해제, 꺼내기를 한다. X 세션에는 logind seat이 없어서 udisks2의 `allow_active`가 안 맞는다.
+  - udev 규칙 `/etc/udev/rules.d/80-e850-hide-emmc.rules`: eMMC(카드 종류 `MMC`)는 `UDISKS_IGNORE`. 그러지 않으면 Android 파티션 4개가 파일 관리자에 볼륨으로 나왔다.
+- 확인(보드6):
+  - philip이 `udisksctl mount`로 비밀번호 없이 `/media/philip/NO NAME`(exfat, uid 1001, rw)에 마운트했다.
+  - GIO VolumeMonitor(pcmanfm이 쓰는 것)에는 SD 볼륨만 나온다(꺼내기 가능).
+  - 처음 마운트할 때 "not properly unmounted"가 나서 `fsck.exfat -y`를 했다(clean, 16 디렉터리, 93 파일). 64 MB를 쓰고 다시 읽어 md5가 같았다.
+  - 직접 읽기는 36.7 MB/s(DVS가 도는 중)다.
+- 확인하지 않은 것: pcmanfm 창에서 클릭으로 마운트·꺼내기, 카드를 뺐다 다시 꽂기.
+- 보드6에 바꾼 것:
+  - 패키지 4개와 그 의존성, 위 규칙 두 개.
+  - `/opt/e850-features/desktop/`의 `feature.sh`와 규칙 파일(이전 판 `/var/tmp/desktop-feature.sh.prev`).
+  - SD 카드는 마운트된 채로 두었다.
+- 보드4:
+  - 11:3x까지 패널 고친 판을 넣었다.
+  - 그 뒤 Wi-Fi(ARP)와 Mac USB(fastboot)에 모두 보이지 않아 SD 지원은 넣지 못했다. 원인은 모른다.
+  - 12:27(UTC)에 다시 부팅해 있었다. 누가 전원을 다시 넣었는지는 확인하지 않았다.
+    - [관찰] 앞 부팅의 journal은 11:33:22(가동 652초)에 ssh 세션이 끝나는 줄에서 끊긴다. 오류나 패닉 줄은 없고, `/sys/fs/pstore`도 없다. 원인은 여전히 모른다.
+    - 현미경(`e850-scope`)은 부팅 때 떠서 50M Hi-5031Q 2016×1536을 4.3~4.4 fps로 받는다(프레임 340장 중 336장 온전, MIPI 오류 0, LED 255).
+    - 사용자 요청("현미경 작동 시켜")으로 GPU 데스크톱(:1)에 `google-chrome --app=http://127.0.0.1:8090/`을 띄우고 앞으로 올렸다. 화면에서 LIVE 4.3 fps를 확인했다.
+    - SD 지원은 아직 넣지 않았다.
+- 저장소:
+  - `features/desktop/{feature.sh,e850-udisks.rules,80-e850-hide-emmc.rules}`.
+  - 측정 스크립트는 보드6 `/var/tmp/`에만 있다(`dvsmeasure.sh`, `dvsab.sh`, `bufab.sh`).
+
+### 11.106 현미경 뷰어의 실시간 화면을 GPU로: PNG 대신 회색 바이트, WebGL2 LUT (2026-11-25)
+
+사용자: "보드켜졌지? 현미경 작동 시켜", "이것도 GPU를 사용해서 최적화 하도록 하는건 어때?, 그리고 외부 접속 주소 연결해줘".
+
+**보드4 현미경(관찰):**
+- 12:27(UTC) 부팅 뒤 `e850-scope`가 50M Hi-5031Q 2016×1536을 4.3~4.4 fps로 받고 있었다(11.105).
+- GPU 데스크톱(:1)에 `google-chrome --app=http://127.0.0.1:8090/`을 띄웠다.
+
+**어디에 CPU를 쓰나(고치기 전, 보드4, 20초, 뷰어 창 하나):**
+- CPU0~7 합 257%.
+- 서버 `scope.py` 62%, Chrome 렌더러 60%, GPU 프로세스 38%, 브라우저 10%, Xorg 14%, 커널 스레드 43%(그중 `uvcvideo` kworker 약 26%).
+- 서버 한 프레임(실제 영상으로 잰 것):
+
+  | 단계 | 시간 |
+  |---|---|
+  | YUYV에서 Y 뽑기 | 6.8 ms |
+  | 4장 평균(uint16) | 30.7 ms |
+  | 2×2 평균 | 15.9 ms |
+  | zlib 1 PNG | 78.0 ms |
+
+- 실시간 PNG는 1008×768 화소(774,144 B)에 696,394 B다. 시료 잡음 때문에 1.11배밖에 줄지 않는다.
+- 페이지는 프레임마다 다음을 했다.
+  1. PNG를 풀었다(`createImageBitmap`).
+  2. 2D 캔버스에 그렸다가 `getImageData`로 다시 읽었다.
+  3. JS로 화소마다 LUT(밝기·대비·감마·반전)를 RGBA에 썼다.
+  4. `putImageData`로 올렸다.
+  5. 화면 캔버스에 다시 그렸다.
+
+**바꾼 것:**
+- 서버:
+  - `/frame.png?…&fmt=raw`는 같은 영역의 회색 바이트를 줄 단위로 준다(`application/octet-stream`, 크기는 `X-Region`의 w/step × h/step).
+  - `fmt`가 없으면 예전처럼 PNG다(실험 마법사의 `grabFrame`이 쓴다).
+- 페이지:
+  - 실시간 화면은 `fmt=raw`를 받는다.
+  - WebGL2 캔버스(`#gv`)를 `#cv` 아래에 두었다. 프레임은 R8 텍스처로 한 번 올리고, LUT는 256×1 텍스처로 올린다. 셰이더가 LUT를 적용한다.
+  - 2× 미만 확대에서는 LINEAR, 그 이상에서는 NEAREST다(예전 `imageSmoothingEnabled`와 같다).
+  - 측정선, 물체 원, 십자선은 투명하게 지운 `#cv`에 그린다.
+  - 히스토그램과 평균 등 통계는 프레임마다 JS로 한 번 센다. 밝기 슬라이더를 움직이면 LUT만 다시 올린다.
+  - WebGL2가 없거나, `?gl=0`이거나, 컨텍스트를 잃으면 2D 캔버스로 그린다(JS LUT, 예전 방식에서 PNG 풀기와 다시 읽기만 뺐다).
+
+**시험(보드4):**
+- 서버: 가짜 프레임으로 8091에 따로 띄운 서버에서 같은 프레임(n 일치)의 `fmt=raw` 바이트가 PNG를 푼 화소와 같았다(`assert`).
+- 페이지: 보드4 Chrome(:1, ANGLE GL-EGL)의 시험 창 두 개에서 확인했다. 창 제목에 경로를 찍는 줄은 시험 사본에만 넣었다.
+  - 제목이 "[GL]"과 "[2D]"로 나와 경로가 맞게 갈렸다.
+  - 맞춤 화면, 861% 확대(원본 화소, NEAREST), 커서 화소 값 표시가 됐다.
+  - 반전 + 자동 대비(밝기 −47, 대비 ×1.47)에서 두 창의 영상 영역 화소 평균 차는 0.67, 평균 밝기는 144.5 대 144.6이었다(멈춘 프레임이 서로 달라 0은 아니다).
+- 실제 서비스에서 20초씩:
+
+  | 판 | CPU 합 | `scope.py` | 렌더러 | GPU 프로세스 | Xorg | 커널 스레드 |
+  |---|---|---|---|---|---|---|
+  | 예전(PNG + JS LUT) | 257% | 62 | 60.5 | 38.0 | 13.7 | 42.9 |
+  | 회색 바이트 + 2D(`?gl=0`) | 248% | 38.8 | 54.4 | 43.3 | 15.4 | 48.2 |
+  | 회색 바이트 + WebGL2 | 237% | 39.1 | 42.1 | 42.1 | 16.7 | 50.2 |
+  | WebGL2, 화면 멈춤 | 96% | 21.1 | 7.4 | 3.4 | 0.7 | 38.3 |
+
+- 해석:
+  - 줄어든 것은 서버 PNG 압축(−23)과 렌더러의 화소 변환(−18)이다. 전체로는 약 0.2코어다.
+  - 남은 화면 비용은 프레임당 렌더러 약 35, GPU 프로세스 약 39, Xorg 약 16이다(멈춤과 비교). [가설] Chrome이 창을 합성해 X로 보내는 경로다. GPU 프로세스는 CPU에서 Mesa·shim(큰 BO cache clean, 11.82)을 돈다. 재지 않았다.
+  - 화면과 상관없이 남는 비용:
+    - USB 수신 `uvcvideo` 약 31%(YUYV 6 MB/프레임. 실시간도 GREY로 보내면 반으로 준다. 키트 펌웨어를 고쳐야 한다).
+    - 서버 4장 평균과 2×2 평균 약 21%(numpy. OpenCV NEON으로 줄일 여지가 있다).
+  - fps는 센서가 정한다(4.37 fps). GPU로 바꿔도 빨라지지 않는다.
+
+**외부 접속:**
+- 11.75처럼 `~/bin/cloudflared tunnel --no-autoupdate --url http://localhost:8090`(trycloudflare 임시 주소)을 philip으로 띄우려 했다. 이 세션의 권한 검사가 다시 막았다(11.102와 같음).
+- 이 뷰어에는 인증이 없다. 링크를 아는 사람은 누구나 노출, LED, 센서 레지스터, 촬영, `/quit`을 쓸 수 있다.
+- 사용자가 보드4 터미널에서 직접 띄우거나, 먼저 뷰어에 비밀번호를 넣을지 정한다.
+
+**보드에 바꾼 것:**
+- 보드4·보드6 `/opt/e850-scope/scope.py`(md5 03bc65a1…), `scope.html`(d70c9b9f…)을 넣고 `/reload`했다.
+- 예전 판은 각 보드 `/var/tmp/scope-prev/`에 있다.
+- 보드4 데스크톱에 현미경 Chrome 앱 창을 띄웠다.
+- 시험 서버(8091)는 내렸다. 측정 스크립트는 보드4 `/var/tmp/cpumeas.py`에만 있다.
+- Mac 복제 이미지 overlay에 `opt/e850-scope/scope.{py,html}`를 넣고 MD5SUMS를 다시 만들었다.
+- 저장소: `tools/board/scope/{scope.py,scope.html}`.
+
+### 11.107 ifconfig, 바탕화면 아이콘(DVS, 현미경), 보드6 scan 누락과 MIPI flush 1 µs (2026-11-25)
+
+사용자: "ifconfig가 왜 안 먹지? 그리고 dvs 및 전자현미경 실행 버튼 바탕화면에 올려줘", "보드6 dvs scan 누락이 올라가는데? 왜?", "그동안 작업한게 저장이 안되었나?", "보드는 내가 껏다가 켯어".
+
+**ifconfig:**
+- [관찰] Debian 12 기본 rootfs에 `net-tools`가 없다.
+- 데스크톱 세션 PATH(`x-kms.sh`가 `env -i`로 줌)는 `/usr/local/bin:/usr/bin:/bin`이라, `/usr/sbin`의 `ifconfig`, `iw`도 찾지 못한다.
+- 고침:
+  - desktop 기능 PKGS에 `net-tools`(의존성 없음, `libpam-systemd` 안 들어옴)와 `xdotool`을 넣었다.
+  - `session.sh`가 `PATH`에 `/usr/sbin:/sbin`을 붙인다. 이것은 다음 데스크톱 시작부터 적용된다. 지금 떠 있는 터미널에서는 `/usr/sbin/ifconfig` 또는 `ip a`를 쓴다.
+
+**바탕화면 아이콘:**
+- 바탕화면:
+  - 지금까지 바탕은 `xbg`가 root 창에 그렸고 아이콘이 없었다.
+  - `session.sh`가 `pcmanfm --desktop --profile e850`을 띄운다(`~/Desktop`의 아이콘).
+  - 기본 설정은 `/etc/xdg/pcmanfm/e850/desktop-items-0.conf`(단색 #24323f)다.
+  - 보드4·6은 `~/.local/share/wallpaper.bgrx`를 GdkPixbuf로 `wallpaper.png`로 바꾸고, 사용자 설정에서 `wallpaper_mode=crop`으로 쓴다(해상도를 바꿔도 화면을 채운다).
+- `e850-open dvs|scope`:
+  - 이미 열린 창(`^DVS$`, `^SOL Microscope`)이 있으면 `xdotool`로 앞으로 가져온다.
+  - 없으면 dvs는 `systemctl start e850-dvs-desk.service`를 한다(desktop 시작 때의 `e850-dvs`가 돌고 있으면 시작하지 않는다).
+  - scope는 `google-chrome --app=http://127.0.0.1:8090/`(Chrome이 없으면 firefox)를 띄운다.
+- DVS 권한:
+  - `dvs`는 root가 필요하고, 사용자로 실행하면 sudo 비밀번호를 묻는다. 아이콘에서는 입력할 곳이 없다.
+  - 그래서 고정 유닛 `e850-dvs-desk.service`(`DISPLAY=:1`, `ExecStart=/usr/local/bin/dvs`, 센서가 없으면 녹화 재생, 130 = 사용자 종료)를 두었다.
+  - polkit 규칙 `50-e850-dvs.rules`는 데스크톱 사용자에게 이 유닛의 start·stop만 허락한다.
+- libfm(pcmanfm 1.3.2):
+  - 바탕화면의 `.desktop`을 두 번 누르면 실행 권한(755든 644든), 심볼릭 링크와 상관없이 "This text file … seems to be an executable script" 창을 띄웠다. "Execute"를 누르면 항목을 제대로 실행했다.
+  - libfm 문자열에 신뢰(trust) 설정이 없다. 끄는 방법은 `quick_exec=1` 하나다. `/etc/xdg/libfm/libfm.conf`와 사용자 `~/.config/libfm/libfm.conf`에 넣었다.
+  - 그래서 파일 관리자에서 실행 스크립트를 두 번 누르면 묻지 않고 실행한다.
+- desktop 기능의 install은 보드에 있는 것만 아이콘을 넣는다: `/usr/local/bin/dvs`가 있으면 DVS, `/opt/e850-scope`가 있으면 현미경. 그 기능들을 넣은 뒤 desktop을 다시 install한다.
+- 시험(보드4, xdotool로 두 번 누르기):
+  - 현미경 아이콘: 확인 창 없이, 최소화한 현미경 창이 다시 앞으로 왔다(창은 1개 그대로).
+  - DVS 아이콘: 비밀번호 없이 유닛이 active가 되고, "DVS"·"DVS 설정" 창이 떴다(센서가 없어 녹화 재생).
+  - philip이 `systemctl stop e850-dvs-desk`로 끄는 것도 polkit이 허락했다.
+- 시험(보드6):
+  - DVS가 돌고 있을 때 아이콘을 누르면 `e850-dvs` PID가 그대로였다(다시 시작하지 않음). 창 쌓임은 "DVS 설정, DVS" → "DVS 설정 아래 DVS"로 바뀌어 맨 위로 왔다. 입력 포커스는 바탕화면에 남는다.
+  - 보드6은 DVS 창(0,0)이 왼쪽 위 아이콘을 가려서, 사용자 설정에서 아이콘을 아래쪽 (24,860), (124,860)에 두었다.
+- 함정: `pkill -f "pcmanfm --desktop"`이 그 명령을 실은 ssh 셸까지 죽여, 뒤의 명령이 실행되지 않았다(CLAUDE.md의 함정 그대로). pkill은 따로 보냈다.
+
+**보드6 scan 누락(관찰):**
+- 사용자가 보드6을 껐다 켰다(14:07 UTC 기록 끝, 14:12 부팅).
+- 부팅 때는 사용자가 정한 2000 fps·flush 988 µs가 남아 있었다(14:12 로그에 버퍼 1024 kB).
+- 14:14:23에 `sensor.json`이 `{"margin": 0, "flush_us": 1}`로 저장됐다. 이 파일은 `POST /sensor`(설정 패널·웹 페이지의 적용)만 쓴다. 8초 뒤 캡처가 그 설정으로 다시 시작했다.
+- 누락은 버퍼가 시작하는 곳에서 생겼다: `ts_miss_first` 5,336 / `ts_miss` 5,435.
+- 같은 장면(프레임당 이벤트 161만~163만)에서 flush만 바꿔 15초씩 잰 결과(`/var/tmp/flushab.py`, 끝나고 flush 1로 되돌림):
+
+  | flush | 버퍼 | scan 누락 | frame_end 누락 | 늦음 |
+  |---|---|---|---|---|
+  | 1 µs | 320~346/s × 148 kB | 131~156/s (6.5~7.7%), 간격 17~19번/s, 98%가 버퍼 시작 | 95~101/s | 17~20 ms |
+  | 50 µs | 79.5/s × 671 kB | 0 | 0 | 28 ms |
+  | 988 µs | 52.5/s × 1024 kB | 18/s (0.9%), 간격 0.4번/s | 0 | 32 ms |
+
+- [가설] flush가 짧으면 센서가 MIPI 프레임을 초당 300번 넘게 닫고 연다. 그 경계에서 scan이 빠진다. 988 µs에서는 버퍼(1 MB)가 꽉 차서 가끔 길게 빠진다.
+- 보드6은 사용자 설정(flush 1 µs) 그대로 두었다.
+- 덧붙임(사용자: "mipi flush를 키우면 스캔누락이 적어지나? 어떤 원리?"):
+  - 같은 flush 1 µs에서 장면이 조용해지자(프레임당 52만 이벤트, 버퍼 361/s × 81 kB) scan 누락이 초당 1.3개(간격 0.2/s, 간격당 6.8 scan)로 줄었다.
+  - 같은 20초 동안 CSIS frame end는 360.5/s, 디코더에 온 버퍼는 360.0/s(버퍼 안 된 MIPI 프레임 0.5/s)였다.
+  - 그러니 누락은 flush만이 아니라 이벤트 양에도 달려 있다. 프레임 경계가 많고(짧은 flush) 이벤트가 많을 때(161만/프레임) 크다.
+  - 988 µs의 누락은 간격당 약 45 scan(22 ms)으로, 버퍼 하나의 길이(1/52.5 s = 19 ms)와 비슷하다. 프레임 하나가 통째로 빠진 것으로 보인다(가설).
+  - [가설, 재지 않음] 프레임 경계마다 센서가 보내기를 잠시 멈추고, 그동안 출력 FIFO에 쌓인 이벤트가 넘친다. 센서의 넘침 표시 레지스터는 찾지 않았다.
+- flush를 정하는 곳(사용자: "mipi flush 주기 설정은 무엇으로 하는거야? 레지스터로?"):
+  - 센서 S5KRC1S 레지스터다(11.25).
+    - `0x3910` bit7 `use_timeout`(setfile 0x81).
+    - `0x3911` `to_scnt0`(기준 시계 1 µs).
+    - `0x3912/0x3913` `to_scnt1`(타임아웃, µs. setfile은 999 = 1 ms).
+    - `0x3914` `to_mcnt`(1번).
+  - 경로:
+    1. 패널이나 웹 페이지의 적용(`POST /sensor`)이 `/var/lib/dvsview/sensor.json`에 저장하고 캡처를 끝낸다.
+    2. `dvslive.sh`(`tools/board/dvslive.sh`)가 다시 뜨며 `/sys/module/is_cis_s5krc1s/parameters/flush_us`에 쓴다.
+    3. stream on(mode change) 때 CIS 드라이버(`modules/s5krc1s-pablo`, `is-cis-s5krc1s.c`)가 setfile 다음에 0x3912/13을 쓴다(1~1023).
+
+**저장소(사용자: "깃에 전부 기록해 각각 레포에"):**
+- e85096 `features-20261121`에 11.100~11.107을 커밋하고 push했다.
+- sol-cx3-uvc `still-capture`에 LOG 15(보드4에서 50M 키트 실시간, 실시간 GREY의 여지)를 커밋하고 push했다.
+- sol-cx3-uvc의 `fw/cx3-ov5640-ref/`(Cypress CX3 SDK 예제, "UNPUBLISHED, LICENSED SOFTWARE")는 넣지 않고 `.gitignore`에 적었다.
+
+**저장 여부(관찰):**
+- 보드6:
+  - 껐다 켠 뒤에도 dvspanel(8add174b), dvsgl(9522f27c), 현미경 뷰어(03bc65a1, d70c9b9f), SD 패키지와 규칙이 그대로다.
+  - philip 권한의 `journalctl --list-boots`는 앞 부팅 끝을 12:42로 보였다. root로 보면 14:07까지 기록이 있다.
+- 껐다 켜기 전 보드6은 13:5x UTC쯤 Mac에서 ping·ssh가 안 됐다. 그동안에도 DVS 로그는 계속 찍혔다. wpa_supplicant 연결 끊김 기록이 없고, 주소도 있어서 `e850-wifiwatch`는 나서지 않았다. 원인은 모른다(11.100의 송신 막힘과 같은지는 확인하지 않았다).
+- 저장소의 바뀐 파일은 ee474dc 뒤로 커밋하지 않았다(Mac 작업 트리에만 있다).
+
+**보드에 바꾼 것:**
+- 보드4·6:
+  - `net-tools`.
+  - `/usr/local/bin/e850-open`, `/usr/local/share/applications/e850-{dvs,scope}.desktop`.
+  - `/etc/systemd/system/e850-dvs-desk.service`, `/etc/polkit-1/rules.d/50-e850-dvs.rules`.
+  - `/etc/xdg/pcmanfm/e850/`, `/etc/xdg/libfm/libfm.conf`(quick_exec).
+  - `/opt/e850-features/desktop/`. 이전 판은 `/var/tmp/session.sh.prev-107`, `/var/tmp/desktop-feature.sh.prev-107`에 있다.
+  - `~/Desktop/e850-{dvs,scope}.desktop`, `~/.config/pcmanfm/e850/desktop-items-0.conf`, `~/.config/libfm/libfm.conf`, `~/.local/share/wallpaper.png`.
+  - 지금 세션에 pcmanfm 바탕화면을 띄웠다.
+- Mac 복제 이미지 overlay에 보드6의 위 파일을 넣었다(46개, MD5SUMS·README). `net-tools`는 패키지라 굽고 나서 설치한다.
+- `build-clone.sh`가 overlay의 `home/<사용자>/` 아래 새 파일을 그 사용자 소유로 바꾼다. Docker에서 `~/Desktop` 소유를 확인했다.
+- 저장소: `features/desktop/{session.sh,feature.sh,e850-open,e850-dvs.desktop,e850-scope.desktop,e850-dvs-desk.service,e850-dvs.rules,pcmanfm-desktop.conf}`, `tools/linux510/build-clone.sh`.
+

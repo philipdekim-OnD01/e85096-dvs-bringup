@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Screen resolution (화면 해상도)
+Comment=Desktop size of the GPU X: 1280x720 to 2560x1440 scaled to the 1080p HDMI signal
+Exec=/usr/local/bin/e850-res
+Icon=preferences-desktop-display
+Categories=Settings;DesktopSettings;

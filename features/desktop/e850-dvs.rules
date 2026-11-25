@@ -1,0 +1,8 @@
+// The desktop user starts and stops the DVS window of the desktop icon (e850-dvs-desk.service) without a password,
+// and no other unit (docs 11.107). e850-feature desktop puts the user's name for DESKTOP_USER.
+polkit.addRule(function (action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "DESKTOP_USER" &&
+        action.lookup("unit") == "e850-dvs-desk.service" &&
+        (action.lookup("verb") == "start" || action.lookup("verb") == "stop"))
+        return polkit.Result.YES;
+});

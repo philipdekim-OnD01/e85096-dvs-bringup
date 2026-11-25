@@ -35,10 +35,18 @@ index f731475..4c85d79 100644
     free(bo);
  }
 diff --git a/src/drm-shim/drm_shim.c b/src/drm-shim/drm_shim.c
-index e39e9e2..262f2c6 100644
+index e39e9e2..e5eb56b 100644
 --- a/src/drm-shim/drm_shim.c
 +++ b/src/drm-shim/drm_shim.c
-@@ -90,7 +90,8 @@ int __lxstat64 (int ver, const char *__filename, struct stat64 *__stat_buf);
+@@ -41,6 +41,7 @@
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+ #include <sys/sysmacros.h>
++#include <sys/syscall.h>
+ #include <stdarg.h>
+ #include <fcntl.h>
+ #include <dlfcn.h>
+@@ -90,7 +91,8 @@ int __lxstat64 (int ver, const char *__filename, struct stat64 *__stat_buf);
  int __fxstatat64 (int ver, int __fildes, const char *__filename,
                    struct stat64 *__stat_buf, int __flag);
  
@@ -48,7 +56,7 @@ index e39e9e2..262f2c6 100644
  
  #if HAS_XSTAT
  REAL_FUNCTION_POINTER(__xstat);
-@@ -649,12 +650,11 @@ realpath(const char *path, char *resolved_path)
+@@ -649,12 +651,11 @@ realpath(const char *path, char *resolved_path)
  {
     init_shim();
  
@@ -64,6 +72,28 @@ index e39e9e2..262f2c6 100644
  }
  
  /* Main entrypoint to DRM drivers: the ioctl syscall.  We send all ioctls on
+@@ -720,6 +721,11 @@ dup(int fd)
+ PUBLIC void *
+ mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
+ {
++   /* e850: a shim fd is never < 0. Anonymous maps go to the kernel without init_shim(), which allocates:
++    * Chrome's allocator maps memory while it sets itself up, and spun forever in that malloc (11.102). */
++   if (fd < 0)
++      return (void *)syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
++
+    init_shim();
+ 
+    struct shim_fd *shim_fd = drm_shim_fd_lookup(fd);
+@@ -732,6 +738,9 @@ mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
+ PUBLIC void *
+ mmap64(void* addr, size_t length, int prot, int flags, int fd, off64_t offset)
+ {
++   if (fd < 0)     /* as in mmap() */
++      return (void *)syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
++
+    init_shim();
+ 
+    struct shim_fd *shim_fd = drm_shim_fd_lookup(fd);
 diff --git a/src/gallium/drivers/panfrost/pan_cmdstream.c b/src/gallium/drivers/panfrost/pan_cmdstream.c
 index 5ddc31f..24fc6bb 100644
 --- a/src/gallium/drivers/panfrost/pan_cmdstream.c

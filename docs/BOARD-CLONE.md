@@ -150,7 +150,7 @@ python3 tools/host/acm.py "cat /etc/machine-id; systemctl is-system-running; sys
 | boot | **`~/e850-logs/boot-nocpu/boot.img`**(md5 `25643a9a3f6b62b18db07cd895a7c410`, 명령줄에 `cgroup_disable=cpu`). 이 rootfs에는 `libpam-systemd`가 있어, 다른 boot로는 로그인할 때 커널 패닉이 난다(11.80) |
 | 파일시스템 | 8 GiB(`BLOCKS=2097152`), 라벨 `rootfs`, UUID `de77216b-a7d7-4c77-9fec-51c801b1fb77`(원본과 같음). 원본 사용량 약 5.2 GB(apt 캐시는 비우고 받음) |
 
-**구운 보드: 보드5(11.92), 보드6(11.93, 현미경 뷰어를 더 넣음).** 지금 `part.simg.*`의 machine-id(`f580f9d9…`)는 보드6의 것이다. 현미경 보드로 쓸 때는 구운 뒤 `~/e850-logs/scope-board6/board6-setup.sh`(11.92의 두 수정, `e850-usbhost` 끄기, `tools/board/scope/install.sh`, OpenCV)를 root로 돌린다(11.93).
+**구운 보드: 보드5(11.92), 보드6(11.93, 현미경 뷰어를 더 넣음, 11-24 고장), 보드4(11.101, 보드6 대신).** 지금 `part.simg.*`의 machine-id(`606a4996…`)는 보드4의 것이다(보드6 판은 `board6-old/`). 보드6과 같은 상태로 만들 때는 `~/e850-logs/scope-board4/board4-setup.sh`를 root로 돌린다(11.101: 현미경 저장소 판, Wi-Fi 감시, DVS 자동 실행, `bt dvs` 기능). 현미경 보드로 쓸 때는 구운 뒤 `~/e850-logs/scope-board6/board6-setup.sh`(11.92의 두 수정, `e850-usbhost` 끄기, `tools/board/scope/install.sh`, OpenCV)를 root로 돌린다(11.93).
 
 **대상마다 이미지를 새로 만든다.** `build-clone.sh`가 만들 때마다 machine-id를 새로 넣기 때문이다. 같은 `part.simg.*`를 두 보드에 구우면 machine-id가 같아져 DHCP 주소가 겹친다. `rootfs.tar`는 다시 받을 필요가 없다.
 
@@ -183,3 +183,52 @@ for f in $D/part.simg.*; do ~/e850-logs/fbmini flash userdata $f || break; done 
 - 그대로 오는 것: philip의 `netdev`·`bluetooth` 그룹, wpa_supplicant 제어 소켓(netdev) 설정, zram(1.8 GB, lz4), GPU(`~/gpu/mesa-kbase`, `/var/tmp/e850-kms`의 `e850-kms.ko`), `/usr/local/bin/e850-x`, `/etc/motd`의 안내 한 줄, Firefox 프로필(사용자 기본 프로필과 `~/.config/mozilla/firefox/gpu`, 시험 프로필 `/var/tmp/ffprof*`), `/var/tmp`의 녹화와 시험 파일(약 2 GB).
 - 보드5에서 본 굽기: boot 2.4초, userdata 8조각 합계 577초. 첫 시도는 boot에서 LK가 멈춰 전원을 다시 넣었다. 그때 보드는 UART와 같은 허브 뒤에 있었고, 다른 세션 스크립트가 5초마다 `fastboot devices`를 부르고 있었다(11.92). 굽는 동안에는 다른 fastboot 호출을 멈춘다.
 - 확인 순서: HDMI에 root 프롬프트 → USB 키보드로 `e850-x` → 패널·메뉴·한/영 → `ssh`로 `systemctl --failed`, `cat /proc/swaps`, `id philip`.
+
+## 12. 보드6 전체 이미지 (DVS 데스크톱 + 현미경, 2026-11-24)
+
+보드6을 원본으로 받은 이미지다(E85096-LINUX510-BOOT.md 11.102). 11장 데스크톱 이미지 위에 보드6에서 더한 것이 모두 들어 있다.
+- 현미경 뷰어 `e850-scope`: 부팅 때 USB 호스트를 맡는다. `e850-usbhost`는 disabled다.
+- `bt`·`dvs` 기능, Wi-Fi 감시 `e850-wifiwatch`.
+- GPU 데스크톱(`e850-x`)을 띄우면 `dvs --auto`가 DVS 창과 설정 패널을 띄운다. 센서가 없으면 조용히 끝난다.
+- Chrome GPU 판: 사용자가 깐 `google-chrome-stable`, 래퍼 `/usr/local/bin/google-chrome`, 고친 shim.
+- DVS GPU 뷰어 `dvsgl`.
+
+방법은 4~8장과 같고, 다른 점만 적는다.
+
+| 항목 | 값 |
+|---|---|
+| 이미지 디렉터리 | `~/e850-logs/clone-20261124-b6/`(Mac, 권한 700). 들어 있는 것: `rootfs.tar`(원본, md5 `7b2c7466…`, 보드6 `rootfs-send` 값과 같음), `overlay/`(tar 뒤에 바뀐 6개 파일), `boot.img`(= boot-nocpu), `rootfs.simg`·`part.simg.0~10`(보드4용), `manifest.md5`, `MD5SUMS`, `README.txt`. **비밀 값(비밀번호 해시, ssh 키, Wi-Fi 비밀번호, BT 링크 키)이 들어 있다.** 저장소나 외부로 옮기지 않는다 |
+| 받은 때 | 2026-11-24 14:17~15:07 KST(`rootfs-send`, 약 2.4 MB/s). 그 뒤 바뀐 파일은 `find / -xdev -newermt` 결과에서 골라 `overlay/`에 넣었다 |
+| boot | `boot.img` = `~/e850-logs/boot-nocpu/boot.img`(md5 `25643a9a…`). `libpam-systemd`가 있어서 반드시 이 boot를 쓴다(11.80) |
+| 파일시스템 | 10 GiB(`BLOCKS=2621440`), 라벨 `rootfs`, UUID `de77216b-…`. 사용량 7.0 GB. 대상 파티션은 57.9 GB이니 첫 부팅 뒤 `resize2fs`로 늘린다 |
+
+**대상마다 다시 만든다.** 같은 보드에 다시 구울 때는 `MACHINE_ID`에 그 보드의 id를 준다. 그래야 DHCP 주소가 유지된다. 새 보드라면 `MACHINE_ID`를 빼고 새 id를 쓴다.
+
+```sh
+D=~/e850-logs/clone-20261124-b6
+rm -f $D/rootfs.simg $D/part.simg.*
+docker run --rm --privileged -e BLOCKS=2621440 -e MACHINE_ID=<대상 id 또는 이 줄에서 빼기> \
+    -v "$PWD/tools/linux510:/t:ro" -v $D:/x ubuntu:22.04 sh /t/build-clone.sh > $D/build.log 2>&1
+python3 tools/linux510/resparse.py --split-mib 700 $D/rootfs.simg $D/part.simg
+fastboot -s <대상> flash boot $D/boot.img            # 대상 boot가 이미 boot-nocpu면 생략
+for f in $(ls $D/part.simg.* | sort -t. -k3 -n); do ~/e850-logs/fbmini flash userdata $f || break; done   # 하나라도 실패하면 reboot하지 않는다
+~/e850-logs/fbmini reboot
+```
+
+조각은 11개(0~10)다. 조각마다 자기 데이터 앞뒤가 DONT_CARE인 파티션 전체 이미지라(`resparse.py`) 원리상 순서와 상관없다. 그래도 실패한 조각을 찾기 쉽게 숫자 순으로 굽는다(글자 순이면 `.10`이 `.1` 뒤에 온다).
+
+**대상을 fastboot에 넣기.** 이 이미지가 올라간 보드는 부팅 때 `e850-scope`가 USB 호스트를 맡는다. 그래서 Mac에는 ACM도 fastboot도 보이지 않는다.
+- ssh에서 `sudo systemctl stop e850-scope`를 한다. 스크립트가 gadget으로 되돌리고, Mac에 ACM(`/dev/cu.usbmodeme850_961`)이 생긴다. 이때 케이블이 Mac에 꽂혀 있는지도 확인된다.
+- 그다음 `sudo sh -c '(setsid nohup /usr/local/sbin/to-fastboot >/dev/null 2>&1 </dev/null &)'`를 한다. 보드4는 43초 뒤 fastboot에 보였다.
+
+**구운 뒤 할 일.**
+- `sudo resize2fs /dev/mmcblk0p24`.
+- BT 기기를 다시 페어링한다. 페어링 정보는 보드6 어댑터(`/var/lib/bluetooth/9C:23:E0:0B:F5:4C/`) 아래에 있어서 다른 보드에서는 쓰이지 않는다.
+- 11장의 두 수정(`wait-online` any, `bluealsa-aplay` 끔)은 이미 들어 있다(보드6에서 `systemctl is-system-running` = running).
+- DVS 센서가 CN4에 있어야 DVS 창이 뜬다. 센서는 전원을 끈 채 옮긴다.
+
+**보드4에 구운 기록(2026-11-24).**
+- 11조각 모두 OKAY였다(합계 1,704초).
+- 첫 부팅은 23.84 s에 MFC 경합으로 패닉했다(11.102). 다음 부팅은 eMMC 시간 초과로 initramfs에 떨어졌다. 워치독이 fastboot로 보냈고, `fastboot reboot` 뒤 정상이었다.
+- 굽고 나서 바로 Wi-Fi에 나오지 않으면 Mac의 ACM(`/dev/cu.usbmodeme850_961`)을 본다. 이때 ACM이 보이면 initramfs 셸이다(Debian이면 `e850-scope`가 USB를 가져간다). 셸에서 `dmesg`를 보고, 워치독 리셋을 기다리거나 다시 부팅한다.
+- 확인: manifest 42,074개 파일이 모두 같았다. 서비스 상태가 원본과 같고, failed 유닛은 0이었다.

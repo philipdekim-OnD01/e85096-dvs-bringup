@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DVS
+Comment=DVS 카메라 화면과 설정 패널 (센서가 없으면 녹화 재생)
+Comment[en]=DVS camera view and settings panel (the demo recording without the sensor)
+Exec=/usr/local/bin/e850-open dvs
+Icon=camera-video
+Terminal=false
+Categories=AudioVideo;Video;

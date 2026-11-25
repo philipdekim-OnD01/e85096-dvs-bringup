@@ -1,0 +1,136 @@
+#!/usr/bin/python3
+"""e850-res: the desktop size of the GPU X (:1), from e850-feature desktop (11.103).
+The HDMI bridge (LT8912B: MIPI DSI to HDMI, 1080p60 at most, no EDID) and e850-kms give one real mode,
+1920x1080. `xrandr --scale-from WxH` lays the desktop out at another size and the X server scales it to the
+1080p signal: a bigger size fits more on the screen in smaller, softer letters, a smaller one makes everything
+bigger. The choice is kept in ~/.config/e850-res and set again when the session starts (session.sh).
+  e850-res              window to pick a size
+  e850-res 2560x1440    set a size (1920x1080: the real one) and keep it
+  e850-res --apply      set the kept size (session.sh)
+  e850-res --selftest"""
+import os
+import re
+import subprocess
+import sys
+
+CONF = os.path.expanduser('~/.config/e850-res')
+NATIVE = '1920x1080'
+SIZES = [('1280x720', '크게'), ('1600x900', ''), (NATIVE, '실제 해상도'), ('2240x1260', ''),
+         ('2560x1440', '작게, 덜 선명')]
+WALL = (os.path.expanduser('~/.local/bin/xbg'), os.path.expanduser('~/.local/share/wallpaper.bgrx'))
+
+
+def parse(text):
+    """xrandr's output -> (the connected output, the screen's size 'WxH')"""
+    out = re.search(r'^(\S+) connected', text, re.M)
+    cur = re.search(r'current (\d+) x (\d+)', text)
+    if not out or not cur:
+        raise RuntimeError('xrandr: no connected output')
+    return out.group(1), '%sx%s' % cur.groups()
+
+
+def xrandr_args(out, size):
+    if not re.fullmatch(r'\d{3,4}x\d{3,4}', size):
+        raise ValueError('size WxH: ' + size)
+    return ['xrandr', '--output', out] + (['--scale', '1x1'] if size == NATIVE else ['--scale-from', size])
+
+
+def state():
+    return parse(subprocess.run(['xrandr'], capture_output=True, text=True, check=True).stdout)
+
+
+def set_size(size):
+    out, _ = state()
+    r = subprocess.run(xrandr_args(out, size), capture_output=True, text=True)
+    if r.returncode:
+        raise RuntimeError(r.stderr.strip() or 'xrandr failed')
+    if os.access(WALL[0], os.X_OK) and os.path.exists(WALL[1]):
+        subprocess.run(WALL)  # the root background is a pixmap of the old size: it would tile
+    os.makedirs(os.path.dirname(CONF), exist_ok=True)
+    with open(CONF, 'w') as f:
+        f.write(size + '\n')
+
+
+def window():
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk
+
+    def apply(_b):
+        size = next(s for s, b in buttons if b.get_active())
+        try:
+            set_size(size)
+            note.set_text('지금 %s' % size)
+        except Exception as e:
+            note.set_text(str(e))
+
+    w = Gtk.Window(title='화면 해상도')
+    w.set_border_width(16)
+    w.connect('destroy', Gtk.main_quit)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    w.add(box)
+    try:
+        _, cur = state()
+    except Exception as e:
+        cur = ''
+        box.pack_start(Gtk.Label(label=str(e)), False, False, 0)
+    box.pack_start(Gtk.Label(label='HDMI 신호는 1920x1080 하나입니다. 다른 크기는 X가 늘이거나 줄여 보냅니다.',
+                             wrap=True, xalign=0), False, False, 0)
+    buttons, group = [], None
+    for size, note_text in SIZES:
+        b = Gtk.RadioButton.new_with_label_from_widget(group, size + ('  (%s)' % note_text if note_text else ''))
+        group = group or b
+        b.set_active(size == cur)
+        buttons.append((size, b))
+        box.pack_start(b, False, False, 0)
+    note = Gtk.Label(label='지금 %s' % cur if cur else '', xalign=0)
+    box.pack_start(note, False, False, 0)
+    row = Gtk.Box(spacing=8)
+    for label, fn in (('적용', apply), ('닫기', lambda _b: w.destroy())):
+        b = Gtk.Button(label=label)
+        b.connect('clicked', fn)
+        row.pack_end(b, False, False, 0)
+    box.pack_start(row, False, False, 0)
+    w.show_all()
+    Gtk.main()
+
+
+def selftest():
+    text = ('Screen 0: minimum 320 x 200, current 2560 x 1440, maximum 4096 x 4096\n'
+            'HDMI-1 connected primary 2560x1440+0+0 (normal left inverted right x axis y axis) 0mm x 0mm\n'
+            '   1920x1080     60.00*+\n')
+    assert parse(text) == ('HDMI-1', '2560x1440')
+    assert xrandr_args('HDMI-1', NATIVE) == ['xrandr', '--output', 'HDMI-1', '--scale', '1x1']
+    assert xrandr_args('HDMI-1', '1280x720')[-2:] == ['--scale-from', '1280x720']
+    for bad in ('2560x1440;reboot', 'big', '99999x1'):
+        try:
+            xrandr_args('HDMI-1', bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+    try:
+        parse('Screen 0: minimum 320 x 200, current 1920 x 1080\nHDMI-1 disconnected\n')
+        raise AssertionError('disconnected')
+    except RuntimeError:
+        pass
+    print('e850-res selftest ok')
+
+
+if __name__ == '__main__':
+    a = sys.argv[1:]
+    if a == ['--selftest']:
+        selftest()
+    elif a == ['--apply']:
+        try:
+            size = open(CONF).read().strip()
+        except OSError:
+            sys.exit(0)
+        if size != NATIVE:  # before session.sh draws the background
+            subprocess.run(xrandr_args(state()[0], size), check=True)
+    elif len(a) == 1:
+        set_size(a[0])
+        print(state()[1])
+    elif not a:
+        window()
+    else:
+        sys.exit(__doc__)

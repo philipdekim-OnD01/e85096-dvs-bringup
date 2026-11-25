@@ -1,10 +1,13 @@
 /*
  * dvspanel: the settings page of the DVS (dvsctl.html on :8080) as a window beside the `dvs` view (features/dvs,
  * linux510 docs 11.98). A GTK 3 client of the same HTTP API on 127.0.0.1, with the page's names and texts:
- *   left: the action classifier, web addresses, stats, display presets and settings (/params, at once), sensor
+ *   left: the action classifier, web addresses, display presets and settings (/params, at once), sensor
  *         settings (/sensor, the capture restarts and `dvs` starts it again);
- *   right: stats graphs (/history: count tiles and charts, period, CSV), action recording (/rec), sensor register
- *         read (/reg; values only: the register names of the vendor setfile stay out of this source).
+ *   right, two tabs: the graphs (/history: count tiles and charts two to a row, period, CSV); the stats text
+ *         (/stats), action recording (/rec) and sensor register read (/reg; values only: the register names of the
+ *         vendor setfile stay out).
+ * PANEL_H high (11.104: 1000 was taller than the screen above the panel): the left column and the graph tab fit
+ * without scrolling (the selftest checks it), the settings' explanations are tooltips, a chart's range is drawn in it.
  * Left out, the view being beside it: the preview, its crop and rotation, and zoom (no effect in the 960x720 window).
  * The window shows itself once the page answers (nothing on a board without the DVS) and follows capture restarts.
  *
@@ -27,6 +30,11 @@
 #include <unistd.h>
 
 static int port = 8080;
+#define PANEL_W 940
+#define PANEL_H 700
+#define RECENT 5			/* lines of 최근 판정 변화 */
+#define LEFT_W 440			/* the left column; the tabs get the rest */
+#define CHART_H 40
 
 /* One HTTP/1.0 request to 127.0.0.1:port (the server closes after the answer). The parsed JSON body (cJSON_Delete
  * it) or NULL; *code: the HTTP status, 0 when nothing answered. Two second timeouts: a restarting capture refuses. */
@@ -217,16 +225,16 @@ static const struct tile {
 	{ "센서 scan", T_LAST, "scan_us", "µs" }, { "데이터 있는 시간", T_MIN, "coverage", "%" },
 };
 #define NT (sizeof(TILES) / sizeof(*TILES))
-static const int WINS[] = { 120, 600, 1800, 3600 };
-static const char *const WIN_NAMES[] = { "2분", "10분", "30분", "1시간" };
+static const int WINS[] = { 60, 120, 600, 1800, 3600 };
+static const char *const WIN_NAMES[] = { "1분", "2분", "10분", "30분", "1시간" };	/* the first one at start */
 #define MAXK 48
 #define MAXROWS 1800
 
 static struct {
-	GtkWidget *win, *act_state, *act_top, *nosensor, *addr, *stats, *recent, *msg;
+	GtkWidget *win, *left, *act_state, *act_top, *nosensor, *addr, *stats, *recent, *msg;
 	GtkWidget *p[NP], *pv[NP];
 	GtkWidget *s_rate, *s_hint, *s_flush, *s_flushv, *s_msg;
-	GtkWidget *h_win, *h_msg, *tile_v[NT], *tile_r[NT], *chart[NC], *chart_v[NC], *chart_r[NC];
+	GtkWidget *h_win, *h_msg, *graphs, *tile_v[NT], *tile_r[NT], *chart[NC], *chart_v[NC];
 	GtkWidget *r_label, *r_s, *r_go, *r_msg;
 	GtkWidget *g_a, *g_n, *g_msg, *g_out;
 	int loading;			/* setting widgets from the server: no POST back */
@@ -522,7 +530,7 @@ static void show_act(void)
 		gtk_label_set_text(GTK_LABEL(W.act_top), "");
 	s = g_string_new(NULL);
 	cJSON_ArrayForEach(r, recent) {
-		if (n++ == 8)
+		if (n++ == RECENT)
 			break;
 		hhmmss(t, sizeof(t), num(r, "t_us") / 1e6);
 		g_string_append_printf(s, "%s%s  %s → %s (%.2f)", s->len ? "\n" : "", t, event_name(str(r, "event")),
@@ -800,50 +808,70 @@ static void draw_tiles(int n0)
 			gtk_label_set_markup(GTK_LABEL(W.tile_v[c]), m);
 			g_free(m);
 		}
-		if (count)
-			snprintf(b, sizeof(b), isnan(v) ? "기록 없음" : "최근 %s",
-				 WIN_NAMES[gtk_combo_box_get_active(GTK_COMBO_BOX(W.h_win))]);
-		else if (cnt)
-			snprintf(b, sizeof(b), "범위 %s ~ %s", fmt(lo, sizeof(lo), mn), fmt(hi, sizeof(hi), mx));
+		if (isnan(v))
+			snprintf(b, sizeof(b), "기록 없음");
+		else if (!count && cnt)		/* a count is over the period shown above the tiles */
+			snprintf(b, sizeof(b), "%s ~ %s", fmt(lo, sizeof(lo), mn), fmt(hi, sizeof(hi), mx));
 		else
 			b[0] = 0;
 		gtk_label_set_text(GTK_LABEL(W.tile_r[c]), b);
 	}
 }
 
-static gboolean draw_chart(GtkWidget *w, cairo_t *cr, gpointer data)
+/* small light text at the top or bottom left of a chart */
+static void chart_note(GtkWidget *w, cairo_t *cr, int ch, int top, const char *t)
 {
-	const struct chart *c = &CHARTS[GPOINTER_TO_SIZE(data)];
-	size_t ci = GPOINTER_TO_SIZE(data);
-	int cw = gtk_widget_get_allocated_width(w), ch = gtk_widget_get_allocated_height(w), n0 = window_start(), pen = 0;
-	double lo = INFINITY, hi = -INFINITY, last = NAN, nb = cell(W.nrows - 1, "vc0_n"), pad = 4, prev = NAN;
-	double t1 = W.nrows ? W.rows[W.nrows - 1][0] : 0, t0 = t1 - WINS[gtk_combo_box_get_active(GTK_COMBO_BOX(W.h_win))];
-	char b[96], f[32], g[32];
+	PangoLayout *l = gtk_widget_create_pango_layout(w, NULL);
+	char *m = g_markup_printf_escaped("<small>%s</small>", t);
+	int lh;
 
+	pango_layout_set_markup(l, m, -1);
+	pango_layout_get_pixel_size(l, NULL, &lh);
+	cairo_set_source_rgba(cr, 1, 1, 1, 0.6);
+	cairo_move_to(cr, 3, top ? 0 : ch - lh);
+	pango_cairo_show_layout(cr, l);
+	g_free(m);
+	g_object_unref(l);
+}
+
+/* a chart's range and last value over rows n0.. (lo = INFINITY: none) */
+static void chart_range(const struct chart *c, int n0, double *lo, double *hi, double *last)
+{
+	*lo = INFINITY;
+	*hi = -INFINITY;
+	*last = NAN;
 	for (int n = n0; n < W.nrows; n++) {
 		double v = chart_value(c, n);
 
 		if (!isnan(v)) {
-			lo = fmin(lo, v);
-			hi = fmax(hi, v);
-			last = v;
+			*lo = fmin(*lo, v);
+			*hi = fmax(*hi, v);
+			*last = v;
 		}
 	}
+}
+
+/* Draws only: setting a label here re-laid out the window on every draw, 30 % of a core with all 12 charts in
+ * view (11.104); redraw_graphs() sets the value labels once per update */
+static gboolean draw_chart(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+	const struct chart *c = &CHARTS[GPOINTER_TO_SIZE(data)];
+	int cw = gtk_widget_get_allocated_width(w), ch = gtk_widget_get_allocated_height(w), n0 = window_start(), pen = 0;
+	double lo, hi, last, nb = cell(W.nrows - 1, "vc0_n"), pad = 4, prev = NAN;
+	double t1 = W.nrows ? W.rows[W.nrows - 1][0] : 0, t0 = t1 - WINS[gtk_combo_box_get_active(GTK_COMBO_BOX(W.h_win))];
+	char f[32], top[96], bot[64];
+
+	chart_range(c, n0, &lo, &hi, &last);
 	cairo_set_source_rgb(cr, 0x1b / 255.0, 0x1b / 255.0, 0x1b / 255.0);
 	cairo_paint(cr);
-	snprintf(b, sizeof(b), "%s%s%s", fmt(f, sizeof(f), last), *c->unit && !isnan(last) ? " " : "",
-		 isnan(last) ? "" : c->unit);
-	gtk_label_set_text(GTK_LABEL(W.chart_v[ci]), b);
 	if (isinf(lo)) {
-		gtk_label_set_text(GTK_LABEL(W.chart_r[ci]), "기록 없음");
+		chart_note(w, cr, ch, 1, "기록 없음");
 		return FALSE;
 	}
-	if (c->bufaxis && !isnan(nb))
-		snprintf(b, sizeof(b), "범위 %s ~ %s (전체 %d개 중 나머지 %d개)", fmt(f, sizeof(f), lo), fmt(g, sizeof(g), hi),
-			 (int)nb, (int)nb - 1);
-	else
-		snprintf(b, sizeof(b), "범위 %s ~ %s", fmt(f, sizeof(f), lo), fmt(g, sizeof(g), hi));
-	gtk_label_set_text(GTK_LABEL(W.chart_r[ci]), b);
+	snprintf(top, sizeof(top), "최대 %s", fmt(f, sizeof(f), hi));	/* the data's range over the period */
+	if (c->bufaxis && !isnan(nb))	/* the axis: the other buffers, 0 .. n - 1 */
+		snprintf(top + strlen(top), sizeof(top) - strlen(top), " (전체 %d개 중 나머지 %d개)", (int)nb, (int)nb - 1);
+	snprintf(bot, sizeof(bot), "최소 %s", fmt(f, sizeof(f), lo));
 	if (lo >= 0 && lo < (hi - lo) * 0.5)
 		lo = 0;				/* near-zero series from a zero baseline */
 	if (c->bufaxis && !isnan(nb)) {		/* the other buffers: 0 .. n - 1 */
@@ -882,6 +910,8 @@ static gboolean draw_chart(GtkWidget *w, cairo_t *cr, gpointer data)
 	cairo_stroke(cr);
 #undef X
 #undef Y
+	chart_note(w, cr, ch, 1, top);
+	chart_note(w, cr, ch, 0, bot);
 	return FALSE;
 }
 
@@ -891,8 +921,17 @@ static void redraw_graphs(void)
 	int n0 = window_start();
 
 	draw_tiles(n0);
-	for (size_t c = 0; c < NC; c++)
+	for (size_t c = 0; c < NC; c++) {
+		double lo, hi, last;
+		char v[64], f[32];
+
+		chart_range(&CHARTS[c], n0, &lo, &hi, &last);
+		snprintf(v, sizeof(v), "%s%s%s", fmt(f, sizeof(f), last), *CHARTS[c].unit && !isnan(last) ? " " : "",
+			 isnan(last) ? "" : CHARTS[c].unit);
+		if (strcmp(gtk_label_get_text(GTK_LABEL(W.chart_v[c])), v))
+			gtk_label_set_text(GTK_LABEL(W.chart_v[c]), v);
 		gtk_widget_queue_draw(W.chart[c]);
+	}
 	if (W.nrows)
 		snprintf(b, sizeof(b), "왼쪽 끝 %s 전, 오른쪽 끝 지금 · 기록 %ld분치",
 			 WIN_NAMES[gtk_combo_box_get_active(GTK_COMBO_BOX(W.h_win))],
@@ -1025,18 +1064,6 @@ pending:
 }
 
 /* ---- the window ---- */
-static GtkWidget *column(GtkWidget *parent, int width)
-{
-	GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL), *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-
-	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_widget_set_size_request(sw, width, -1);
-	gtk_container_set_border_width(GTK_CONTAINER(box), 8);
-	gtk_container_add(GTK_CONTAINER(sw), box);
-	gtk_box_pack_start(GTK_BOX(parent), sw, TRUE, TRUE, 0);
-	return box;
-}
-
 static GtkWidget *row(GtkWidget *box)
 {
 	GtkWidget *r = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -1045,22 +1072,59 @@ static GtkWidget *row(GtkWidget *box)
 	return r;
 }
 
+/* a scrolled column in a box, or a tab of a notebook when 'tab' */
+static GtkWidget *column(GtkWidget *parent, int width, const char *tab)
+{
+	GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL), *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+
+	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+	gtk_widget_set_size_request(sw, width, -1);
+	gtk_container_set_border_width(GTK_CONTAINER(box), 8);
+	gtk_container_add(GTK_CONTAINER(sw), box);
+	if (tab)
+		gtk_notebook_append_page(GTK_NOTEBOOK(parent), sw, gtk_label_new(tab));
+	else
+		gtk_box_pack_start(GTK_BOX(parent), sw, TRUE, TRUE, 0);
+	return box;
+}
+
+/* a heading at the start of a row (buttons after it) */
+static GtkWidget *heading_row(GtkWidget *box, const char *text)
+{
+	GtkWidget *r = row(box);
+
+	gtk_widget_set_margin_top(r, 10);
+	gtk_widget_set_margin_top(heading(r, text, 0), 0);
+	return r;
+}
+
+static void tip(GtkWidget *w, const char *text)
+{
+	if (text)
+		gtk_widget_set_tooltip_text(w, text);
+}
+
 static void build(void)
 {
-	GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0), *L, *R, *r, *g, *b;
+	GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0), *tabs = gtk_notebook_new(), *L, *R, *R2, *r, *g, *b;
+	GtkWidget *crow = NULL;
 
 	W.win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 	gtk_window_set_title(GTK_WINDOW(W.win), "DVS 설정");
-	gtk_window_set_default_size(GTK_WINDOW(W.win), 940, 1000);
+	gtk_window_set_default_size(GTK_WINDOW(W.win), PANEL_W, PANEL_H);
 	gtk_window_move(GTK_WINDOW(W.win), 968, 0);	/* right of the 960 px wide DVS window at the left edge */
 	gtk_container_add(GTK_CONTAINER(W.win), top);
 	g_signal_connect(W.win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
-	L = column(top, 440);
-	R = column(top, 480);
+	W.left = L = column(top, LEFT_W, NULL);
+	gtk_widget_set_size_request(tabs, PANEL_W - LEFT_W - 20, -1);
+	gtk_box_pack_start(GTK_BOX(top), tabs, TRUE, TRUE, 0);
+	W.graphs = R = column(tabs, -1, "그래프");
+	R2 = column(tabs, -1, "통계·녹화·레지스터");
 
-	heading(L, "DVS 화면 조정", 1);
+	r = row(L);				/* the title, the classifier's state at its right */
+	heading(r, "DVS 화면 조정", 1);
 	W.act_state = label("분류기 기다리는 중…", 1);
-	gtk_box_pack_start(GTK_BOX(L), W.act_state, FALSE, FALSE, 0);
+	gtk_box_pack_end(GTK_BOX(r), W.act_state, FALSE, FALSE, 0);
 	W.act_top = label("", 1);
 	gtk_box_pack_start(GTK_BOX(L), W.act_top, FALSE, FALSE, 0);
 	W.nosensor = label(NULL, 1);
@@ -1070,14 +1134,11 @@ static void build(void)
 	gtk_box_pack_start(GTK_BOX(L), W.nosensor, FALSE, FALSE, 0);
 	W.addr = hint("");
 	gtk_box_pack_start(GTK_BOX(L), W.addr, FALSE, FALSE, 0);
-	W.stats = label("통계 기다리는 중…", 1);
-	gtk_box_pack_start(GTK_BOX(L), W.stats, FALSE, FALSE, 0);
 	heading(L, "최근 판정 변화", 0);
 	W.recent = label("–", 1);
 	gtk_box_pack_start(GTK_BOX(L), W.recent, FALSE, FALSE, 0);
 
-	heading(L, "표시 (바로 적용)", 0);
-	r = row(L);
+	r = heading_row(L, "표시 (바로 적용)");
 	b = gtk_button_new_with_label("기본값");
 	g_signal_connect(b, "clicked", G_CALLBACK(preset), GSIZE_TO_POINTER(0));
 	gtk_box_pack_start(GTK_BOX(r), b, FALSE, FALSE, 0);
@@ -1090,28 +1151,35 @@ static void build(void)
 	gtk_grid_set_column_spacing(GTK_GRID(g), 8);
 	gtk_box_pack_start(GTK_BOX(L), g, FALSE, FALSE, 0);
 	for (size_t i = 0, y = 0; i < NP; i++) {
-		gtk_grid_attach(GTK_GRID(g), label(PARAMS[i].label, 1), 0, y, 1, 1);
-		if (PARAMS[i].choices) {
+		GtkWidget *l = label(PARAMS[i].label, 1);
+
+		if (PARAMS[i].choices) {	/* the choices (색, 뒤집기) side by side on one row */
 			W.p[i] = gtk_combo_box_text_new();
 			for (const char *const *c = PARAMS[i].choices; *c; c++)
 				gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(W.p[i]), *c);
-			gtk_grid_attach(GTK_GRID(g), W.p[i], 1, y, 2, 1);
+			if (!crow) {
+				crow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+				gtk_grid_attach(GTK_GRID(g), l, 0, y, 1, 1);
+				gtk_grid_attach(GTK_GRID(g), crow, 1, y++, 2, 1);
+			} else
+				gtk_box_pack_start(GTK_BOX(crow), l, FALSE, FALSE, 0);
+			gtk_box_pack_start(GTK_BOX(crow), W.p[i], TRUE, TRUE, 0);
 		} else {
 			W.p[i] = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 1000, 1);
 			gtk_scale_set_draw_value(GTK_SCALE(W.p[i]), FALSE);
 			W.pv[i] = label("", 1);
 			gtk_label_set_width_chars(GTK_LABEL(W.pv[i]), 7);
+			gtk_widget_set_hexpand(W.p[i], TRUE);
+			gtk_grid_attach(GTK_GRID(g), l, 0, y, 1, 1);
 			gtk_grid_attach(GTK_GRID(g), W.p[i], 1, y, 1, 1);
-			gtk_grid_attach(GTK_GRID(g), W.pv[i], 2, y, 1, 1);
+			gtk_grid_attach(GTK_GRID(g), W.pv[i], 2, y++, 1, 1);
 		}
-		gtk_widget_set_hexpand(W.p[i], TRUE);
+		tip(l, PARAMS[i].hint);	/* the explanation on hover: a line under each setting made the window too tall */
+		tip(W.p[i], PARAMS[i].hint);
 		W.def[i] = NAN;
 		W.pending[i] = -1;
 		g_signal_connect(W.p[i], PARAMS[i].choices ? "changed" : "value-changed", G_CALLBACK(param_changed),
 				 GSIZE_TO_POINTER(i));
-		y++;
-		if (PARAMS[i].hint)
-			gtk_grid_attach(GTK_GRID(g), hint(PARAMS[i].hint), 0, y++, 3, 1);
 	}
 	W.msg = hint("");
 	gtk_box_pack_start(GTK_BOX(L), W.msg, FALSE, FALSE, 0);
@@ -1133,21 +1201,20 @@ static void build(void)
 	g_signal_connect(W.s_flush, "value-changed", G_CALLBACK(flush_changed), NULL);
 	gtk_box_pack_start(GTK_BOX(r), W.s_flush, TRUE, TRUE, 0);
 	gtk_box_pack_start(GTK_BOX(r), W.s_flushv, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(L), hint("센서 FIFO를 이 시간(µs)마다 내보냄: 짧을수록 버퍼가 잦고 지연이 적음, 기본 50"),
-			   FALSE, FALSE, 0);
-	b = gtk_button_new_with_label("센서 설정 적용");
+	tip(r, "센서 FIFO를 이 시간(µs)마다 내보냄: 짧을수록 버퍼가 잦고 지연이 적음, 기본 50");
+	b = gtk_button_new_with_label("적용");
+	tip(b, "scan 속도와 MIPI flush를 센서에 적용: 스트림을 다시 시작, 약 5초");
 	g_signal_connect(b, "clicked", G_CALLBACK(apply_sensor), NULL);
-	gtk_box_pack_start(GTK_BOX(L), b, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(r), b, FALSE, FALSE, 0);
 	W.s_msg = hint("");
 	gtk_box_pack_start(GTK_BOX(L), W.s_msg, FALSE, FALSE, 0);
 
-	heading(R, "통계 그래프", 1);
 	r = row(R);
 	gtk_box_pack_start(GTK_BOX(r), label("기간", 1), FALSE, FALSE, 0);
 	W.h_win = gtk_combo_box_text_new();
 	for (size_t i = 0; i < sizeof(WINS) / sizeof(*WINS); i++)
 		gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(W.h_win), WIN_NAMES[i]);
-	gtk_combo_box_set_active(GTK_COMBO_BOX(W.h_win), 1);
+	gtk_combo_box_set_active(GTK_COMBO_BOX(W.h_win), 0);
 	g_signal_connect(W.h_win, "changed", G_CALLBACK(win_changed), NULL);
 	gtk_box_pack_start(GTK_BOX(r), W.h_win, FALSE, FALSE, 0);
 	b = gtk_button_new_with_label("CSV 저장");
@@ -1160,29 +1227,55 @@ static void build(void)
 	gtk_grid_set_row_spacing(GTK_GRID(g), 4);
 	gtk_grid_set_column_homogeneous(GTK_GRID(g), TRUE);
 	gtk_box_pack_start(GTK_BOX(R), g, FALSE, FALSE, 0);
-	for (size_t c = 0; c < NT; c++) {
-		GtkWidget *t = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	for (size_t c = 0; c < NT; c++) {		/* name; value and range on one line */
+		GtkWidget *t = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0), *v = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 
 		gtk_box_pack_start(GTK_BOX(t), hint(TILES[c].name), FALSE, FALSE, 0);
-		gtk_box_pack_start(GTK_BOX(t), W.tile_v[c] = label("–", 1), FALSE, FALSE, 0);
-		gtk_box_pack_start(GTK_BOX(t), W.tile_r[c] = hint(""), FALSE, FALSE, 0);
+		gtk_box_pack_start(GTK_BOX(v), W.tile_v[c] = label("–", 1), FALSE, FALSE, 0);
+		gtk_box_pack_start(GTK_BOX(v), W.tile_r[c] = hint(""), FALSE, FALSE, 0);
+		gtk_box_pack_start(GTK_BOX(t), v, FALSE, FALSE, 0);
 		gtk_grid_attach(GTK_GRID(g), t, c % 3, c / 3, 1, 1);
 	}
-	for (size_t c = 0; c < NC; c++) {
-		if (!c || strcmp(CHARTS[c].grp, CHARTS[c - 1].grp))
-			heading(R, CHARTS[c].grp, 0);
-		r = row(R);
-		gtk_box_pack_start(GTK_BOX(r), label(CHARTS[c].name, 1), TRUE, TRUE, 0);
-		gtk_box_pack_start(GTK_BOX(r), W.chart_v[c] = label("–", 1), FALSE, FALSE, 0);
+	g = gtk_grid_new();			/* the charts two to a row, each group under its name */
+	gtk_grid_set_column_spacing(GTK_GRID(g), 10);
+	gtk_grid_set_row_spacing(GTK_GRID(g), 2);
+	gtk_grid_set_column_homogeneous(GTK_GRID(g), TRUE);
+	gtk_box_pack_start(GTK_BOX(R), g, FALSE, FALSE, 0);
+	for (size_t c = 0, x = 0, y = 0; c < NC; c++) {
+		GtkWidget *cl = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0), *n;
+
+		if (!c || strcmp(CHARTS[c].grp, CHARTS[c - 1].grp)) {	/* the group's name across both columns */
+			char *m = g_markup_printf_escaped("<b>%s</b>", CHARTS[c].grp);
+
+			n = label(NULL, 1);
+			gtk_label_set_markup(GTK_LABEL(n), m);
+			g_free(m);
+			gtk_widget_set_margin_top(n, 4);
+			y += x;
+			x = 0;
+			gtk_grid_attach(GTK_GRID(g), n, 0, y++, 2, 1);
+		}
+		r = row(cl);			/* name, last value; the range is drawn in the chart */
+		n = hint(CHARTS[c].name);
+		gtk_label_set_line_wrap(GTK_LABEL(n), FALSE);
+		gtk_label_set_ellipsize(GTK_LABEL(n), PANGO_ELLIPSIZE_END);
+		tip(n, CHARTS[c].name);
+		gtk_box_pack_start(GTK_BOX(r), n, TRUE, TRUE, 0);
+		gtk_box_pack_end(GTK_BOX(r), W.chart_v[c] = label("–", 1), FALSE, FALSE, 0);
 		W.chart[c] = gtk_drawing_area_new();
-		gtk_widget_set_size_request(W.chart[c], -1, 48);
+		gtk_widget_set_size_request(W.chart[c], -1, CHART_H);
 		g_signal_connect(W.chart[c], "draw", G_CALLBACK(draw_chart), GSIZE_TO_POINTER(c));
-		gtk_box_pack_start(GTK_BOX(R), W.chart[c], FALSE, FALSE, 0);
-		gtk_box_pack_start(GTK_BOX(R), W.chart_r[c] = hint(""), FALSE, FALSE, 0);
+		gtk_box_pack_start(GTK_BOX(cl), W.chart[c], FALSE, FALSE, 0);
+		gtk_grid_attach(GTK_GRID(g), cl, x, y, 1, 1);
+		y += x;
+		x ^= 1;
 	}
 
-	heading(R, "행동 녹화 (학습용, 3초 뒤 시작)", 0);
-	r = row(R);
+	gtk_widget_set_margin_top(heading(R2, "지금 통계", 0), 0);
+	W.stats = label("통계 기다리는 중…", 1);
+	gtk_box_pack_start(GTK_BOX(R2), W.stats, FALSE, FALSE, 0);
+	heading(R2, "행동 녹화 (학습용, 3초 뒤 시작)", 0);
+	r = row(R2);
 	gtk_box_pack_start(GTK_BOX(r), label("동작", 1), FALSE, FALSE, 0);
 	W.r_label = gtk_combo_box_text_new();
 	for (size_t i = 0; i < NA; i++) {
@@ -1207,10 +1300,10 @@ static void build(void)
 	g_signal_connect(W.r_go, "clicked", G_CALLBACK(rec_go), NULL);
 	gtk_box_pack_start(GTK_BOX(r), W.r_go, FALSE, FALSE, 0);
 	W.r_msg = hint("");
-	gtk_box_pack_start(GTK_BOX(R), W.r_msg, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(R2), W.r_msg, FALSE, FALSE, 0);
 
-	heading(R, "센서 레지스터 읽기 (읽기만, 스트림은 그대로)", 0);
-	r = row(R);
+	heading(R2, "센서 레지스터 읽기 (읽기만, 스트림은 그대로)", 0);
+	r = row(R2);
 	gtk_box_pack_start(GTK_BOX(r), label("주소 (16진)", 1), FALSE, FALSE, 0);
 	W.g_a = gtk_entry_new();
 	gtk_entry_set_max_length(GTK_ENTRY(W.g_a), 4);
@@ -1225,7 +1318,7 @@ static void build(void)
 	g_signal_connect(b, "clicked", G_CALLBACK(read_regs), NULL);
 	gtk_box_pack_start(GTK_BOX(r), b, FALSE, FALSE, 0);
 	W.g_msg = hint("");
-	gtk_box_pack_start(GTK_BOX(R), W.g_msg, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(R2), W.g_msg, FALSE, FALSE, 0);
 	W.g_out = label("", 1);
 	{
 		PangoAttrList *al = pango_attr_list_new();
@@ -1235,16 +1328,40 @@ static void build(void)
 		pango_attr_list_unref(al);
 	}
 	gtk_label_set_selectable(GTK_LABEL(W.g_out), TRUE);
-	gtk_box_pack_start(GTK_BOX(R), W.g_out, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(R2), W.g_out, FALSE, FALSE, 0);
 	W.s_now = W.crc_n = NAN;
 }
 
 /* ---- selftest against dvspanel-test.sh's stub ---- */
 static int selftest_rc = 1;
 
+static int lines(const char *s)
+{
+	int n = *s != 0;
+
+	while ((s = strchr(s, '\n')))
+		n++, s++;
+	return n;
+}
+
+/* laid out in the PANEL_W x PANEL_H window: does the column of 'box' show all of it? */
+static int fits(GtkWidget *box, const char *name)
+{
+	GtkAdjustment *a = gtk_scrolled_window_get_vadjustment(
+		GTK_SCROLLED_WINDOW(gtk_widget_get_ancestor(box, GTK_TYPE_SCROLLED_WINDOW)));
+	double need = gtk_adjustment_get_upper(a), shown = gtk_adjustment_get_page_size(a);
+
+	if (need <= shown + 0.5)
+		return 1;
+	fprintf(stderr, "selftest: %s needs %.0f px, shows %.0f: it would scroll\n", name, need, shown);
+	return 0;
+}
+
 static gboolean selftest_end(gpointer unused)
 {
 	(void)unused;
+	if (!selftest_rc && !(fits(W.left, "the left column") & fits(W.graphs, "the graph tab")))
+		selftest_rc = 1;
 	gtk_main_quit();
 	return G_SOURCE_REMOVE;
 }
@@ -1271,7 +1388,8 @@ static gboolean selftest_step(gpointer unused)
 		fprintf(stderr, "selftest: stats: %s\n", st);
 	else if (!strstr(tile, "⚠ 10개") || !strstr(gtk_label_get_text(GTK_LABEL(W.addr)), "무선 Wi-Fi 10.0.0.2:8099"))
 		fprintf(stderr, "selftest: tile %s / addr\n", tile);
-	else if (!strstr(recent, "움직임 → 앉음 (0.55)") || !strstr(gtk_label_get_text(GTK_LABEL(W.act_state)), "서 있음"))
+	else if (!strstr(recent, "움직임 → 앉음 (0.55)") || !strstr(gtk_label_get_text(GTK_LABEL(W.act_state)), "서 있음") ||
+		 lines(recent) != RECENT)
 		fprintf(stderr, "selftest: act: %s\n", recent);
 	else {
 		gtk_range_set_value(GTK_RANGE(W.p[2]), 100);	/* fade, as a drag: POST after the 120 ms batching */

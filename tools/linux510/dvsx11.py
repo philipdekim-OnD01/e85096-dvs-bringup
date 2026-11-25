@@ -4,6 +4,8 @@
 ov5647-cap.py --x11 starts the decoder with dvs_start(NULL): it draws 960x720 XRGB8888 into memory and this thread
 puts that page into a window fps times a second (plain XPutImage: the kernel has no SysV IPC, so no MIT-SHM).
 Closing the window, q or Esc sends SIGINT to the process: the capture loop then stops the stream as on Ctrl+C.
+On the GPU desktop (:1, 11.102) start_gl() shows it through dvsgl instead: that program draws each frame's events on
+the GPU from the ring libdvsview shares (dvs_share), so fast motion no longer waits for the CPU drawing. DVS_GL=0: off.
 
   dvsx11.py --selftest        draws a test page into a window and reads it back (needs $DISPLAY, e.g. Xvfb)
 """
@@ -14,6 +16,7 @@ import signal
 import sys
 import threading
 import time
+import types
 
 X = ctypes.CDLL(ctypes.util.find_library('X11') or 'libX11.so.6')
 P, U, I = ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int
@@ -98,6 +101,36 @@ def start(lib):
     return win
 
 
+GL = '/usr/local/bin/dvsgl'
+GL_LIB = '/home/philip/gpu/mesa-kbase/lib'      # the GPU Mesa and kbase shim of the desktop boards, as x-kms.sh
+
+
+def gl_ready():
+    return (os.environ.get('DVS_GL') != '0' and os.access(GL, os.X_OK)
+            and os.path.exists(GL_LIB + '/libpanfrost_kbase_drm_shim.so'))
+
+
+def start_gl(lib, fd):
+    """the GPU view (dvsgl) of dvs_share()'s memfd fd; when it fails, the CPU page as start(). Call from the main
+    thread: dvsgl dies with the thread that started it (PR_SET_PDEATHSIG)."""
+    import subprocess
+    env = dict(os.environ, LD_LIBRARY_PATH=GL_LIB, LIBGL_DRIVERS_PATH=GL_LIB + '/dri',
+               LD_PRELOAD=GL_LIB + '/libpanfrost_kbase_drm_shim.so')
+    p = subprocess.Popen([GL, str(fd)], pass_fds=(fd,), env=env)
+
+    def wait():
+        rc = p.wait()
+        if rc != 0:             # 0: q, Esc or the window closed
+            print('dvsx11: dvsgl exit %d, drawing on the CPU' % rc, file=sys.stderr, flush=True)
+            try:
+                start(lib)      # libdvsview draws every frame again once dvsgl stops reading
+                return
+            except OSError as e:
+                print(e, file=sys.stderr, flush=True)
+        os.kill(os.getpid(), signal.SIGINT)
+    threading.Thread(target=wait, daemon=True, name='dvs-gl').start()
+
+
 def selftest():
     w, h = 960, 720
     page = (ctypes.c_uint32 * (w * h))()
@@ -112,6 +145,24 @@ def selftest():
     got = X.XGetImage(win.d, win.win, 0, 0, w, h, 0xffffffff, Z_PIXMAP)
     inside, outside = X.XGetPixel(got, 350, 150) & 0xffffff, X.XGetPixel(got, 10, 10) & 0xffffff
     assert (inside, outside) == (0x00ff00, 0), (hex(inside), hex(outside))
+    # start_gl: dvsgl failing falls back to the CPU page; dvsgl exiting 0 (q, Esc, closed) is a Ctrl+C
+    global GL
+    lib, ints = types.SimpleNamespace(), []
+
+    def frame(pw, ph, ps):
+        pw._obj.value, ph._obj.value, ps._obj.value = w, h, w * 4
+        return ctypes.addressof(page)
+    lib.dvs_frame, lib.dvs_get = frame, lambda key: 30
+    signal.signal(signal.SIGINT, lambda *_: ints.append(1))
+    fd = os.open('/dev/null', os.O_RDONLY)
+    for GL, want in (('/bin/false', lambda: any(t.name == 'dvs-x11' for t in threading.enumerate())),
+                     ('/bin/true', lambda: ints)):
+        start_gl(lib, fd)
+        for _ in range(50):
+            if want():
+                break
+            time.sleep(0.1)
+        assert want() and not (GL == '/bin/false' and ints), GL
     print('selftest ok')
 
 

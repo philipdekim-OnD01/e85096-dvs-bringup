@@ -43,6 +43,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
+#include <linux/futex.h>
 #include <math.h>
 #include <pthread.h>
 #include <sched.h>
@@ -64,7 +65,8 @@
 #define SX (XS / 2)			/* dvs_surface: 2 x 2 px each (11.56) */
 #define SY (YS / 2)
 #define D2M 16				/* dvs_disp2mono: the least of the last D2M buffers */
-#define RING (1u << 22)			/* 4M events x 8 B: > 200 ms of a buffer full of events at 40 buffers/s */
+#define RING (1u << 24)			/* 16M events x 8 B = 128 MB: ~450 ms at 35M events/s (board 6 moving, 11.102); 4M
+					 * was ~115 ms, less than the playout delay + frame + filter lookback at peaks */
 #define STALL 300000			/* data this much off the delay: restart the playout clock */
 #define BLACK 0xff000000u		/* XRGB8888, alpha set as in ov5647-cap.py */
 #define ON_RGB 0xff00ff00u
@@ -85,6 +87,8 @@
 #define RENDER_CPU 2			/* the render thread, */
 #define FILTER_CPU 3			/* the filter thread */
 #define FCHUNK 32768			/* events it filters before it moves fw */
+#define FLAG (1u << 21)			/* the filter skips ahead this far behind (~60 ms moving, 11.102): the playout delay
+					 * waits for it, so not as far as the ring would allow */
 #define BROW 104			/* bytes per column of a filter bitmap: 722 rows with the border, + an 8-byte read */
 
 #define CELL 8				/* px, side of a measurement cell */
@@ -105,9 +109,36 @@ struct ev {
 	uint16_t y;			/* EV_Y | EV_SUP | EV_OFF */
 };
 
+/*
+ * dvs_share() (11.102): the ring and each frame's window in a memfd for the GPU view (dvsgl.c) in another process,
+ * which filters and draws the events on the GPU. seq is a sequence lock: odd while the render thread writes the
+ * frame fields, even after (the futex word dvsgl waits on). While the view keeps up (seen), the CPU draws only
+ * every GL_WEB-th frame (the page's /frame.png, not filtered), the filter thread rests and the decoder sets the
+ * playout delay: board 6 moving, 31-35 ms behind the newest event instead of 77-118 (11.102).
+ */
+#define SH_MAGIC 0x31475644u		/* "DVG1" */
+#define GL_STALE 16			/* frames the view may fall behind before the CPU draws every frame again */
+#define GL_WEB 8
+struct dvs_shared {
+	uint32_t magic, size, ring, xs, ys, ring_off;	/* the view checks these; the ring is at ring_off bytes */
+	_Atomic uint32_t seq;		/* 2 x frames published, odd while writing */
+	_Atomic uint32_t attached;	/* the view runs, */
+	_Atomic uint32_t seen;		/* and drew the frame of this seq */
+	uint32_t pad;
+	_Atomic uint64_t wr;		/* S.wr after each line: a reader checks its events were not overwritten */
+	_Atomic uint64_t cpu_frames;	/* frames the CPU drew */
+	/* the frame */
+	uint64_t l, a, b;		/* ring events [a, b) are the frame; [l, a) only lend the filter neighbours */
+	uint32_t end, window, baf;	/* display clock at the frame's end, us; filter_ms in us, 0 = off */
+	uint32_t fade, flip, pal[2];	/* as the CPU draws: keep fade/256, flip bits, ON/OFF colours (0: not drawn) */
+	uint32_t ov_seq, ov_lo, ov_hi;	/* overlay rows [ov_lo, ov_hi) changed with this ov_seq */
+	uint32_t overlay[XS * YS];	/* XRGB8888 with alpha, 0 = clear: boxes, the label, dvsface.py's mark */
+};
+
 static struct {
 	struct ev *ring;
 	_Atomic uint64_t wr;		/* events written; ring slot = index % RING */
+	struct dvs_shared *sh;		/* dvs_share(): the GPU view's memfd, else NULL */
 	int col;			/* current column, -1 before the first COLUMN packet */
 	uint32_t ref;			/* last reference timestamp, ms */
 	int have_ts, bad;
@@ -150,7 +181,7 @@ static struct {
 	_Atomic int rec_stop, rec_err;	/* drain and end; the queue overflowed or a write failed */
 	pthread_t rec_thr;
 	gzFile rec;
-	_Atomic uint64_t act_lost;	/* events dvs_events() skipped: the decoder was about to overwrite them */
+	_Atomic uint64_t act_lost;	/* events dvs_act_bin() skipped: the decoder was about to overwrite them */
 	/* link counters for the D-PHY PLL tests (11.46), since dvs_start, on the words as they came: the decoder adds,
 	 * dvs_stats() reports. *_first: the step was the buffer's first (its packets follow the last buffer's). */
 	struct {
@@ -379,8 +410,10 @@ static int64_t drawable_end(int64_t end, int filter)
 	return over > 0 ? end - over : end;
 }
 
+static int gl_view(void);
+
 /* The filter thread: woken after each buffer, it filters what came, FCHUNK events at a time, and moves fw (so the
- * first part of a big buffer is drawable before the rest is filtered); lapped, it skips ahead. */
+ * first part of a big buffer is drawable before the rest is filtered); FLAG behind, it skips ahead. */
 static void *filter_thread(void *arg)
 {
 	uint64_t f = 0, wr;
@@ -392,9 +425,10 @@ static void *filter_thread(void *arg)
 		while ((wr = atomic_load_explicit(&S.wr, memory_order_acquire)) == f)
 			pthread_cond_wait(&S.fcond, &S.flock);
 		pthread_mutex_unlock(&S.flock);
-		if (wr - f > RING / 2)		/* the decoder is overwriting what is older (or went back: a test) */
-			f = wr > RING / 2 ? wr - RING / 2 : 0;
-		if (!(baf = PV(P_FILTER) * 1000)) {	/* once: the page may set 0 meanwhile (slot() divides by it) */
+		if (wr - f > FLAG)		/* too far behind (or the decoder went back: a test) */
+			f = wr > FLAG ? wr - FLAG : 0;
+		/* baf once: the page may set 0 meanwhile (slot() divides by it). The GPU view filters for itself: rest */
+		if (!(baf = PV(P_FILTER) * 1000) || gl_view()) {
 			atomic_store_explicit(&S.fw, f = wr, memory_order_release);
 			continue;
 		}
@@ -505,6 +539,8 @@ static size_t decode(const uint32_t *p, size_t n)
 		}
 	}
 	atomic_store_explicit(&S.wr, wr, memory_order_release);
+	if (S.sh)
+		atomic_store_explicit(&S.sh->wr, wr, memory_order_release);
 	return i;
 }
 
@@ -608,7 +644,7 @@ int dvs_ingest(uint8_t *buf, size_t len)
 	S.lk_first_ts = S.lk_first_fe = 1;
 	n = decode_lines(buf, len);
 	wake_filter();
-	if (!PV(P_FILTER))
+	if (!PV(P_FILTER) || gl_view())		/* the GPU view filters for itself: drawable now */
 		seen(s_first);			/* the oldest event of this buffer became drawable now */
 
 	atomic_store(&S.newest, S.t);
@@ -961,10 +997,16 @@ static const uint8_t font[][7] = {
 	{ 0x00, 0x00, 0x0e, 0x10, 0x10, 0x11, 0x0e },
 };
 
+static uint32_t *canvas;		/* where dot() draws: NULL = S.back, or the GPU view's overlay */
+static int dlo = YS, dhi = -1;		/* rows dot() drew since they were reset */
+
 static void dot(int x, int y, uint32_t c)
 {
-	if (x >= 0 && x < XS && y >= 0 && y < YS)
-		S.back[y * XS + x] = c;
+	if (x >= 0 && x < XS && y >= 0 && y < YS) {
+		(canvas ? canvas : S.back)[y * XS + x] = c;
+		dlo = y < dlo ? y : dlo;
+		dhi = y > dhi ? y : dhi;
+	}
 }
 
 static void line(struct pt a, struct pt b, uint32_t c)
@@ -1080,9 +1122,91 @@ static int scan_update(void)
 	return atomic_load(&S.scan);
 }
 
+/* boxes, the box label and dvsface.py's mark, on the canvas */
+static void marks(int64_t t0)
+{
+	if (B.out && B.shown)
+		for (int i = 0; i < 4; i++)
+			line(B.r.c[i], B.r.c[(i + 1) % 4], BOX_RGB);
+	if (B.label[0])
+		text(12, 12, B.label, 4, BOX_RGB);
+	draw_mark(t0);
+}
+
+/* The GPU view is attached and drew one of the last GL_STALE frames. */
+static int gl_view(void)
+{
+	return S.sh && atomic_load(&S.sh->attached) && atomic_load(&S.sh->seq) - atomic_load(&S.sh->seen) <= 2 * GL_STALE;
+}
+
+static uint32_t ov_lo, ov_hi;		/* the overlay rows the next publish() reports */
+
+/* GPU view: the marks into the shared overlay; the rows drawn last time are cleared first. 1: it changed. */
+static int overlay(int64_t t0)
+{
+	static int lo = YS, hi = -1;
+	int changed;
+
+	if (hi >= lo)
+		memset(S.sh->overlay + lo * XS, 0, (size_t)(hi - lo + 1) * XS * 4);
+	canvas = S.sh->overlay;
+	dlo = YS;
+	dhi = -1;
+	marks(t0);
+	canvas = NULL;
+	changed = hi >= lo || dhi >= dlo;
+	ov_lo = dlo < lo ? dlo : lo;
+	ov_hi = (dhi > hi ? dhi : hi) + 1;
+	lo = dlo;
+	hi = dhi;
+	return changed;
+}
+
+/* The frame for the GPU view: events [l, b), drawn [a, b), and the settings it is drawn with (seq lock). */
+static void publish(uint64_t l, uint64_t a, uint64_t b, int64_t end, int64_t window, int ov)
+{
+	struct dvs_shared *h = S.sh;
+	uint32_t s = atomic_load_explicit(&h->seq, memory_order_relaxed), color = PV(P_COLOR);
+
+	atomic_store_explicit(&h->seq, s + 1, memory_order_relaxed);
+	atomic_thread_fence(memory_order_release);
+	h->l = l;
+	h->a = a;
+	h->b = b;
+	h->end = end;
+	h->window = window;
+	h->baf = PV(P_FILTER) * 1000;
+	h->fade = PV(P_FADE);
+	h->flip = PV(P_FLIP);
+	h->pal[0] = colors[color][0];
+	h->pal[1] = colors[color][1];
+	if (ov) {
+		h->ov_lo = ov_lo;
+		h->ov_hi = ov_hi;
+		h->ov_seq++;
+	}
+	atomic_store_explicit(&h->seq, s + 2, memory_order_release);
+	syscall(SYS_futex, &h->seq, FUTEX_WAKE, INT32_MAX, NULL, NULL, 0);
+}
+
+/* The first of ring events [lo, hi) not before sensor time t: the decoder writes them in time order. A frame's
+ * 1M events moving, stepped one by one 4 times a frame, took the render thread ~15 ms (11.102). */
+static uint64_t seek(uint64_t lo, uint64_t hi, int64_t t)
+{
+	while (lo < hi) {
+		uint64_t mid = lo + (hi - lo) / 2;
+
+		if (BEFORE(S.ring[mid % RING].t, (uint32_t)t))
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	return lo;
+}
+
 static void *render(void *arg)
 {
-	uint64_t a = 0, b = 0, m = 0;		/* frame window [a, b), measurement window [m, b) */
+	uint64_t a = 0, b = 0, m = 0, l = 0;	/* frame window [a, b), measurement window [m, b), lookback [l, a) */
 	int64_t prev = INT64_MIN, frame_max = 0, frame_sum = 0, shown = 0, lag = 0, ema = 0, t_log = now_us();
 	unsigned frames = 0, dips = 0;
 	struct timespec next;
@@ -1093,6 +1217,7 @@ static void *render(void *arg)
 		int64_t period = 1000000 / PV(P_FPS), window = PV(P_WINDOW) ? PV(P_WINDOW) * 1000LL : period;
 		int fade = PV(P_FADE), filter = PV(P_FILTER), color = PV(P_COLOR), flip = PV(P_FLIP);
 		int zoom = PV(P_ZOOM) && S.xres >= XS * 3 / 2 && S.yres >= YS * 3 / 2;
+		int gl = gl_view(), cpu = !gl || frames % GL_WEB == 0;
 		int64_t t0, end, anchor, newest;
 		uint64_t wr, lim;
 
@@ -1110,44 +1235,49 @@ static void *render(void *arg)
 		newest = atomic_load(&S.newest);
 		if (end > newest)
 			end = newest;			/* not past the data: a hole holds the last frame instead of a dark one */
-		end = drawable_end(end, filter);
+		if (!gl)
+			end = drawable_end(end, filter);	/* the GPU view filters for itself */
 		anchor = atomic_exchange(&S.anchor, -1);
 		if (anchor >= 0)
 			prev = anchor - window;		/* first buffer or after a stall: start from its data */
 		if (end < prev)
 			end = prev;			/* the delay grew: hold, never step back in sensor time */
 		wr = atomic_load_explicit(&S.wr, memory_order_acquire);
-		lim = filter ? atomic_load_explicit(&S.fw, memory_order_acquire) : wr;	/* EV_SUP is set below fw */
+		lim = filter && !gl ? atomic_load_explicit(&S.fw, memory_order_acquire) : wr;	/* EV_SUP below fw */
 		if (wr - a > RING)
 			a = wr - RING;			/* the decoder lapped us: those events are gone */
 		if (wr - m > RING)
 			m = wr - RING;
+		if (wr - l > RING)
+			l = wr - RING;
 		if (b < a)
 			b = a;
-		while (b < lim && BEFORE(S.ring[b % RING].t, (uint32_t)end))
-			b++;
-		while (a < b && BEFORE(S.ring[a % RING].t, (uint32_t)(end - window)))
-			a++;
-		while (m < b && BEFORE(S.ring[m % RING].t, (uint32_t)(end - B.win)))
-			m++;
+		b = seek(b, lim, end);
+		a = seek(a, b, end - window);
+		m = seek(m, b, end - B.win);
+		l = seek(l, a, end - window - filter * 1000);
 		if (B.out && end != prev)
 			box_frame(m, b, end);		/* not while holding: the same events again */
+		if (S.sh) {				/* before the CPU draws the page's frame (~25 ms moving) */
+			atomic_fetch_add(&S.sh->cpu_frames, cpu);
+			publish(l, a, b, end, window, gl ? overlay(t0) : 0);
+		}
 
-		if (fade)
+		if (cpu && fade)
 			for (int i = 0; i < XS * YS; i++) {
 				uint32_t c = S.back[i];
 
 				S.back[i] = BLACK | ((c & 0xff00ff) * fade >> 8 & 0xff00ff) | ((c & 0xff00) * fade >> 8 & 0xff00);
 			}
-		else
+		else if (cpu)
 			for (int i = 0; i < XS * YS; i++)
 				S.back[i] = BLACK;
-		for (uint64_t i = a; i < b; i++) {
+		for (uint64_t i = a; cpu && i < b; i++) {	/* with the GPU view, the page's frames: not filtered */
 			const struct ev *e = &S.ring[i % RING];
 			uint32_t c = colors[color][e->y >> 15];
 			int x = e->x, y = e->y & EV_Y;
 
-			if (!c || (filter && !(e->y & EV_SUP)))
+			if (!c || (filter && !gl && !(e->y & EV_SUP)))
 				continue;
 			if (flip & 1)
 				x = XS - 1 - x;
@@ -1155,13 +1285,11 @@ static void *render(void *arg)
 				y = YS - 1 - y;
 			S.back[y * XS + x] = c;
 		}
-		if (B.out && B.shown)
-			for (int i = 0; i < 4; i++)
-				line(B.r.c[i], B.r.c[(i + 1) % 4], BOX_RGB);
-		if (B.label[0])
-			text(12, 12, B.label, 4, BOX_RGB);
-		draw_mark(t0);
-		present(zoom);
+		if (cpu) {
+			marks(t0);
+			if (!gl)
+				present(zoom);
+		}
 		prev = end;
 
 		t0 = now_us() - t0;
@@ -1269,44 +1397,125 @@ const char *dvs_stats(void)
 }
 
 /*
- * The action classifier's reader (11.37): copy up to max events after *cursor into dst and move the cursor;
- * *cursor == UINT64_MAX starts at the newest event. A reader more than RING / 2 behind jumps to there (the
- * decoder may be overwriting the slots behind it) and the events it skipped go to act_lost.
+ * The action classifier's frames (11.37; all in C since 11.103: per 64 k events Python copied, searched and looped
+ * with the GIL, a whole core with fast motion): dvsact.Binner's rules on ring events, in time order.
+ *   Every step us of display clock is one bin; an event starts the first bin and bins with no event are skipped.
+ *   Two events more than gap us apart: the open bin is dropped and a reset reported.
+ *   Counts go to acc[2][120][160] (OFF after ON, 6 x 6 px each).
+ * Returns 1: a bin ended, its counts in acc, out = its start (unwrapped us from the first event); 2: a reset,
+ * out = when; 0: the events up to wr are counted. After 1 or 2 the next call zeroes acc first.
  */
-int dvs_events(struct ev *dst, int max, uint64_t *cursor)
-{
-	uint64_t wr = atomic_load_explicit(&S.wr, memory_order_acquire), c = *cursor, n, i;
+struct dvs_binner {
+	uint64_t cur;			/* next event; dvs_act_bin(): UINT64_MAX starts at the newest */
+	int64_t t0, tu, out;		/* unwrapped: the open bin's start, the last event, the bin or reset reported */
+	uint32_t start, last, flags;	/* the uint32 clock of t0 and tu; BIN_* */
+	uint32_t step, gap;		/* set by the caller (dvsact.STEP_US, GAP_US) */
+	uint32_t pad;
+};
+#define BIN_OPEN 1u
+#define BIN_LAST 2u
+#define BIN_ANY 4u
+#define BIN_ZERO 8u
 
-	if (c == UINT64_MAX) {
-		*cursor = wr;
-		return 0;
+int dvs_bin_run(struct dvs_binner *s, const struct ev *ring, uint64_t size, uint64_t wr, uint32_t *acc)
+{
+	/* the state in locals: through s, every acc store could alias it and the loop reloaded it per event, and
+	 * cur % size per event: 30 ns an event against 17 for counting alone (board 6, 11.103) */
+	uint64_t cur = s->cur;
+	uint32_t start = s->start, last = s->last, flags = s->flags, step = s->step, gap = s->gap;
+	int64_t t0 = s->t0, tu = s->tu, out = s->out;
+	int r = 0;
+
+	if (flags & BIN_ZERO) {
+		memset(acc, 0, sizeof(uint32_t) * 2 * (YS / 6) * (XS / 6));
+		flags &= ~BIN_ZERO;
 	}
-	if (wr - c > RING / 2) {
-		atomic_fetch_add(&S.act_lost, wr - RING / 2 - c);
-		c = wr - RING / 2;
+	while (!r && cur < wr) {
+		const struct ev *base = ring + cur % size, *e = base;
+		const struct ev *end = base + (size - cur % size < wr - cur ? size - cur % size : wr - cur);
+
+		for (; e < end; e++) {		/* up to the ring's end or wr */
+			uint32_t t, x, y, dt;
+			int64_t u;
+
+			if ((flags & (BIN_LAST | BIN_OPEN)) == (BIN_LAST | BIN_OPEN)) {
+				/* inside the open bin: count until its end, a gap or the data's end */
+				uint32_t from = last;
+
+				for (; e < end && e->t - last <= gap && e->t - start < step; e++) {
+					x = e->x;
+					y = e->y & EV_Y;
+					if (x < XS && y < YS)
+						acc[(e->y >> 15) * (YS / 6 * XS / 6) + y / 6 * (XS / 6) + x / 6]++;
+					last = e->t;
+				}
+				tu += (uint32_t)(last - from);
+				if (last != from)
+					flags |= BIN_ANY;
+				if (e == end)
+					break;
+			}
+			t = e->t;
+			x = e->x;
+			y = e->y & EV_Y;
+			dt = t - last;
+			u = flags & BIN_LAST ? tu + dt : 0;
+
+			if (dt > gap && (flags & (BIN_LAST | BIN_OPEN)) == (BIN_LAST | BIN_OPEN)) {
+				flags = (flags & ~(BIN_OPEN | BIN_ANY)) | BIN_ZERO;
+				out = u;
+				r = 2;		/* this event opens the next bin */
+				break;
+			}
+			if (!(flags & BIN_OPEN)) {
+				start = t;
+				t0 = u;
+				flags |= BIN_OPEN;
+			}
+			if (t - start >= step) {	/* past the open bin: report it, skip the empty ones */
+				uint32_t k = (t - start) / step * step, any = flags & BIN_ANY;
+
+				out = t0;
+				start += k;
+				t0 += k;
+				flags &= ~BIN_ANY;
+				if (any) {
+					flags |= BIN_ZERO;
+					r = 1;	/* this event is counted on the next call */
+					break;
+				}
+			}
+			if (x < XS && y < YS)
+				acc[(e->y >> 15) * (YS / 6 * XS / 6) + y / 6 * (XS / 6) + x / 6]++;
+			flags |= BIN_ANY | BIN_LAST;
+			last = t;
+			tu = u;
+		}
+		cur += e - base;
 	}
-	n = wr - c < (uint64_t)max ? wr - c : (uint64_t)max;
-	i = c % RING;
-	if (i + n > RING) {
-		memcpy(dst, S.ring + i, (RING - i) * sizeof(*dst));
-		memcpy(dst + (RING - i), S.ring, (n - (RING - i)) * sizeof(*dst));
-	} else {
-		memcpy(dst, S.ring + i, n * sizeof(*dst));
-	}
-	*cursor = c + n;
-	return n;
+	s->cur = cur;
+	s->start = start;
+	s->last = last;
+	s->flags = flags;
+	s->t0 = t0;
+	s->tu = tu;
+	s->out = out;
+	return r;
 }
 
-/* Add events e[0..n) into cells[2][120][160] (OFF after ON, 6 x 6 px each): the classifier's count frame,
- * dvsact.Binner.push_ev. numpy took 25-50 ms for the 150-300 k events of a busy 60 ms (11.38). */
-void dvs_cells(const struct ev *e, int n, uint32_t *cells)
+/* dvs_bin_run() on the decoder's ring. A reader more than RING / 2 behind jumps to there (the decoder may be
+ * overwriting the slots behind it) and the events it skipped go to act_lost. */
+int dvs_act_bin(struct dvs_binner *s, uint32_t *acc)
 {
-	for (int i = 0; i < n; i++) {
-		uint32_t x = e[i].x, y = e[i].y & EV_Y;
+	uint64_t wr = atomic_load_explicit(&S.wr, memory_order_acquire);
 
-		if (x < XS && y < YS)
-			cells[(e[i].y >> 15) * (YS / 6 * XS / 6) + y / 6 * (XS / 6) + x / 6]++;
+	if (s->cur == UINT64_MAX)
+		s->cur = wr;
+	if (wr - s->cur > RING / 2) {
+		atomic_fetch_add(&S.act_lost, wr - RING / 2 - s->cur);
+		s->cur = wr - RING / 2;
 	}
+	return dvs_bin_run(s, S.ring, RING, wr, acc);
 }
 
 /* CLOCK_MONOTONIC us - display clock us, the least over the last D2M buffers; 0 before the first (11.56) */
@@ -1331,7 +1540,7 @@ int64_t dvs_disp2mono(void)
  * each), the latest event of a pixel giving 1 + 254 * (win - age) / win, 0 where none fired; polarity left out.
  * Walks back from the newest event; times compare as int32 differences (the 32-bit clock wraps every 71.6 min).
  * info: newest (display us), disp2mono low and high 32 bits, cost us; dst NULL fills only the first three. Returns the events used, -1 when t_end is
- * after the newest buffer, -2 when the window reaches past the RING / 2 a reader may use (dvs_events()) or the
+ * after the newest buffer, -2 when the window reaches past the RING / 2 a reader may use (dvs_act_bin()) or the
  * decoder overwrote it meanwhile, -3 for a bad window. The caller's thread (the page's, CPU7) does the work.
  */
 int dvs_surface(uint32_t t_end, int win_us, uint8_t *dst, uint32_t *info)
@@ -1503,6 +1712,35 @@ int dvs_png(uint8_t *dst, size_t len)
 		return -ENOSPC;
 	p = png_chunk(p, "IDAT", n);
 	return png_chunk(p, "IEND", 0) - dst;
+}
+
+/* Before the ring exists (dvs_start()): the ring and each frame's window in a memfd for the GPU view (dvsgl,
+ * 11.102). Returns the fd for the view, or -errno. */
+int dvs_share(void)
+{
+	size_t off = (sizeof(struct dvs_shared) + 4095) & ~(size_t)4095, n = off + sizeof(struct ev) * RING;
+	uint8_t *p;
+	int fd, e;
+
+	if (S.ring || S.sh)
+		return -EBUSY;
+	fd = memfd_create("dvsview", MFD_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	if (ftruncate(fd, n) || (p = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+		e = -errno;
+		close(fd);
+		return e;
+	}
+	S.sh = (struct dvs_shared *)p;		/* a new memfd reads as zeros */
+	S.sh->size = sizeof(*S.sh);
+	S.sh->ring = RING;
+	S.sh->xs = XS;
+	S.sh->ys = YS;
+	S.sh->ring_off = off;
+	S.sh->magic = SH_MAGIC;
+	S.ring = (struct ev *)(p + off);
+	return fd;
 }
 
 /* The page drawn on: fbdev's visible page, or XS x YS in memory (dvs_start(NULL)) that dvsx11.py shows. */
@@ -1695,6 +1933,14 @@ int main(int argc, char **argv)
 	/* ref 3 ms + sub 717 us, then ref 4 + sub 17 (+300 us), a sub that goes back (rejected), sub 511 (+494) */
 	static const uint32_t ts[] = { 0x08000003, 0x088002cd, 0x08000004, 0x08800011, 0x08800005, 0x088001ff };
 
+	{	/* dvs_share() (11.102): before the ring, the header and the ring in one memfd; not twice */
+		int fd = dvs_share();
+
+		if (fd < 0 || S.sh->magic != SH_MAGIC || (uint8_t *)S.ring != (uint8_t *)S.sh + S.sh->ring_off ||
+		    S.sh->ring_off % 4096 || S.sh->ring_off < sizeof(*S.sh) || dvs_share() != -EBUSY)
+			return fprintf(stderr, "dvs_share: %d\n", fd), 1;
+		puts("share ok");
+	}
 	if (alloc_ring())
 		return 1;
 	if (argc == 4 && !strcmp(argv[1], "--replay"))
@@ -1827,18 +2073,18 @@ int main(int argc, char **argv)
 	if (synth(300, 150, 0, 600, 2) || synth(250, 120, 30, 600, 4) || synth(200, 160, 15, 900, 4))
 		return fprintf(stderr, "box measurement off\n"), 1;
 	{					/* the action classifier's reader: from the newest event, then what came after */
-		struct ev dst[16];
-		uint64_t c = UINT64_MAX;
+		static uint32_t acc[2 * (YS / 6) * (XS / 6)];
+		struct dvs_binner b = { .cur = UINT64_MAX, .step = 60000, .gap = 3000000 };
 
 		reset();
-		if (dvs_events(dst, 16, &c) || c != (uint64_t)nev())
-			return fprintf(stderr, "dvs_events start: cursor %llu\n", (unsigned long long)c), 1;
+		if (dvs_act_bin(&b, acc) || b.cur != (uint64_t)nev())
+			return fprintf(stderr, "dvs_act_bin start: cursor %llu\n", (unsigned long long)b.cur), 1;
 		feed(groups, 3);
-		if (dvs_events(dst, 16, &c) != 4)
-			return fprintf(stderr, "dvs_events: not the 4 new events\n"), 1;
+		if (dvs_act_bin(&b, acc) || b.cur != (uint64_t)nev())
+			return fprintf(stderr, "dvs_act_bin: not the 4 new events\n"), 1;
 		for (int i = 0; i < 4; i++)
-			if (dst[i].x != want[i].x || dst[i].y != want[i].y)
-				return fprintf(stderr, "dvs_events %d: %u,%#x\n", i, dst[i].x, dst[i].y), 1;
+			if (!acc[(want[i].y >> 15) * (YS / 6 * XS / 6) + (want[i].y & EV_Y) / 6 * (XS / 6) + want[i].x / 6])
+				return fprintf(stderr, "dvs_act_bin %d: %u,%#x not counted\n", i, want[i].x, want[i].y), 1;
 	}
 	{	/* dvs_surface (11.56): the display-clock window (t_end - win, t_end] as a 480 x 360 time surface */
 		static uint8_t img[SX * SY];
@@ -1971,15 +2217,19 @@ int main(int argc, char **argv)
 				       us[0] / 16e3), 1;
 	}
 	{					/* a reader RING/2 + 100 behind skips the 100 that are about to be overwritten */
-		struct ev dst[16];
-		uint64_t c = nev(), lost = atomic_load(&S.act_lost);
+		static uint32_t acc[2 * (YS / 6) * (XS / 6)];
+		struct dvs_binner b = { .cur = nev(), .step = 60000, .gap = 3000000 };
+		uint64_t lost = atomic_load(&S.act_lost);
+		int bins = 0;
 
 		for (uint32_t i = 0; i < RING / 2 + 100; i++)
 			ev_add(i, i % XS, i / XS % YS);
-		if (dvs_events(dst, 16, &c) != 16 || atomic_load(&S.act_lost) - lost != 100 ||
-		    c != (uint64_t)nev() - RING / 2 + 16)
-			return fprintf(stderr, "lapped reader: lost %llu, cursor %llu\n",
-				       (unsigned long long)(atomic_load(&S.act_lost) - lost), (unsigned long long)c), 1;
+		while (dvs_act_bin(&b, acc) == 1)
+			bins++;
+		if (atomic_load(&S.act_lost) - lost != 100 || b.cur != (uint64_t)nev() || bins != (int)((RING / 2 + 99) / 60000))
+			return fprintf(stderr, "lapped reader: lost %llu, cursor %llu, %d bins\n",
+				       (unsigned long long)(atomic_load(&S.act_lost) - lost), (unsigned long long)b.cur,
+				       bins), 1;
 	}
 	puts("selftest ok");
 
@@ -2130,6 +2380,39 @@ int main(int argc, char **argv)
 		if (!f || w != XS || h != YS || stride != XS * 4 || f[0] != BLACK || f[XS * YS - 1] != BLACK)
 			return fprintf(stderr, "dvs_frame: %p %dx%d stride %d\n", (void *)f, w, h, stride), 1;
 		puts("memory frame ok");
+	}
+	{	/* the GPU view (11.102): frames published; while it keeps up the CPU draws one in GL_WEB and the mark goes
+		 * to the overlay; once it stops, the CPU draws every frame again */
+		struct dvs_shared *h = S.sh;
+		uint32_t s0, s1;
+		uint64_t c0, c1;
+		int64_t t;
+
+		usleep(200000);
+		s0 = atomic_load(&h->seq);
+		c0 = atomic_load(&h->cpu_frames);
+		atomic_store(&h->attached, 1);
+		dvs_mark(100, 200, 50, 60, "W");
+		for (t = now_us(); now_us() - t < 400000; usleep(5000))
+			atomic_store(&h->seen, atomic_load(&h->seq));
+		s1 = atomic_load(&h->seq);
+		c1 = atomic_load(&h->cpu_frames);
+		if (s0 < 2 || s0 & 1 || (s1 - s0) / 2 < 10 || c1 - c0 > (s1 - s0) / 2 / GL_WEB + 2 || h->l > h->a ||
+		    h->a > h->b || h->overlay[200 * XS + 120] != MARK_RGB || h->ov_lo > 173 || h->ov_hi < 262 || !h->ov_seq)
+			return fprintf(stderr, "gl view: seq %u -> %u, cpu frames %llu, [%llu, %llu, %llu), overlay %#x rows "
+				       "%u-%u\n", s0, s1, (unsigned long long)(c1 - c0), (unsigned long long)h->l,
+				       (unsigned long long)h->a, (unsigned long long)h->b, h->overlay[200 * XS + 120],
+				       h->ov_lo, h->ov_hi), 1;
+		usleep(2 * 1000000 / 30 * GL_STALE + 200000);
+		s0 = atomic_load(&h->seq);
+		c0 = atomic_load(&h->cpu_frames);
+		usleep(300000);
+		s1 = atomic_load(&h->seq);
+		c1 = atomic_load(&h->cpu_frames);
+		if (c1 - c0 + 1 < (s1 - s0) / 2)
+			return fprintf(stderr, "gl view gone: cpu drew %llu of %u frames\n", (unsigned long long)(c1 - c0),
+				       (s1 - s0) / 2), 1;
+		puts("gl view ok");
 	}
 	return 0;
 }

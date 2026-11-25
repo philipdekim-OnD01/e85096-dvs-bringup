@@ -1,0 +1,16 @@
+#!/bin/sh
+# e850-open dvs|scope: what the desktop icons run (e850-feature desktop, docs 11.107). A window already open comes to
+# the front. Else dvs starts e850-dvs-desk.service: root, and the polkit rule lets the desktop user start it, so no
+# password (the sensor's view, or the demo recording without one); scope opens the microscope viewer (:8090,
+# e850-scope.service) as an app window.
+case ${1:-} in
+dvs) T='^DVS$' ;;
+scope) T='^SOL Microscope' ;;
+*) echo "usage: e850-open dvs|scope" >&2; exit 2 ;;
+esac
+xdotool search --name "$T" windowactivate 2>/dev/null && exit 0
+U=http://127.0.0.1:8090/
+case $1 in
+dvs) systemctl -q is-active e850-dvs || exec systemctl start e850-dvs-desk.service ;;   # e850-dvs: the desktop start's
+scope) command -v google-chrome >/dev/null && exec google-chrome --app=$U; exec firefox $U ;;
+esac

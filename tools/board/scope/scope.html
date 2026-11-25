@@ -53,7 +53,7 @@ main{min-height:0;display:block}
 /* live */
 #tab-live.on{display:grid;grid-template-columns:minmax(0,1fr) 320px}
 #view{position:relative;background:#000;min-height:0;overflow:hidden;cursor:crosshair;touch-action:none}
-#cv{position:absolute;inset:0;width:100%;height:100%}
+#cv,#gv{position:absolute;inset:0;width:100%;height:100%}
 #msg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--dim);font-size:15px;text-align:center;pointer-events:none}
 #tag{position:absolute;right:12px;top:12px;font:600 11px var(--mono);color:var(--acc);background:#000a;padding:3px 7px;border-radius:5px;pointer-events:none}
 #ovChip{position:absolute;left:12px;top:12px;display:none;align-items:center;gap:8px;background:#000c;border:1px solid var(--line2);border-radius:9px;padding:6px 11px;font:600 13px var(--mono);color:var(--hi);pointer-events:none}
@@ -234,7 +234,7 @@ body.printing .rbody{display:block;width:700px}body.printing #rSide{width:700px}
 <main>
 <!-- ============ live -->
 <section class="tab on" id="tab-live" role="tabpanel" aria-label="실시간">
-  <div id="view"><canvas id="cv"></canvas><div id="msg">연결하는 중…</div><div id="tag"></div><div id="ovChip"><i></i><span></span></div>
+  <div id="view"><canvas id="gv"></canvas><canvas id="cv"></canvas><div id="msg">연결하는 중…</div><div id="tag"></div><div id="ovChip"><i></i><span></span></div>
     <div id="zoomui"><button id="bPause" title="영상 멈춤 (Space)" aria-label="영상 멈춤"><svg class="ic" data-ic="pause"></svg></button>
       <button id="zOut" title="축소 (−)" aria-label="축소">−</button><span id="zPct" title="100% = 센서 화소 1개가 화면 점 1개">100%</span>
       <button id="zIn" title="확대 (+)" aria-label="확대">＋</button><button id="zFit" title="전체 보기 (F, 0)">맞춤</button><button id="z100" title="원래 크기 (1)">1:1</button></div></div>
@@ -438,10 +438,58 @@ const st = {cfg: {exp: 150, avg: 1, flat: false, pixel_um: 2.24}, got: false, li
   cross: true, inv: false, measure: false, meas: [], pend: null, cursor: null, n: 0, lastFrameT: 0, fetching: false,
   toff: 0, tl: {}, disk: null, cvOk: true, cvErr: "", flatReady: false, ov: {on: false, busy: false, res: null}};
 const disp = {bri: 0, con: 0, gam: 0};
-let src = null;                                     // {img, x, y, w, h, step, data: ImageData}
-const raw = document.createElement("canvas"), rctx = raw.getContext("2d", {willReadFrequently: true});
-const proc = document.createElement("canvas"), pctx = proc.getContext("2d");
-const cv = $("cv"), ctx = cv.getContext("2d");
+let src = null;                                     // {img: {width, height}, grey: Uint8Array, x, y, w, h, step, stats}
+const proc = document.createElement("canvas"), pctx = proc.getContext("2d");    // the image without WebGL2
+const cv = $("cv"), ctx = cv.getContext("2d");      // marks over the image
+/* The image on the GPU (11.106): the grey frame is a texture and the display LUT a 256x1 one, so the board's own
+ * Chrome no longer turns every pixel into RGBA in JS. Without WebGL2 (or with ?gl=0) proc gets the pixels as before. */
+function glView(c) {
+  const gl = c.getContext("webgl2", {alpha: false, antialias: false});
+  if (!gl) return null;
+  const p = gl.createProgram();
+  for (const [t, code] of [[gl.VERTEX_SHADER, `#version 300 es
+in vec2 a; uniform vec4 r; out vec2 uv;
+void main() { uv = a; gl_Position = vec4(mix(r.xy, r.zw, a), 0, 1); }`], [gl.FRAGMENT_SHADER, `#version 300 es
+precision mediump float; uniform sampler2D img, lut; in vec2 uv; out vec4 o;
+void main() { o = vec4(vec3(texture(lut, vec2((texture(img, uv).r * 255.0 + 0.5) / 256.0, 0.5)).r), 1); }`]]) {
+    const sh = gl.createShader(t); gl.shaderSource(sh, code); gl.compileShader(sh); gl.attachShader(p, sh);
+  }
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.warn("scope GL:", gl.getProgramInfoLog(p)); return null; }
+  gl.useProgram(p);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+  const a = gl.getAttribLocation(p, "a"); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+  for (const u of [1, 0]) {                         // unit 1: the LUT, unit 0: the frame; each stays bound
+    gl.activeTexture(gl.TEXTURE0 + u); gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+    for (const [k, v] of [[gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE],
+      [gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    gl.uniform1i(gl.getUniformLocation(p, u ? "lut" : "img"), u);
+  }
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);           // rows of any width
+  const r = gl.getUniformLocation(p, "r");
+  let cur = null;
+  return {
+    show(s, L) {                                    // a new frame (uploaded once) and the LUT
+      gl.activeTexture(gl.TEXTURE1); gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 256, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array(L.buffer));
+      gl.activeTexture(gl.TEXTURE0);
+      if (cur !== s) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, s.img.width, s.img.height, 0, gl.RED, gl.UNSIGNED_BYTE, s.grey); cur = s; }
+    },
+    draw(W, H, q, smooth) {                         // q: the frame's screen rectangle [x0, y0, x1, y1], null = none
+      if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+      gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+      if (!q || !cur) return;
+      const f = smooth ? gl.LINEAR : gl.NEAREST;
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
+      gl.uniform4f(r, q[0] / W * 2 - 1, 1 - q[1] / H * 2, q[2] / W * 2 - 1, 1 - q[3] / H * 2);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+  };
+}
+const gv = $("gv");
+let G = new URLSearchParams(location.search).get("gl") === "0" ? null : glView(gv);
+if (!G) gv.style.display = "none";
+gv.addEventListener("webglcontextlost", () => { G = null; gv.style.display = "none"; process(); });
 let dpr = 1;
 
 function toast(t, ms = 2600) { const e = $("toast"); e.textContent = t; e.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.opacity = 0, ms); }
@@ -561,31 +609,35 @@ function fetchFrame() {
   const r = wantRegion(), key = `x=${r.x}&y=${r.y}&w=${r.w}&h=${r.h}&step=${r.step}`;
   const after = key === st.lastKey && st.frameN != null ? st.frameN : -1;   // same view: wait for the next frame
   st.lastKey = key;
-  const url = `/frame.png?${key}&after=${after}&t=${Date.now()}`;
+  const url = `/frame.png?${key}&fmt=raw&after=${after}&t=${Date.now()}`;     // grey bytes: PNG saved 10 % (11.106)
   fetch(url).then(res => {
     if (!res.ok) throw new Error("no frame");
-    const reg = (res.headers.get("X-Region") || "").split(",").map(Number);
-    return res.blob().then(b => createImageBitmap(b)).then(img => {
-      src = {img, x: reg[0], y: reg[1], w: reg[2], h: reg[3], step: reg[4]};
+    const reg = (res.headers.get("X-Region") || "").split(",").map(Number), w = reg[2] / reg[4], h = reg[3] / reg[4];
+    return res.arrayBuffer().then(b => {
+      if (b.byteLength !== w * h) throw new Error("frame size");
+      src = {img: {width: w, height: h}, grey: new Uint8Array(b), x: reg[0], y: reg[1], w: reg[2], h: reg[3], step: reg[4]};
       st.frameN = reg[5]; st.lastFrameT = performance.now(); $("msg").style.display = "none"; process();
     });
   }).catch(() => {}).finally(() => { st.fetching = false; setTimeout(fetchFrame, st.live ? 30 : 0); });
 }
-function process() {
+function process() {                    // a new frame or a new display LUT
   if (!src) return;
-  const {img} = src;
-  if (raw.width !== img.width || raw.height !== img.height) { raw.width = proc.width = img.width; raw.height = proc.height = img.height; }
-  rctx.drawImage(img, 0, 0);
-  const id = rctx.getImageData(0, 0, img.width, img.height), d = id.data, L = lut(), hist = new Uint32Array(256);
-  src.grey = new Uint8Array(img.width * img.height);
-  let sum = 0, mn = 255, mx = 0;
-  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-    const v = d[i]; src.grey[j] = v; hist[v]++; sum += v; if (v < mn) mn = v; if (v > mx) mx = v;
-    const o = L[v]; d[i] = d[i + 1] = d[i + 2] = o;
+  const g = src.grey, n = g.length, L = lut();
+  if (!src.stats) {                     // once a frame
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < n; i++) hist[g[i]]++;
+    let sum = 0, mn = 0, mx = 255;
+    for (let v = 0; v < 256; v++) sum += v * hist[v];
+    for (; mn < 255 && !hist[mn]; mn++); for (; mx > 0 && !hist[mx]; mx--);
+    src.stats = {hist, mean: sum / n, mn, mx, sat: (hist[255] + hist[0]) / n};
   }
-  const n = img.width * img.height;
-  src.stats = {hist, mean: sum / n, mn, mx, sat: (hist[255] + hist[0]) / n};
-  pctx.putImageData(id, 0, 0);
+  if (G) G.show(src, L);
+  else {
+    if (proc.width !== src.img.width || proc.height !== src.img.height) { proc.width = src.img.width; proc.height = src.img.height; }
+    const id = pctx.createImageData(proc.width, proc.height), d = id.data;
+    for (let i = 0, j = 0; j < n; i += 4, j++) { d[i] = d[i + 1] = d[i + 2] = L[g[j]]; d[i + 3] = 255; }
+    pctx.putImageData(id, 0, 0);
+  }
   if ($("drawer").classList.contains("open")) drawHist();
   draw();
 }
@@ -621,8 +673,12 @@ function draw() {
   if (!cv.width || !cv.height) return;
   clampView();
   const s = scale(), W = cv.width, H = cv.height, um = st.cfg.pixel_um;
-  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-  if (src) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (G) {
+    ctx.clearRect(0, 0, W, H);
+    G.draw(W, H, src && [...toScr(src.x, src.y), ...toScr(src.x + src.w, src.y + src.h)], src && s * (src.step || 1) < 2.5);
+  } else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); }
+  if (src && !G) {
     ctx.imageSmoothingEnabled = s * (src.step || 1) < 2.5;
     ctx.setTransform(s, 0, 0, s, W / 2 - st.cx * s, H / 2 - st.cy * s);
     ctx.drawImage(proc, src.x, src.y, src.w, src.h);

@@ -1,0 +1,3 @@
+# e850-feature desktop (11.105): the eMMC's Android partitions (efs, persist, ...: type MMC, not the SD card's SD) stay
+# out of udisks2 and so out of the file manager; the SD card and USB disks show up there
+SUBSYSTEM=="block", KERNEL=="mmcblk*", ATTRS{type}=="MMC", ENV{UDISKS_IGNORE}="1"

@@ -323,13 +323,19 @@ class DvsLive:
             r = self.lib.dvs_boxes(a.boxes.encode(), a.mm_per_px, a.box_window)
             if r < 0:
                 raise OSError(-r, 'dvs_boxes: ' + os.strerror(-r))
+        sys.path.append('/usr/local/share/dvsview')
+        gl = -1
+        if a.x11:
+            import dvsx11
+            if dvsx11.gl_ready():               # the ring in a memfd for the GPU view; before dvs_start makes it
+                gl = self.lib.dvs_share()
+                if gl < 0:
+                    log('GPU view off: dvs_share: ' + os.strerror(-gl))
         r = self.lib.dvs_start(None if a.x11 else b'/dev/fb0', a.fps)      # None: a page in memory for X
         if r < 0:
             raise OSError(-r, 'dvs_start: ' + os.strerror(-r))
-        sys.path.append('/usr/local/share/dvsview')
         if a.x11:                               # before the page: no display, no view
-            import dvsx11
-            dvsx11.start(self.lib)
+            dvsx11.start_gl(self.lib, gl) if gl >= 0 else dvsx11.start(self.lib)
         self.ctl, self.q_us, self.q_n = None, 0.0, 0
         if a.ctl:
             import dvsctl
@@ -413,6 +419,16 @@ signal.signal(signal.SIGTERM, signal.default_int_handler)   # pkill: stream off 
 user_quit = []
 
 
+def leave(code):
+    """atexit's work, then exit without the interpreter's teardown: a daemon thread inside onnxruntime (dvsact)
+    then aborted the process ('terminate called without an active exception', exit 134, 11.103), and `dvs`
+    gives up after three failed exits in a row"""
+    atexit._run_exitfuncs()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 def _sigint(*_):                # Ctrl+C, or q / Esc / closing the window (dvsx11): exit 130, `dvs` does not start again
     user_quit.append(1)
     raise KeyboardInterrupt
@@ -430,7 +446,7 @@ if no_sensor:                   # the page and HDMI say so until dvslive starts 
         while True:
             signal.pause()
     except KeyboardInterrupt:
-        sys.exit(130 if user_quit else 1)
+        leave(130 if user_quit else 1)
 saved = 0
 t0 = last = time.time()
 try:
@@ -483,4 +499,4 @@ except KeyboardInterrupt:
 finally:
     stream_off()
     log('stopped after %.1f s, %d VC0 frame(s)' % (time.time() - t0, saved))
-sys.exit(130 if user_quit else 0 if saved else 1)
+leave(130 if user_quit else 0 if saved else 1)

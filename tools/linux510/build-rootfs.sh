@@ -82,6 +82,10 @@ chroot $R systemctl enable e850-hdmi.service
 install -m 755 /t/e850-wifi.sh $R/usr/local/bin/e850-wifi.sh
 install -m 644 /t/e850-wifi.service $R/etc/systemd/system/e850-wifi.service
 chroot $R systemctl enable e850-wifi.service
+# no IPv4 on wlan0 for 3 min: reassociate, restart wpa_supplicant, restart the firmware (docs 11.100)
+install -m 755 /t/e850-wifiwatch.sh $R/usr/local/bin/e850-wifiwatch.sh
+install -m 644 /t/e850-wifiwatch.service $R/etc/systemd/system/e850-wifiwatch.service
+chroot $R systemctl enable e850-wifiwatch.service
 mkdir -p $R/vendor/etc/wifi $R/lib/firmware $R/lib/etc
 ln -sfn /vendor/etc/wifi $R/lib/etc/wifi
 if [ -f /out/wifi-a13.tgz ]; then

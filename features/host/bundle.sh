@@ -32,12 +32,13 @@ cd "$R/features"
 cp README.md e850-feature common.sh "$B/"
 for f in */feature.sh; do d=${f%/feature.sh}; [ "$d" = host ] || cp -R "$d" "$B/"; done
 cp "$R/tools/board/scope/gpiohold.py" "$B/usbhost/"
-# dvs (11.97, 11.98): the decoder and the settings panel built for the boards' Debian 12, its scripts from tools/,
+# dvs (11.97, 11.98): the decoder, the settings panel and the GPU view (11.102) built for the boards' Debian 12, its scripts from tools/,
 # the optional banner glyphs and demo recording from out/ (not in git: a system font's glyphs; a recording)
 docker run --rm --platform linux/arm64 -v "$R/tools/linux510:/s:ro" -v "$B/dvs:/x" debian:12 sh -c '
-    apt-get -qq update && apt-get -qq install -y gcc libc6-dev zlib1g-dev pkg-config libgtk-3-dev libcjson-dev >/dev/null &&
+    apt-get -qq update && apt-get -qq install -y gcc libc6-dev zlib1g-dev pkg-config libgtk-3-dev libcjson-dev libegl-dev libgles-dev libx11-dev >/dev/null &&
     gcc -O2 -Wall -shared -fPIC -o /x/libdvsview.so /s/dvsview.c -lpthread -lm -lz &&
-    gcc -O2 -Wall -o /x/dvspanel /s/dvspanel.c $(pkg-config --cflags --libs gtk+-3.0 libcjson) -lm' > "$S/build-dvsview.log" 2>&1 ||
+    gcc -O2 -Wall -o /x/dvspanel /s/dvspanel.c $(pkg-config --cflags --libs gtk+-3.0 libcjson) -lm &&
+    gcc -O2 -Wall -o /x/dvsgl /s/dvsgl.c -lEGL -lGLESv2 -lX11' > "$S/build-dvsview.log" 2>&1 ||
     { tail -20 "$S/build-dvsview.log"; exit 1; }
 cp "$R/tools/linux510/ov5647-cap.py" "$R/tools/linux510/dvsctl.py" "$R/tools/linux510/dvsctl.html" \
     "$R/tools/linux510/dvsact.py" "$R/tools/linux510/dvsx11.py" "$R/tools/linux510/dvsface.py" "$R/tools/board/dvslive.sh" \

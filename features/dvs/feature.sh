@@ -13,7 +13,7 @@ install)
     ko_install fimc-is is-cis-s5krc1s csis-irqstat
     apt_need libcjson1                  # dvspanel
     install -m 644 "$H/libdvsview.so" /usr/local/lib/
-    install -m 755 "$H/ov5647-cap.py" "$H/dvslive.sh" "$H/dvs" "$H/dvspanel" /usr/local/bin/
+    install -m 755 "$H/ov5647-cap.py" "$H/dvslive.sh" "$H/dvs" "$H/dvspanel" "$H/dvsgl" /usr/local/bin/
     install -d "$SHARE" /var/lib/dvsview
     install -m 644 "$H/dvsctl.py" "$H/dvsctl.html" "$H/dvsact.py" "$H/dvsx11.py" "$H/dvsface.py" "$SHARE/"
     [ ! -f "$H/dvsfont.json" ] || install -m 644 "$H/dvsfont.json" "$SHARE/"
@@ -23,7 +23,7 @@ install)
     log "dvs: run 'dvs' in a terminal in X (sudo asks for the password); page on :8080";;
 remove)
     unit_remove dvslive.service
-    rm -f /usr/local/bin/dvs /usr/local/bin/dvspanel /usr/local/bin/dvslive.sh /usr/local/lib/libdvsview.so /var/lib/dvsview/demo.gz \
+    rm -f /usr/local/bin/dvs /usr/local/bin/dvspanel /usr/local/bin/dvsgl /usr/local/bin/dvslive.sh /usr/local/lib/libdvsview.so /var/lib/dvsview/demo.gz \
         /var/lib/dvsview/face.onnx
     rm -f "$SHARE/dvsface.py" "$SHARE/dvsx11.py" "$SHARE/dvsctl.py" "$SHARE/dvsctl.html" "$SHARE/dvsact.py" "$SHARE/dvsfont.json"
     ko_remove fimc-is is-cis-s5krc1s csis-irqstat

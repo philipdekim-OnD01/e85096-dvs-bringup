@@ -647,7 +647,9 @@ diag_cache = {"t": 0, "d": {}}
 
 
 def frame_png(q):
-    """PNG of the current frame: region x,y,w,h in full-size pixels, every step-th pixel (step 2 = 2x2 mean)."""
+    """PNG of the current frame: region x,y,w,h in full-size pixels, every step-th pixel (step 2 = 2x2 mean).
+    fmt=raw: the grey bytes instead, row by row (the live page): the sample's noise left PNG 10 % smaller for
+    78 ms of zlib a frame here and a decode in the browser (11.106)."""
     with cam.lock:
         img, n = cam.img, cam.n
     if img is None:
@@ -657,14 +659,15 @@ def frame_png(q):
     ih, iw = img.shape
     x, y = max(0, min(iw - 2, g("x", 0))) & ~1, max(0, min(ih - 2, g("y", 0))) & ~1
     w, h = max(2, min(iw - x, g("w", iw))) & ~1, max(2, min(ih - y, g("h", ih))) & ~1
-    key = (n, x, y, w, h, step)
+    as_raw = q.get("fmt", [""])[0] == "raw"
+    key = (n, x, y, w, h, step, as_raw)
     if key not in frame_cache:
         r = img[y:y + h, x:x + w]
         if step == 2:
             r = ((r[0::2, 0::2].astype(np.uint16) + r[1::2, 0::2] + r[0::2, 1::2] + r[1::2, 1::2] + 2) >> 2).astype(np.uint8)
         if len(frame_cache) > 8:
             frame_cache.clear()
-        frame_cache[key] = png(r)
+        frame_cache[key] = r.tobytes() if as_raw else png(r)
     return frame_cache[key], (x, y, w, h, step, n)
 
 
@@ -703,7 +706,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if r is None:
                     self.send({"error": cam.msg}, code=503)
                 else:
-                    self.send(r[0], "image/png", extra=[("X-Region", ",".join(map(str, r[1])))])
+                    self.send(r[0], "application/octet-stream" if q.get("fmt", [""])[0] == "raw" else "image/png",
+                              extra=[("X-Region", ",".join(map(str, r[1])))])
             elif p == "/stat":
                 if time.time() - diag_cache["t"] > 1 and cam.dev:
                     try:

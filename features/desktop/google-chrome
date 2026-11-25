@@ -1,0 +1,9 @@
+#!/bin/sh
+# /usr/local/bin/google-chrome (and google-chrome-stable) from e850-feature desktop, when Google Chrome is installed.
+# On the GPU X (:1, x-kms.sh hands every client the panfrost kbase drm shim) Chrome draws on the GPU through ANGLE
+# on Mesa's EGL: that X has no GLX, ANGLE's default (11.102). Needs the shim of 11.102 (anonymous mmap past the
+# shim): with the older one Chrome spun at start. Elsewhere Chrome runs without the shim and draws in software.
+case ${DISPLAY%.*} in
+:1) exec /usr/bin/google-chrome-stable --use-gl=angle --use-angle=gl-egl "$@";;
+esac
+exec env -u LD_PRELOAD -u LD_LIBRARY_PATH -u LIBGL_DRIVERS_PATH /usr/bin/google-chrome-stable "$@"

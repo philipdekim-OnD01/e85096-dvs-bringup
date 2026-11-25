@@ -1,0 +1,15 @@
+# wlan0 without an IPv4 address for 3 minutes: reassociate, restart wpa_supplicant, restart the WLBT firmware.
+#   cp e850-wifiwatch.sh /usr/local/bin/; cp e850-wifiwatch.service /etc/systemd/system/
+#   systemctl enable --now e850-wifiwatch
+[Unit]
+Description=Wi-Fi watch: no IPv4 address on wlan0 (docs 11.100)
+After=e850-wifi.service
+ConditionPathExists=/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+
+[Service]
+ExecStart=/usr/local/bin/e850-wifiwatch.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
