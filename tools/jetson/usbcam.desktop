@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=USB camera
+Name[ko]=USB 카메라
+Comment=The USB cameras on the screen, two side by side (docs 11.113)
+Comment[ko]=USB 카메라 영상 (두 대면 나란히)
+Exec=/home/philip/dvs-jetson/usbcam
+Icon=accessories-camera
+Terminal=false
+Categories=AudioVideo;Video;
+StartupNotify=false

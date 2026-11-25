@@ -19,16 +19,17 @@ docker run --rm --platform linux/arm64 -v "$R/tools/linux510:/s:ro" -v "$O:/o" u
     gcc -O2 -Wall -o /o/dvspanel /s/dvspanel.c $(pkg-config --cflags --libs gtk+-3.0 libcjson) -lm'
 # dvsact.py: only its CLASSES for the page's recording labels (no classifier on the Jetson: /act says off)
 cp "$R/tools/linux510/dvsctl.py" "$R/tools/linux510/dvsctl.html" "$R/tools/linux510/dvsx11.py" "$R/tools/linux510/dvsact.py" \
-    "$R/tools/jetson/dvs-jetson.py" "$R/tools/jetson/dvs-jetson" "$R/tools/jetson/dvs-jetson.desktop" "$O/"
+    "$R/tools/jetson/dvs-jetson.py" "$R/tools/jetson/dvs-jetson" "$R/tools/jetson/dvs-jetson.desktop" \
+    "$R/tools/jetson/usbcam" "$R/tools/jetson/usbcam.desktop" "$O/"
 # beside, then renamed in: a running dvs-jetson keeps its libdvsview.so and dvspanel (new files from its next start)
 ssh "$T" 'rm -rf ~/dvs-jetson/.new && mkdir -p ~/dvs-jetson/.new'
 scp -q "$O"/* "$T:dvs-jetson/.new/"
 ssh "$T" 'cd ~/dvs-jetson && mv -f .new/* . && rmdir .new'
 rm -rf "$O"
-ssh "$T" 'cd ~/dvs-jetson && chmod 755 dvs-jetson dvs-jetson.py && python3 dvs-jetson.py --selftest'
-# the desktop icon (DING runs a .desktop file only when it is executable and trusted); NRV's "DVS 디코더" stays
-ssh "$T" 'd=$(xdg-user-dir DESKTOP) && install -m 755 ~/dvs-jetson/dvs-jetson.desktop "$d/" &&
-    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus gio set "$d/dvs-jetson.desktop" metadata::trusted true'
+ssh "$T" 'cd ~/dvs-jetson && chmod 755 dvs-jetson dvs-jetson.py usbcam && python3 dvs-jetson.py --selftest'
+# the desktop icons (DING runs a .desktop file only when it is executable and trusted); NRV's "DVS 디코더" stays
+ssh "$T" 'd=$(xdg-user-dir DESKTOP) && for f in dvs-jetson.desktop usbcam.desktop; do install -m 755 ~/dvs-jetson/$f "$d/" &&
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus gio set "$d/$f" metadata::trusted true || exit 1; done'
 if [ "${2:-}" = --autostart ]; then
     ssh "$T" 'set -e; mkdir -p ~/.config/autostart ~/.config/autostart-off
         [ -f ~/.config/autostart/nrv-dvs-native.desktop ] && mv ~/.config/autostart/nrv-dvs-native.desktop ~/.config/autostart-off/

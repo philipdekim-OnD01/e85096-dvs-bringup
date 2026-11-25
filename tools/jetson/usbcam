@@ -1,0 +1,17 @@
+#!/bin/sh
+# usbcam: the USB (UVC) cameras on the Jetson's screen, two side by side, one alone (docs 11.113); desktop icon
+# usbcam.desktop (deploy.sh). The window closes it.
+# shortcut: YUY2 640x480 30 fps only, all the Generic HD cameras (1903:8328) give; another camera: decodebin + scale.
+exec 9> "${XDG_RUNTIME_DIR:-/tmp}/usbcam.lock"
+flock -n 9 || { notify-send -i accessories-camera "USB 카메라" "이미 화면에 떠 있습니다." 2>/dev/null; exit 1; }
+devs=
+for d in /sys/class/video4linux/video*; do
+    case "$(cat "$d/name")" in vi-output*) continue;; esac     # the DVS (nrv_dvs on the VI), not a USB camera
+    [ "$(cat "$d/index")" = 0 ] && devs="$devs /dev/${d##*/}"   # index 1 is each camera's metadata node
+done
+set -- $devs
+[ $# -gt 0 ] || { notify-send -i accessories-camera "USB 카메라" "연결된 USB 카메라가 없습니다. USB-A 포트에 꽂아 주세요." 2>/dev/null; exit 1; }
+caps=video/x-raw,format=YUY2,width=640,height=480,framerate=30/1
+[ $# = 1 ] && exec gst-launch-1.0 -e v4l2src device=$1 ! $caps ! videoconvert ! xvimagesink sync=false
+exec gst-launch-1.0 -e compositor name=c sink_1::xpos=640 ! videoconvert ! xvimagesink sync=false \
+    v4l2src device=$1 ! $caps ! queue ! c.sink_0 v4l2src device=$2 ! $caps ! queue ! c.sink_1
