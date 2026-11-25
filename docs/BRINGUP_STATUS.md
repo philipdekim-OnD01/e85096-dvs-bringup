@@ -28,7 +28,7 @@
 - GNOME 자동 시작을 NRV 창 대신 `dvs-jetson`으로 바꿨다.
 - htop은 `~/.local/bin/htop`(sudo 없이). 패널의 MIPI·DRAM 그래프를 Jetson VI에서 채운다: MIPI 프레임 72/s, 75.6 MB/s, 프레임 채움 38%, 빈 버퍼 15/16, 링크 오류 0. CRC는 값이 없다(11.109).
 - 남은 일:
-  - NRV 시스템 서비스 끄기: 사용자가 `sudo systemctl disable nrv-dvs-streamer`. 끄지 않아도 `dvs-jetson`이 멈춘다.
+  - (할 일 아님, 2026-11-26 정리) `nrv-dvs-streamer`는 협력 측의 예전 수신기다(부팅 때 RAW2 `dvs_streamer` + viewer.py, 사용자 philip). 그대로 둔다: `dvs-jetson`이 시작할 때 멈추고, NRV로 되돌릴 때 쓰는 경로다. NRV 창은 `~/.config/autostart-off/nrv-dvs-native.desktop`을 autostart로 되옮기면 돌아온다.
   - 로그인 자동 시작 확인(재부팅 필요).
   - 오래 돌리는 시험.
 
