@@ -1,0 +1,238 @@
+{
+ "time": "2026-11-26T08:08:48+0900",
+ "host": "ubuntu",
+ "machine_id": "2bb4534e",
+ "model": "NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super",
+ "device": "orin-nano",
+ "cpu": {
+  "count": 6,
+  "parts": [
+   "Cortex-A78AE"
+  ],
+  "features": [
+   "fp",
+   "asimd",
+   "evtstrm",
+   "aes",
+   "pmull",
+   "sha1",
+   "sha2",
+   "crc32",
+   "atomics",
+   "fphp",
+   "asimdhp",
+   "cpuid",
+   "asimdrdm",
+   "lrcpc",
+   "dcpop",
+   "asimddp",
+   "uscat",
+   "ilrcpc",
+   "flagm",
+   "paca",
+   "pacg"
+  ],
+  "policies": [
+   {
+    "cpus": "0 1 2 3",
+    "governor": "schedutil",
+    "min_mhz": 729,
+    "max_mhz": 1344,
+    "cur_mhz": 1344,
+    "hw_max_mhz": 1728
+   },
+   {
+    "cpus": "4 5",
+    "governor": "schedutil",
+    "min_mhz": 729,
+    "max_mhz": 1344,
+    "cur_mhz": 1344,
+    "hw_max_mhz": 1728
+   }
+  ]
+ },
+ "memory": {
+  "MemTotal_mb": 7485,
+  "MemAvailable_mb": 5070,
+  "SwapTotal_mb": 0,
+  "zram": []
+ },
+ "os": "Ubuntu 24.04.4 LTS",
+ "kernel": "6.8.12-1021-tegra",
+ "python": "3.12.3",
+ "machine": "aarch64",
+ "gpu": {
+  "devfreq": [
+   {
+    "name": "15340000.vic",
+    "governor": "tegra_wmark",
+    "cur_mhz": 435,
+    "max_mhz": 435
+   },
+   {
+    "name": "15380000.nvjpg",
+    "governor": "userspace",
+    "cur_mhz": 499,
+    "max_mhz": 499
+   },
+   {
+    "name": "15480000.nvdec",
+    "governor": "tegra_wmark",
+    "cur_mhz": 524,
+    "max_mhz": 524
+   },
+   {
+    "name": "15540000.nvjpg",
+    "governor": "userspace",
+    "cur_mhz": 499,
+    "max_mhz": 499
+   },
+   {
+    "name": "15a50000.ofa",
+    "governor": "userspace",
+    "cur_mhz": 537,
+    "max_mhz": 537
+   },
+   {
+    "name": "17000000.gpu",
+    "governor": "nvhost_podgov",
+    "cur_mhz": 510,
+    "max_mhz": 918
+   },
+   {
+    "name": "bwmgr",
+    "governor": "bpmp-bwmgr",
+    "cur_mhz": 3199,
+    "max_mhz": 3199
+   }
+  ],
+  "nodes": [
+   "/dev/dri/by-path",
+   "/dev/dri/card1",
+   "/dev/dri/card2",
+   "/dev/dri/renderD128",
+   "/dev/dri/renderD129",
+   "/dev/nvgpu",
+   "/dev/nvhost-ctrl-gpu",
+   "/dev/nvidia-modeset",
+   "/dev/nvidia0",
+   "/dev/nvidia1",
+   "/dev/nvidiactl"
+  ],
+  "vulkan_icd": [
+   "/etc/vulkan/icd.d/nvidia_icd.json"
+  ],
+  "opencl_icd": [],
+  "mali_kbase": false,
+  "panfrost_shim": [],
+  "nvidia_smi": "Orin (nvgpu), 595.78",
+  "cuda_driver_api": "13.2",
+  "dla_cores": 0
+ },
+ "jetson": {
+  "l4t": "# R39 (release), REVISION: 2.1, GCID: 46758480, BOARD: generic, EABI: aarch64, DATE: Fri Aug  7 05:54:22 AM UTC 2026",
+  "installed": {},
+  "apt_candidates": {
+   "nvidia-jetpack": "7.2.2-b56",
+   "tensorrt": "11.4.1.31-1+cuda13.4",
+   "cuda-toolkit": "13.2.2-1"
+  },
+  "cuda_dirs": [],
+  "trtexec": null,
+  "nvpmodel": [
+   "NV Power Mode: 25W"
+  ],
+  "tegrastats": "/usr/bin/tegrastats"
+ },
+ "thermal_c": {
+  "cpu-thermal": 55.968,
+  "gpu-thermal": 55.75,
+  "cv0-thermal": 0.0,
+  "cv1-thermal": 0.0,
+  "cv2-thermal": 0.0,
+  "soc0-thermal": 55.218,
+  "soc1-thermal": 55.062,
+  "soc2-thermal": 55.656,
+  "tj-thermal": 56.187
+ },
+ "power_monitors": [
+  {
+   "hwmon": "hwmon3",
+   "name": "ina3221",
+   "rails": {
+    "VDD_IN": {
+     "in1": "4912"
+    },
+    "VDD_CPU_GPU_CV": {
+     "in2": "4912"
+    },
+    "VDD_SOC": {
+     "in3": "4912"
+    },
+    "sum of shunt voltages": {
+     "in7": "9160"
+    }
+   },
+   "channels": [
+    "curr1_input",
+    "curr2_input",
+    "curr3_input",
+    "curr4_input"
+   ]
+  }
+ ],
+ "python_modules": {
+  "numpy": {
+   "version": "1.26.4",
+   "path": "/usr/lib/python3/dist-packages/numpy/__init__.py"
+  },
+  "onnxruntime": {
+   "version": "1.31.1",
+   "path": "/home/philip/cmp/ortpkg/onnxruntime/__init__.py",
+   "providers": [
+    "AzureExecutionProvider",
+    "CPUExecutionProvider"
+   ]
+  },
+  "torch": null,
+  "torchvision": null,
+  "ai_edge_litert": null,
+  "tflite_runtime": null,
+  "tensorflow": null,
+  "ncnn": null,
+  "ultralytics": null,
+  "onnx": null,
+  "cv2": null,
+  "PIL": {
+   "version": "10.2.0",
+   "path": "/usr/lib/python3/dist-packages/PIL/__init__.py"
+  },
+  "tensorrt": null,
+  "pycuda": null,
+  "cuda": null
+ },
+ "sensors": {
+  "v4l2": {
+   "video0": "vi-output, nrv_dvs 2-0010",
+   "video3": "HD camera : HD camera",
+   "video4": "HD camera : HD camera"
+  },
+  "usb": [
+   "1903:8328 HD camera",
+   "046d:c534 USB Receiver",
+   "13d3:3549 Bluetooth Radio"
+  ],
+  "modules": [
+   "nrv_dvs",
+   "nvgpu",
+   "uvcvideo"
+  ],
+  "processes": [
+   "/home/philip/dvs-jetson/dvsgl 4",
+   "mpv --vo=gpu --profile=low-latency --untimed --no-terminal --title=USB 카메라 av://v4l2:/dev/video3",
+   "python3 /home/philip/dvs-jetson/dvs-jetson.py --x11 --ctl 8080"
+  ],
+  "cx3_microscope": false
+ },
+ "background_busy_pct": 13.8
+}

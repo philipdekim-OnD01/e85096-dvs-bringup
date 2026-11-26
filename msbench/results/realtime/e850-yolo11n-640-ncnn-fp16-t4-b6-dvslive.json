@@ -1,0 +1,84 @@
+{
+ "device": "e850",
+ "host": "e850-96",
+ "sensor": "camera",
+ "data": "live",
+ "model": "yolo11n-640",
+ "runtime": "ncnn",
+ "precision": "fp16",
+ "threads": 4,
+ "cpus": [
+  4,
+  5,
+  6,
+  7
+ ],
+ "camera": "640x480",
+ "secs": 30.3,
+ "frames_delivered": 458,
+ "frames_detected": 33,
+ "frames_dropped": 425,
+ "camera_fps": 15.13,
+ "detect_fps": 1.09,
+ "seq_gaps": 412,
+ "mean_detections": 2.09,
+ "process_cpu_cores": 1.93,
+ "rss_peak_mb": 112.6,
+ "ms": {
+  "wait": {
+   "n": 33,
+   "median": 0.01,
+   "p95": 0.02,
+   "mean": 0.02,
+   "max": 0.08
+  },
+  "rgb": {
+   "n": 33,
+   "median": 46.14,
+   "p95": 60.81,
+   "mean": 45.69,
+   "max": 83.53
+  },
+  "prep": {
+   "n": 33,
+   "median": 16.1,
+   "p95": 31.07,
+   "mean": 17.46,
+   "max": 34.55
+  },
+  "infer": {
+   "n": 33,
+   "median": 852.06,
+   "p95": 960.66,
+   "mean": 844.33,
+   "max": 979.38
+  },
+  "nms": {
+   "n": 33,
+   "median": 9.16,
+   "p95": 13.67,
+   "mean": 9.63,
+   "max": 15.29
+  },
+  "e2e": {
+   "n": 33,
+   "median": 1016.91,
+   "p95": 1165.65,
+   "mean": 1012.29,
+   "max": 1183.4
+  },
+  "age_at_take": {
+   "n": 33,
+   "median": 94.27,
+   "p95": 126.68,
+   "mean": 95.18,
+   "max": 126.81
+  }
+ },
+ "runtime_info": {
+  "ncnn": "1.0.20261020",
+  "threads": 4,
+  "fp16_storage_arithmetic": true
+ },
+ "time": "2026-11-26T00:31:36"
+}

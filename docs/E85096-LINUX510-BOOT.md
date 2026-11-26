@@ -7369,3 +7369,238 @@ BRINGUP_STATUS의 시작점(11.99 다음 할 일 4가지)을 이어서 했다. �
   - `usbcam` 유닛은 원래 스크립트로 다시 띄웠다.
   - DVS는 건드리지 않았다.
 - Mac: 원본 출력, 바이너리, 빌드한 라이브러리는 `~/e850-logs/archbench/`에 있다.
+
+### 11.116 E850-Jetson Multi-Sensor AI 벤치마크: Phase 1(분석·환경), Phase 2(같은 데이터 CPU 런타임 비교) (2026-11-26, 사용자 외출 중)
+
+**요청(사용자):** "위 실험이 끝나면 깃에 바로 업데이트하고, 아래 실험을 우리 환경에 맞추어 진행해, 모든 권한을 너에게 줄께." 아래는 붙여 넣은 명세 "E850 vs NVIDIA Jetson 기반 Multi-Sensor AI Runtime Benchmark"(Phase 1~10, RQ1~RQ8)다.
+- 11.115는 커밋 `bcba389`로 push했다.
+- 새 디렉터리 `msbench/`에 명세의 구조(`setup/`, `benchmark/`, `dashboard/`, `models/`, `data/`, `results/`)를 만들었다. 기존 상태, 부족한 것, N/A와 원인은 `msbench/README.md`에 있다.
+
+**Phase 1(관찰):** `msbench/setup/check_environment.py`(표준 라이브러리만 씀)를 세 장비에서 돌렸다. 결과는 `msbench/results/env/`에 있다.
+- 장비별:
+  - E850 보드4·보드6: Cortex-A55 ×8(546~2002 MHz)이다. Mali-G52는 `mali_kbase`만 있고 OpenCL·Vulkan ICD가 없다. 전력 센서가 없다. AI 런타임은 onnxruntime 1.31.1뿐이었다.
+  - Orin Nano: L4T R39.2.1, Ubuntu 24.04, 25W 모드(Cortex-A78AE ×6, 1344 MHz)다.
+    - 드라이버 595.78(CUDA 드라이버 API 13.2)은 있다. CUDA 툴킷, cuDNN, TensorRT는 설치되어 있지 않다. apt 후보는 JetPack 7.2.2, TensorRT 11.4.1+cuda13.4, cuda-toolkit 13.2.2다.
+    - DLA가 없다. INA3221(VDD_IN, VDD_CPU_GPU_CV, VDD_SOC)은 사용자 권한으로 읽힌다.
+  - AGX Orin은 없다.
+- 런타임은 시스템 Python을 건드리지 않고 넣었다. Mac에서 받은 wheel을 각 장비 `~/msbench/py/<X.Y>`에 풀었다.
+  - 넣은 것: PyTorch 2.15.0+cpu, ai-edge-litert 1.4.0, ncnn 1.0.20261020, numpy.
+  - Jetson에는 11.115의 onnxruntime 1.31.1도 넣었다.
+- 명세의 "8MP CIS 기본"에 대해: 우리 8M/16M/50M CIS는 렌즈 없는 현미경 키트(CX3)다. 그래서 COCO 객체 검출에는 USB 카메라(1903:8328)를 쓰기로 했다.
+- 명세의 "Jetson DVS 포팅"은 11.108에서 이미 되어 있다.
+
+**Phase 2 방법:**
+- 모델 변환은 Mac Docker `msbench-export:1`(linux/arm64, `msbench/models/Dockerfile`)에서 `models/export.py`로 했다.
+  - 모델: YOLO11n(640, 320), ResNet18, MobileNetV2(torchvision IMAGENET1K_V1).
+  - 형식: TorchScript, ONNX FP32·INT8, TFLite FP32·INT8, NCNN FP32·INT8. NCNN FP16은 같은 FP32 파일을 ncnn의 FP16 저장·연산 옵션으로 돌린 것이다.
+  - INT8 보정에는 모든 런타임에 같은 100장을 썼다.
+- 데이터는 `data/prepare.py`로 만들었다.
+  - COCO val2017에서 정확도용 200장과 보정용 100장(seed 0).
+  - Imagenette(ImageNet 10개 클래스)에서 정확도용 200장과 보정용 100장.
+  - 모든 장비와 런타임이 레터박스·크롭한 같은 uint8 배열을 받는다.
+- 측정은 `benchmark/run_benchmark.py`로 한다. 설정 하나(모델 × 런타임 × 정밀도 × 스레드)를 자식 프로세스 하나로 돌린다.
+  - 코어를 고정한다.
+  - 워밍업은 50회(최대 10초)다. 그다음 500회 또는 25초 단위 블록을 3번 돈다.
+  - 블록마다 남기는 것: 지연 분포, NMS 시간, 프로세스 CPU, 고정 코어와 전체의 바쁨 비율(다른 프로세스 포함), 클럭, 온도, Jetson 전력.
+  - `--accuracy`면 최대 스레드에서 정확도용 200장을 한 번 더 돈다. COCO mAP는 Mac에서 `benchmark/evaluate.py`(pycocotools)로 계산한다.
+
+**변환하며 찾은 것(관찰):**
+- Ultralytics 8.4.218의 `format=tflite`는 이제 LiteRT 직접 변환이다. 이 경로는 Linux ARM64에서 막혀 있다. 그래서 예전 경로를 그대로 썼다: Ultralytics의 `onnx2saved_model`(onnx2tf 1.28.8, TF 2.19)이다.
+  - INT8 한 스케일에 좌표(0~640)와 점수(0~1)가 같이 들어가지 않도록, 예전처럼 상자 좌표를 이미지 크기로 나눈 ONNX를 따로 만들었다.
+  - Ultralytics의 `*_int8.tflite`는 onnx2tf의 동적 범위 양자화(가중치만 int8)다. 그래서 쓰지 않았다. 정적 정수 양자화 `*_integer_quant.tflite`(입출력 float)를 쓴다.
+- NCNN 첫 검사에서 FP32인데도 출력이 크게 틀렸다(상자 최대 수백 px). 원인은 내 코드였다.
+  - `ncnn.Mat(numpy 배열)`은 복사하지 않고 그 메모리를 가리킨다. 임시 배열을 넘기면 해제된 메모리를 읽는다.
+  - 8장 중 한 장만 통째로 틀린 것(단계마다 앵커의 정확히 1/8)으로 찾았다.
+  - 배열을 살려 두니 TorchScript와의 차이가 0.01 px이 됐다. 어댑터(`benchmark/runtimes.py`)와 변환 검사를 고쳤다.
+- NCNN은 ARMv8.2 CPU에서 기본으로 FP16 저장·연산을 켠다. 그래서 `fp32`는 이 옵션을 끈 진짜 FP32로 하고, ncnn 기본 동작은 `fp16`으로 따로 잰다.
+- NCNN INT8 보정 방식은 보정 이미지에서 고른 것이다(평가 이미지가 아님). YOLO11n-640의 출력 점수 차이는 kl 0.27, aciq 0.15였다. 그래서 aciq를 쓴다.
+- INT8 범위(`manifest.json`의 `int8_fp32_left`):
+  - ORT: Conv·MatMul·Gemm 90개 모두 int8. 상자 복원과 출력은 float다.
+  - NCNN: 합성곱 88층 모두 int8.
+  - TFLite: 입력 QUANTIZE 하나만 빼고 351개 연산 모두 int8. 상자 복원(DFL softmax, 앵커 계산)까지 포함된다.
+- TorchScript 대비 출력 차이(보정 이미지 4장, 검출된 앵커 기준):
+  - FP32 세 형식: 0에 가깝다.
+  - NCNN FP16: 상자 0.4 px, 점수 0.009.
+  - YOLO11n-640 INT8: 상자 평균 ORT 2.9, NCNN 9.3, TFLite 28 px.
+  - 분류 모델: 모든 형식이 4장 모두 top-1이 같다.
+
+**Phase 3 첫 실시간 시험: E850 보드6, USB 카메라 YOLO(관찰).**
+- 도구는 `msbench/camera/realtime_detection.py`다. 보드에 OpenCV가 없어 다음과 같이 했다.
+  - 캡처: V4L2 mmap을 Python ioctl로 직접 부른다.
+  - 전처리: YUYV→RGB(BT.601)와 레터박스를 numpy로 한다.
+  - 추론·NMS: Phase 2 어댑터를 그대로 쓴다.
+- 캡처 스레드는 가장 새 프레임 하나만 둔다. 그래서 모델이 느리면 쌓이지 않고 프레임을 버린다.
+- e2e는 V4L2 버퍼 시각(CLOCK_MONOTONIC, uvcvideo는 프레임의 첫 USB 패킷 시각)부터 검출 결과가 나온 때까지다.
+- 카메라(1903:8328 640×480 YUYV)를 잡고 있던 USB 카메라 뷰어(mpv)는 시험 동안 닫았다(11.115와 같은 xdotool 방법). 끝에 데스크톱 환경으로 `e850-open cam`을 다시 띄웠다.
+- 첫 판의 전처리는 느렸다: 640×480 RGB 변환 46 ms, 320 레터박스 79 ms(2×2 평균을 float64로 함).
+  - 고친 판은 YUYV에서 먼저 2×2 평균을 낸 뒤 320×240만 색변환한다. 이제 RGB 변환 10 ms, 레터박스와 텐서 3 ms다.
+  - 같은 그림인지는 자체 시험으로 확인했다(그라데이션, 최대 차 2 이하).
+- 모두 4스레드(CPU4~7), 30초, 카메라는 15.1 fps로 들어왔다. 단위는 ms, 값은 중앙값(괄호 안 p95)이다.
+
+| 조건 | 모델·런타임 | 검출 fps | 추론 | 카메라→검출(e2e) | 프로세스 코어 |
+|---|---|---:|---:|---:|---:|
+| DVS 실시간 + AI 켬(평소) | YOLO11n-320 NCNN FP16 | 2.35 | 388 (640) | 492 (752) | 2.07 |
+| | YOLO11n-640 NCNN FP16 | 0.97 | 951 | 1122 | 1.87 |
+| | YOLO11n-320 ORT INT8 | 2.30 | 402 | 523 | 2.59 |
+| | YOLO11n-320 TFLite FP32 | 3.60 | 259 | 375 | 1.67 |
+| DVS 실시간, AI 끔 | YOLO11n-320 NCNN FP16 | **6.46** | 102 (361) | **208** (485) | 2.57 |
+| | YOLO11n-640 NCNN FP16 | 2.12 | 383 | 542 | 2.40 |
+| | YOLO11n-320 ORT INT8 | 6.06 | 145 (161) | 263 (290) | 3.91 |
+| | YOLO11n-320 TFLite FP32 | 5.38 | 169 | 284 | 2.20 |
+
+- 보드6은 평소 CPU4~6을 AI 스레드(`dvs-act`, `dvs-bin`, `dvs-face`)가 쓴다. YOLO가 같은 코어를 나눠 써서 추론이 빈 코어 1스레드(보드4, 105 ms)보다 느렸다.
+- AI를 끄는 것은 11.115와 같은 sudo 명령으로 했다. 끝난 뒤 원래 명령(`dvs --auto`)으로 되돌렸다. AI 스레드 셋, dvsgl, mpv가 다시 떠 있는 것을 확인했다.
+- 프레임을 가져올 때 이미 약 95 ms가 지나 있었다(`age_at_take`). 15 fps의 프레임 간격과 USB 전송 시간이 들어 있다.
+- 검출 개수 평균이 0~2.5로 시험마다 다르다. 카메라 앞 장면이 그때그때 달랐기 때문이다. 정확도가 아니라 속도·지연만 본 것이다.
+
+**Phase 2 정확도(관찰).** 같은 200장을 최대 스레드에서 한 번 돌렸다. 두 장비의 값은 모든 설정에서 소수 셋째 자리까지 같다. 같은 모델 파일이면 A55와 A78AE의 출력이 같다는 뜻이다(INT8 포함). 그래서 표에는 한 값만 적는다. FP32 열은 PyTorch, ORT, TFLite, NCNN 네 런타임이 모두 같은 값이다.
+
+| 모델 | 지표 | FP32 | NCNN FP16 | ORT INT8 | NCNN INT8 | TFLite INT8 |
+|---|---|---:|---:|---:|---:|---:|
+| YOLO11n-640 | mAP50-95 / mAP50 | 0.440 / 0.617 | 0.438 / 0.616 | 0.418 / 0.593 | 0.378 / 0.558 | **0.123** / 0.318 |
+| YOLO11n-320 | mAP50-95 / mAP50 | 0.309 / 0.430 | 0.309 / 0.433 | 0.307 / 0.430 | 0.280 / 0.402 | **0.128** / 0.309 |
+| ResNet18 | top-1 / top-5 | 0.795 / 0.960 | 0.795 / 0.960 | 0.805 / 0.960 | 0.770 / 0.960 | 0.785 / 0.960 |
+| MobileNetV2 | top-1 / top-5 | 0.800 / 0.945 | 0.795 / 0.950 | 0.795 / 0.930 | 0.780 / 0.945 | 0.770 / 0.945 |
+
+- P, R, F1, 누락률(conf 0.25, IoU 0.5)은 `msbench/results/accuracy.json`에 있다. YOLO11n-640 FP32는 P 0.71, R 0.54, 누락률 0.46이다.
+- COCO 200장, Imagenette 200장이라 ±0.01 차이는 의미가 없다. ResNet18 ORT INT8이 FP32보다 높은 것도 이 범위다.
+- **TFLite INT8 YOLO가 망가지는 원인(가설 → 시험으로 확인).**
+  - 가설: 상자 복원(DFL softmax, 앵커 덧셈, 이미지 크기로 나누기)까지 정수화했기 때문이다.
+  - 시험(`msbench/models/tflite_rawhead.py`): DFL 앞에서 머리를 잘라 출력 둘(상자 로짓 64×A, 점수 80×A)로 내보냈다. 같은 100장으로 INT8 변환하고, 복원은 numpy float로 했다.
+  - 결과: mAP50-95가 320에서 0.308(FP32 0.309), 640에서 0.430(FP32 0.440)이다(`results/accuracy-tflite-rawhead.json`). 가설대로다.
+  - Ultralytics의 TFLite INT8 내보내기 그대로는 YOLO11n에 쓰면 안 된다.
+  - 시간 비교 표의 TFLite INT8 YOLO 행은 망가진 그 파일의 속도다. "장비별 가장 빠른 설정"에서는 뺀다.
+
+**Phase 7 준비: Jetson GPU 런타임을 sudo 없이 넣었다(보드에 바꾼 것: Jetson 홈 `~/jp`만).**
+- TensorRT 11.4.1과 cudart 13.2: L4T r39.2 apt 저장소의 deb 9개(2.4 GB)를 `apt-get download`로 받아 `dpkg -x`로 `~/jp/root`에 풀었다. `trtexec`도 함께 들어온다.
+- PyTorch 2.14.1+cu130: `pip.pyz install --target ~/jp/py`로 넣었다. cuDNN 9.24, cuBLAS 등 nvidia-* wheel도 함께 들어온다(5.2 GB).
+- onnxruntime-gpu 1.24.0: pypi.jetson-ai-lab.io sbsa/cu130에서 받아 `~/jp/py-ort`에 넣었다.
+- `msbench/benchmark/jetson-gpu-env.sh`가 경로를 잡는다. 시스템 패키지와 시스템 Python은 건드리지 않았다.
+- 관찰:
+  - TensorRT 빌더 리소스에 sm_87(Orin)이 없다. PyTorch cu130 빌드 목록에도 없다(sm_80, 90, 100, 110, 120). 그래도 둘 다 Orin에서 돈다. sm_80·sm_86 커널은 같은 8.x 세대의 sm_87에서 실행된다. PyTorch는 "이 GPU를 지원하는 빌드가 없다"고 경고하지만 결과는 맞다(정확도가 CPU와 같음, 아래).
+  - GPU 클럭은 306~1020 MHz에서 DVFS로 움직인다. `jetson_clocks`는 sudo가 필요해 고정하지 않았다. 블록 끝 클럭을 결과에 남긴다.
+- TensorRT 11은 strongly typed만 지원한다. `--fp16`·`--int8` 플래그가 없어졌고 정밀도는 ONNX 파일이 정한다. 그래서 GPU용 ONNX를 따로 만들었다.
+  - FP16: `models/fp16_onnx.py`(onnxconverter-common, 입출력 float32).
+    - YOLO는 처음에 ORT가 "Resize 출력 형식이 맞지 않는다"며 열지 못했다. 원인은 onnxslim이 남긴 float32 `value_info`였다. 지우고 변환하니 열린다.
+  - INT8: TensorRT는 대칭 INT8(영점 0)만, bias는 float만 받는다. 기존 ORT INT8(QUInt8 활성값, int32 bias)은 파싱에서 거부됐다(`DequantizeLinear: input has type Int32`).
+    - `models/trt_int8.py`가 같은 100장, 같은 범위(Conv·MatMul·Gemm)로 대칭 QDQ를 만든다(`QuantizeBias` 끔).
+  - INT8만 QDQ로 감싸면 나머지 층은 FP32로 돈다(strongly typed).
+    - 그래서 YOLO11n-640 TensorRT INT8(14.2 ms)이 FP16(6.5 ms)보다 느렸다.
+    - QDQ 모델을 opset 21로 올려 스케일까지 FP16으로 바꾼 INT8+FP16 판(`model.int8s16.onnx`)을 만들었다. CPU ORT(최적화 끔)에서 FP32와의 차이는 INT8 판과 비슷했다(보정 이미지 4장, 상자 1.6~6.6 px, 점수 0.003).
+- GPU 어댑터(`benchmark/runtimes.py`)의 측정 기준:
+  - 지연은 호스트 numpy 입력부터 호스트 numpy 출력까지다(H2D + 모델 + D2H, 동기).
+  - H2D, 계산, D2H는 따로 100번 잰 중앙값이다(사이마다 synchronize).
+  - FP32는 모든 경로에서 TF32를 껐다.
+  - 첫 스모크에서 PyTorch FP16과 TensorRT의 top-1이 0.1(우연 수준)로 나왔다. 원인은 내 어댑터였다: 다시 쓰는 pinned 출력 버퍼의 view를 돌려줬고, 정확도 경로가 출력을 모은 뒤 쌓아서 모든 행이 마지막 출력이 됐다. 복사해서 돌려주게 고쳤다. 그 뒤 모두 0.79~0.80이다.
+
+**E850 4스레드가 덜 빨라지는 원인: 스케줄러가 스레드를 몰아 놓는다(관찰, 보드4).**
+- 전체 측정에서 E850 PyTorch는 4스레드(CPU4~7)가 1스레드보다 느리거나 비슷했다. YOLO11n-320이 430 → 724 ms, YOLO11n-640이 1712 → 1639 ms였다. 같은 코어의 ORT는 2.4배 빨라졌다.
+- 고정 코어 바쁨 비율:
+  - 잠들어 기다리는 런타임(PyTorch·NCNN, OpenMP)과 TFLite: 4스레드에서 55~65%.
+  - 바쁘게 기다리는 ORT: 100%.
+- 클럭 가설은 틀렸다. PyTorch 4스레드는 최고 클럭 2002 MHz에서 느렸다. ORT는 1586 MHz로 내려간 채 빨랐다. (4코어가 100%로 돌면 클럭이 1586 MHz로 내려가는 것도 이때 보았다.)
+- `msbench/benchmark/threadprobe.sh`로 코어 집합과 환경 변수만 바꿔 같은 설정을 다시 돌렸다. 값은 4스레드 중앙값이다.
+
+| 경우 | PyTorch YOLO11n-320 | NCNN FP32 YOLO11n-320 | 고정 코어 바쁨 |
+|---|---:|---:|---:|
+| CPU4~7, 기본 | 703 ms | 179 ms (p95 601) | 61~66% |
+| CPU0~3, 기본 | 279 ms | 114 ms | 95% |
+| CPU4~7, `OMP_WAIT_POLICY=ACTIVE`(바쁘게 기다림) | 254 ms | 94.8 ms | 100% |
+| CPU4~7, `OMP_WAIT_POLICY=PASSIVE` | 764 ms | | 48% |
+| CPU4~7, `OMP_PROC_BIND=close OMP_PLACES=cores`(스레드마다 코어 하나) | 252 ms | 93.6 ms | 94% |
+| 참고: CPU5 1스레드 | 430 ms | 213 ms | 100% |
+
+- `msbench/benchmark/placement.py`로 스레드 위치를 20 ms마다 5초 동안 표본으로 떴다(PyTorch YOLO11n-320, 4스레드):
+
+| 경우 | 실행 대기(R) 스레드 평균 | 그 스레드들이 있는 코어 수 평균 | 둘 이상이 한 코어에 몰린 표본 |
+|---|---:|---:|---:|
+| CPU4~7, 기본 | 3.45 | 2.31 | 70% |
+| CPU0~3, 기본 | 3.84 | 3.81 | 3% |
+| CPU4~7, ACTIVE | 4.00 | 4.00 | 0% |
+| CPU4~7, 스레드마다 코어 고정 | 3.75 | 3.75 | 0% |
+
+- 해석:
+  - CPU4~7에서는 OpenMP 작업 스레드가 깨어날 때 주 스레드가 있는 코어(주로 CPU4) 쪽에 놓인다. 한 코어에 둘이 몰리면 barrier에서 모두가 그 코어를 기다린다.
+  - 바쁘게 기다리거나(ACTIVE) 스레드마다 코어를 고정하면 몰림이 0%가 되고 2.8배 빨라진다.
+  - CPU0~3에서는 거의 몰리지 않는다.
+  - 왜 클러스터마다 다른지는 확인하지 않았다(가설: vendor EMS의 깨우기 배치가 클러스터별 에너지 표를 따른다). `/sys/kernel/ems/ecs/cpus`는 0xff로, 코어를 쉬게 하는 ECS는 이때 꺼져 있었다.
+- 실제로 쓸 결론: E850에서 OpenMP 런타임(PyTorch, NCNN)을 CPU4~7에 4스레드로 쓰면 `OMP_PROC_BIND=close OMP_PLACES=cores`를 준다. 바쁘게 기다리는 방법도 같은 효과지만 기다리는 동안에도 코어를 100% 쓴다.
+  - 보드6의 DVS AI 스레드(`dvsai.c`)는 onnxruntime이라 이 문제와 관계없다.
+  - TFLite(XNNPACK의 pthreadpool)도 같은 표본으로 보았다. YOLO11n-320 FP32 4스레드는 다음과 같았다.
+    - CPU4~7: 실행 대기 3.32개가 코어 2.05개에 있었고, 몰린 표본이 80%였다. 지연은 173 ms, 바쁨 55%다.
+    - CPU0~3: 3.40개가 코어 2.85개에 있었고, 몰린 표본이 46%였다. 지연은 122 ms, 바쁨 85%다.
+    - TFLite에는 스레드를 코어에 묶는 설정이 없어 OpenMP처럼 환경 변수로 피할 수 없다.
+- 보드4에서 PyTorch와 NCNN 전부를 `OMP_PROC_BIND=close OMP_PLACES=cores`로 4·8스레드 다시 쟀다(`--env`, 원자료 `…-031223-ompbind.jsonl`). 기본 판 대비 빨라진 배수(중앙값 비)다.
+
+| 모델 | PyTorch 4 / 8 | NCNN FP32 4 / 8 | NCNN FP16 4 / 8 | NCNN INT8 4 / 8 |
+|---|---:|---:|---:|---:|
+| YOLO11n-640 | 1.85× / 0.95× | 1.95× / 0.92× | 2.41× / 0.99× | 2.18× / 0.84× |
+| YOLO11n-320 | 2.65× / 0.88× | 1.61× / 0.93× | 1.41× / 0.99× | 2.06× / 0.94× |
+| ResNet18 | 1.67× / 0.86× | 0.99× / 1.01× | 0.98× / 0.99× | 0.99× / 0.97× |
+| MobileNetV2 | 1.40× / 0.88× | 1.09× / 0.91× | 0.99× / 0.85× | 0.99× / 0.91× |
+
+  - 4스레드에서 몰리던 경우(YOLO, PyTorch)는 1.4~2.65배 빨라졌다. 원래 바쁨이 90% 넘던 경우(ResNet18·MobileNetV2 NCNN)는 그대로다.
+  - 8스레드에서는 묶으면 오히려 0.84~0.99배로 느려진다. 가설: 장치 인터럽트와 현미경 뷰어가 도는 CPU0에 묶인 스레드 하나를 모두가 기다린다.
+  - 그 결과 E850에서 YOLO11n-640의 가장 빠른 설정은 NCNN FP16 4스레드 + 묶음(186 ms)이 됐다. 기본 8스레드는 238 ms다.
+
+**Jetson 첫 전체 측정의 혼선: DVS 디코더와 같은 코어(관찰).**
+- 첫 판의 Jetson 코어 배치(1 → CPU1, 4 → CPU0~3)는 "실시간 DVS는 CPU4~5"라는 내 잘못된 전제로 정한 것이었다.
+- 실제 고정을 보니 DVS 디코더 `dvs-jetson.py` 주 스레드는 CPU1(약 22%), `dvs-render`는 CPU2, `dvs-filter`는 CPU3, `dvs-web`·`dvs-hist`는 CPU5다.
+- 첫 판의 1스레드는 32개 설정 모두에서 프로세스가 CPU1의 0.83~0.85만 받았다(E850 CPU5는 0.98). 그래서 그 판의 Jetson 1스레드 지연은 최대 약 1.19배 부풀어 있다.
+- 15초 동안 잰 코어별 부하(측정 없음)는 다음과 같았다. 그래서 Jetson 배치를 1 → CPU5, 4 → CPU2~5로 바꾸고 1·4스레드를 다시 쟀다(아래).
+
+| 코어 | CPU0 | CPU1 | CPU2 | CPU3 | CPU4 | CPU5 |
+|---|---:|---:|---:|---:|---:|---:|
+| 부하 | 20.4% | 21.5% | 13.0% | 16.0% | 3.6% | 2.6% |
+
+- 첫 판은 "DVS와 코어를 같이 쓴 판"으로 남긴다(`results/raw/orin-nano-…-091541-full.jsonl`).
+- Jetson 6스레드는 모든 코어를 쓰므로 DVS와 겹칠 수밖에 없다.
+  - 그 결과 NCNN 6스레드는 4스레드보다 느렸다(YOLO11n-320 FP32 45 → 108 ms, p95 246 ms).
+  - ORT 6스레드는 조금 빨라졌다(52 → 48.5 ms).
+  - 가설: NCNN은 일을 스레드에 고정으로 나누고 barrier에서 가장 느린 스레드를 기다린다. ORT는 바쁘게 기다리며 일을 나눈다.
+
+**Phase 7 결과: Jetson GPU(관찰).**
+- 조건: 호스트 1스레드(CPU5), 워밍업 50회, 블록 3개(500회씩), 정확도 200장. 평소처럼 DVS 실시간과 데스크톱이 돌고 있었다.
+- 원자료: `results/raw/orin-nano-…-120224-gpu.jsonl`(FP16 YOLO와 INT8+FP16은 `-gpu2`, `-gpu3`).
+- GPU 클럭은 모든 블록 끝에서 918 MHz였다. 25W 모드의 상한으로 보인다(가능 목록 최고는 1020 MHz).
+- VDD_IN은 모듈 입력 전체다. 괄호 안은 각 측정 직전 3초의 유휴 값(DVS 실시간 + 데스크톱)이다. "추론당 증분"은 (측정 중 − 유휴) × 지연이다.
+
+| 모델 | 런타임 정밀도 | 전체 ms (p95) | H2D / 계산 / D2H ms | VDD_IN W (유휴) | 추론당 증분 mJ | 정확도 |
+|---|---|---:|---:|---:|---:|---|
+| YOLO11n-640 | PyTorch CUDA FP32 | 20.5 (23.5) | 0.32 / 19.61 / 0.26 | 12.6 (6.4) | 127 | mAP50-95 0.440 |
+| | PyTorch CUDA FP16 | 20.6 (22.7) | 0.46 / 18.61 / 0.26 | 10.2 (6.5) | 77 | 0.440 |
+| | ORT CUDA FP32 | 25.1 (28.8) | 1.02 / 23.31 / 0.69 | 12.7 (6.6) | 154 | 0.440 |
+| | ORT CUDA FP16 | 19.9 (22.7) | 0.85 / 18.43 / 0.57 | 11.7 (6.6) | 102 | 0.440 |
+| | TensorRT FP32 | 15.1 (17.9) | 0.41 / 15.19 / 0.35 | 12.3 (6.6) | 87 | 0.440 |
+| | **TensorRT FP16** | **6.41** (9.9) | 0.40 / 5.44 / 0.34 | 11.4 (6.5) | **31** | 0.439 |
+| | TensorRT INT8 | 14.2 (16.7) | 0.36 / 12.60 / 0.31 | 11.9 (6.5) | 76 | 0.399 |
+| | TensorRT INT8+FP16 | 11.2 (13.9) | 0.33 / 9.78 / 0.29 | 11.0 (6.4) | 51 | 0.403 |
+| YOLO11n-320 | PyTorch CUDA FP32 | 17.8 (19.8) | 0.14 / 16.82 / 0.18 | 9.2 (6.5) | 48 | 0.309 |
+| | PyTorch CUDA FP16 | 19.4 (21.4) | 0.21 / 18.36 / 0.18 | 8.5 (6.5) | 38 | 0.309 |
+| | ORT CUDA FP32 | 12.6 (15.5) | 0.31 / 11.35 / 0.22 | 10.2 (6.5) | 47 | 0.309 |
+| | ORT CUDA FP16 | 14.0 (16.9) | 0.31 / 12.70 / 0.22 | 9.1 (6.5) | 37 | 0.308 |
+| | TensorRT FP32 | 5.67 (8.8) | 0.20 / 5.33 / 0.19 | 10.8 (6.5) | 25 | 0.309 |
+| | **TensorRT FP16** | **3.39** (5.4) | 0.18 / 3.31 / 0.16 | 9.4 (6.5) | **10** | 0.309 |
+| | TensorRT INT8 | 7.62 (9.8) | 0.18 / 6.96 / 0.17 | 9.6 (6.5) | 24 | 0.285 |
+| | TensorRT INT8+FP16 | 7.78 (9.8) | 0.18 / 6.96 / 0.18 | 9.2 (6.5) | 21 | 0.286 |
+| ResNet18 | PyTorch CUDA FP32 / FP16 | 7.46 / 7.03 | | 13.2 / 11.4 | 51 / 34 | top-1 0.795 |
+| | ORT CUDA FP32 / FP16 | 7.40 / 5.63 | | 14.7 / 12.2 | 61 / 32 | 0.795 |
+| | TensorRT FP32 / **FP16** | 3.97 / **1.32** | 0.19 / 1.08 / 0.22 (FP16) | 14.3 / 12.4 | 31 / **8** | 0.795 |
+| | TensorRT INT8, INT8+FP16 | 엔진 빌드 실패 | | | | |
+| MobileNetV2 | PyTorch CUDA FP32 / FP16 | 10.5 / 12.7 | | 10.3 / 8.9 | 40 / 31 | top-1 0.800 |
+| | ORT CUDA FP32 / FP16 | 5.73 / 5.30 | | 12.1 / 11.1 | 32 / 24 | 0.800 |
+| | TensorRT FP32 / **FP16** | 2.46 / **1.32** | 0.17 / 1.26 / 0.19 (FP16) | 12.7 / 11.1 | 15 / **6** | 0.800 |
+| | TensorRT INT8 / INT8+FP16 | 1.47 / 1.58 | | 9.7 / 9.5 | 5 / 5 | 0.790 / 0.810 |
+
+- 정확도:
+  - FP32는 세 GPU 경로 모두 CPU와 같다(소수 넷째 자리).
+  - FP16은 차이가 0.001 이하다. PyTorch가 sm_87 빌드가 아니라고 경고했지만 결과는 맞다.
+- H2D와 D2H는 모두 1 ms 아래다. Orin은 CPU와 GPU가 같은 DRAM을 쓴다. YOLO640 입력 4.9 MB, 출력 2.8 MB에서 ORT만 1.0과 0.7 ms로 크다. ORT는 pageable 메모리로 복사하고, 나머지는 pinned 메모리를 쓴다.
+- PyTorch CUDA는 모델 크기와 거의 상관없이 17~21 ms다. YOLO320과 640이 비슷하고 FP16도 빨라지지 않는다.
+  - 가설: TorchScript가 연산마다 커널을 하나씩 내는데, 1.34 GHz CPU 한 코어에서 그 요청 비용이 GPU 계산보다 길다. "계산" 구간도 GPU가 다음 커널을 기다린 시간을 포함한다. 재지 않았다(nsys 없음).
+- TensorRT FP16이 모든 모델에서 가장 빠르고, 추론당 증분 에너지도 가장 작다.
+- TensorRT INT8이 FP16보다 느렸다. INT8+FP16도 YOLO에서 FP16의 1.7~2.3배 시간이 걸렸고, mAP는 0.04 떨어졌다. MobileNetV2만 FP16과 비슷하다.
+  - 가설 1: ORT 양자화기의 Q/DQ 배치(합성곱 입력만)에서는 잔차 덧셈·Concat·Split마다 INT8↔FP16 형식 변환이 생긴다.
+  - 가설 2: 빌더 리소스에 sm_87 전용이 없어 INT8 커널 선택이 좁다.
+  - 둘 다 시험하지 않았다. TensorRT 권장 배치(ModelOpt 등)로 다시 양자화해 볼 일이다.
+- ResNet18 INT8은 두 판 모두 빌드에서 실패했다: "Could not find any implementation for node Conv_197_quantized + conv1 + Relu + MaxPool". 첫 7×7 합성곱(입력 3채널)을 INT8로 하고 MaxPool까지 붙인 조합에 Orin용 구현이 없다는 뜻이다. 첫 합성곱을 양자화에서 빼는 시험은 아직 안 했다.

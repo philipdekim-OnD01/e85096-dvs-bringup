@@ -1,0 +1,44 @@
+== Thu Nov 26 00:30:23 UTC 2026 mpv: 
+== yolo11n-320 ncnn fp16
+{"camera_fps": 15.12, "detect_fps": 2.1, "frames_dropped": 391, "mean_detections": 1.27, "process_cpu_cores": 1.76}
+  wait         {'n': 63, 'median': 0.01, 'p95': 0.02, 'mean': 0.02, 'max': 0.07}
+  rgb          {'n': 63, 'median': 46.49, 'p95': 58.22, 'mean': 48.4, 'max': 86.94}
+  prep         {'n': 63, 'median': 78.78, 'p95': 128.31, 'mean': 86.16, 'max': 147.04}
+  infer        {'n': 63, 'median': 310.22, 'p95': 523.98, 'mean': 337.98, 'max': 602.33}
+  nms          {'n': 63, 'median': 3.7, 'p95': 5.16, 'mean': 3.89, 'max': 5.69}
+  e2e          {'n': 63, 'median': 546.01, 'p95': 784.1, 'mean': 571.14, 'max': 822.32}
+  age_at_take  {'n': 63, 'median': 94.98, 'p95': 127.0, 'mean': 94.71, 'max': 130.18}
+wrote /home/philip/msbench/results/realtime/e850-yolo11n-320-ncnn-fp16-t4-b6-dvslive.json
+== yolo11n-640 ncnn fp16
+{"camera_fps": 15.13, "detect_fps": 1.09, "frames_dropped": 425, "mean_detections": 2.09, "process_cpu_cores": 1.93}
+  wait         {'n': 33, 'median': 0.01, 'p95': 0.02, 'mean': 0.02, 'max': 0.08}
+  rgb          {'n': 33, 'median': 46.14, 'p95': 60.81, 'mean': 45.69, 'max': 83.53}
+  prep         {'n': 33, 'median': 16.1, 'p95': 31.07, 'mean': 17.46, 'max': 34.55}
+  infer        {'n': 33, 'median': 852.06, 'p95': 960.66, 'mean': 844.33, 'max': 979.38}
+  nms          {'n': 33, 'median': 9.16, 'p95': 13.67, 'mean': 9.63, 'max': 15.29}
+  e2e          {'n': 33, 'median': 1016.91, 'p95': 1165.65, 'mean': 1012.29, 'max': 1183.4}
+  age_at_take  {'n': 33, 'median': 94.27, 'p95': 126.68, 'mean': 95.18, 'max': 126.81}
+wrote /home/philip/msbench/results/realtime/e850-yolo11n-640-ncnn-fp16-t4-b6-dvslive.json
+== yolo11n-320 onnxruntime int8
+{"camera_fps": 15.14, "detect_fps": 1.82, "frames_dropped": 403, "mean_detections": 1.22, "process_cpu_cores": 2.66}
+  wait         {'n': 55, 'median': 0.01, 'p95': 0.02, 'mean': 0.01, 'max': 0.03}
+  rgb          {'n': 55, 'median': 63.16, 'p95': 107.1, 'mean': 70.6, 'max': 116.85}
+  prep         {'n': 55, 'median': 102.55, 'p95': 145.15, 'mean': 106.25, 'max': 165.34}
+  infer        {'n': 55, 'median': 369.68, 'p95': 473.19, 'mean': 366.61, 'max': 544.13}
+  nms          {'n': 55, 'median': 4.4, 'p95': 19.74, 'mean': 6.37, 'max': 20.56}
+  e2e          {'n': 55, 'median': 647.78, 'p95': 781.13, 'mean': 649.07, 'max': 802.16}
+  age_at_take  {'n': 55, 'median': 98.11, 'p95': 126.77, 'mean': 99.24, 'max': 130.03}
+wrote /home/philip/msbench/results/realtime/e850-yolo11n-320-onnxruntime-int8-t4-b6-dvslive.json
+== yolo11n-320 tflite fp32
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+{"camera_fps": 15.15, "detect_fps": 2.59, "frames_dropped": 378, "mean_detections": 0.77, "process_cpu_cores": 1.44}
+  wait         {'n': 78, 'median': 0.01, 'p95': 0.02, 'mean': 0.01, 'max': 0.04}
+  rgb          {'n': 78, 'median': 50.52, 'p95': 66.15, 'mean': 51.94, 'max': 93.16}
+  prep         {'n': 78, 'median': 80.39, 'p95': 114.14, 'mean': 83.16, 'max': 130.92}
+  infer        {'n': 78, 'median': 247.22, 'p95': 277.16, 'mean': 246.84, 'max': 284.49}
+  nms          {'n': 78, 'median': 3.64, 'p95': 5.57, 'mean': 3.89, 'max': 5.97}
+  e2e          {'n': 78, 'median': 482.86, 'p95': 522.26, 'mean': 484.06, 'max': 554.25}
+  age_at_take  {'n': 78, 'median': 100.9, 'p95': 126.55, 'mean': 98.23, 'max': 128.27}
+wrote /home/philip/msbench/results/realtime/e850-yolo11n-320-tflite-fp32-t4-b6-dvslive.json
+== Thu Nov 26 00:33:01 UTC 2026 restored mpv: 210882
+done

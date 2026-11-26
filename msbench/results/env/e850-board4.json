@@ -1,0 +1,199 @@
+{
+ "time": "2026-11-25T23:08:34+0000",
+ "host": "e850-96",
+ "machine_id": "606a4996",
+ "model": "Samsung ERD3830 board based on EXYNOS3830",
+ "device": "e850",
+ "cpu": {
+  "count": 8,
+  "parts": [
+   "Cortex-A55"
+  ],
+  "features": [
+   "fp",
+   "asimd",
+   "evtstrm",
+   "aes",
+   "pmull",
+   "sha1",
+   "sha2",
+   "crc32",
+   "atomics",
+   "fphp",
+   "asimdhp",
+   "cpuid",
+   "asimdrdm",
+   "lrcpc",
+   "dcpop"
+  ],
+  "policies": [
+   {
+    "cpus": "0 1 2 3",
+    "governor": "schedutil",
+    "min_mhz": 546,
+    "max_mhz": 2002,
+    "cur_mhz": 2002,
+    "hw_max_mhz": 2002
+   },
+   {
+    "cpus": "4 5 6 7",
+    "governor": "schedutil",
+    "min_mhz": 546,
+    "max_mhz": 2002,
+    "cur_mhz": 546,
+    "hw_max_mhz": 2002
+   }
+  ]
+ },
+ "memory": {
+  "MemTotal_mb": 3565,
+  "MemAvailable_mb": 1531,
+  "SwapTotal_mb": 1782,
+  "zram": [
+   "zram0"
+  ]
+ },
+ "os": "Debian GNU/Linux 12 (bookworm)",
+ "kernel": "5.10.157-00010-g3b6b9ca51034-dirty",
+ "python": "3.11.2",
+ "machine": "aarch64",
+ "gpu": {
+  "devfreq": [
+   {
+    "name": "17000010.devfreq_mif",
+    "governor": "interactive",
+    "cur_mhz": 1,
+    "max_mhz": 1
+   },
+   {
+    "name": "17000020.devfreq_int",
+    "governor": "interactive",
+    "cur_mhz": 667,
+    "max_mhz": 667
+   },
+   {
+    "name": "17000030.devfreq_disp",
+    "governor": "interactive",
+    "cur_mhz": 200,
+    "max_mhz": 400
+   },
+   {
+    "name": "17000040.devfreq_cam",
+    "governor": "interactive",
+    "cur_mhz": 690,
+    "max_mhz": 690
+   },
+   {
+    "name": "17000050.devfreq_aud",
+    "governor": "interactive",
+    "cur_mhz": 259,
+    "max_mhz": 1
+   }
+  ],
+  "nodes": [
+   "/dev/dri/by-path",
+   "/dev/dri/card0",
+   "/dev/mali0"
+  ],
+  "vulkan_icd": [],
+  "opencl_icd": [],
+  "mali_kbase": true,
+  "panfrost_shim": [
+   "/home/philip/gpu/mesa-kbase.1182/lib/libGLESv2.so",
+   "/home/philip/gpu/mesa-kbase.1182/lib/libGLESv2.so.2",
+   "/home/philip/gpu/mesa-kbase.1182/lib/libGLESv2.so.2.0.0"
+  ],
+  "nvidia_smi": null,
+  "dla_cores": 0
+ },
+ "jetson": null,
+ "thermal_c": {
+  "LITTLE0": 58.0,
+  "LITTLE1": 55.0,
+  "G3D": 52.0
+ },
+ "power_monitors": [],
+ "python_modules": {
+  "numpy": {
+   "version": "1.24.2",
+   "path": "/usr/lib/python3/dist-packages/numpy/__init__.py"
+  },
+  "onnxruntime": {
+   "version": "1.31.1",
+   "path": "/usr/local/lib/python3.11/dist-packages/onnxruntime/__init__.py",
+   "providers": [
+    "AzureExecutionProvider",
+    "CPUExecutionProvider"
+   ]
+  },
+  "torch": null,
+  "torchvision": null,
+  "ai_edge_litert": null,
+  "tflite_runtime": null,
+  "tensorflow": null,
+  "ncnn": null,
+  "ultralytics": null,
+  "onnx": null,
+  "cv2": null,
+  "PIL": null,
+  "tensorrt": null,
+  "pycuda": null,
+  "cuda": null
+ },
+ "sensors": {
+  "v4l2": {
+   "video0": "SOL Microscope: SOL Microscope",
+   "video1": "SOL Microscope: SOL Microscope",
+   "video10": "s5p-mfc-enc-otf",
+   "video102": "exynos-is-ss1",
+   "video11": "s5p-mfc-enc-otf-secure",
+   "video110": "exynos-is-30s",
+   "video111": "exynos-is-30c",
+   "video112": "exynos-is-30p",
+   "video120": "exynos-is-31s",
+   "video121": "exynos-is-31c",
+   "video122": "exynos-is-31p",
+   "video130": "exynos-is-i0s",
+   "video131": "exynos-is-i0c",
+   "video132": "exynos-is-i0p",
+   "video133": "exynos-is-i0v",
+   "video134": "exynos-is-i0w",
+   "video136": "exynos-is-i0g",
+   "video155": "camerapp-gdc:m2m",
+   "video160": "exynos-is-m0s",
+   "video161": "exynos-is-m1s",
+   "video170": "exynos-is-m0p",
+   "video171": "exynos-is-m1p",
+   "video172": "exynos-is-m2p",
+   "video173": "exynos-is-m3p",
+   "video174": "exynos-is-m4p",
+   "video175": "exynos-is-m5p",
+   "video180": "exynos-is-vra",
+   "video196": "exynos-is-orb0c",
+   "video197": "exynos-is-orb1c",
+   "video214": "exynos-is-ssdevice_idvc0",
+   "video215": "exynos-is-ssdevice_idvc1",
+   "video216": "exynos-is-ssdevice_idvc2",
+   "video217": "exynos-is-ssdevice_idvc3",
+   "video6": "s5p-mfc-dec",
+   "video7": "s5p-mfc-enc",
+   "video8": "s5p-mfc-dec-secure",
+   "video9": "s5p-mfc-enc-secure"
+  },
+  "usb": [
+   "0424:ec00 ",
+   "04b4:00c3 SOL Microscope"
+  ],
+  "modules": [
+   "exynos_mfc",
+   "fimc_is",
+   "is_cis_s5krc1s",
+   "mali_kbase"
+  ],
+  "processes": [
+   "python3 /opt/e850-scope/scope.py --ctl /var/lib/e850-scope"
+  ],
+  "cx3_microscope": true
+ },
+ "background_busy_pct": 12.0
+}

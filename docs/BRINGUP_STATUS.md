@@ -2,6 +2,17 @@
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다.
 
+**2026-11-26(11.116):** 명세 "E850 vs Jetson Multi-Sensor AI Runtime Benchmark"를 `msbench/`로 진행 중이다. 측정한 것만 적는다.
+- Phase 2: 같은 COCO·Imagenette 입력으로 4모델 × 8 CPU 설정 × 스레드 1/4/최대를 두 장비에서 쟀다. HTML 보고서는 `msbench/results/report.html`이다.
+- 정확도는 두 장비에서 소수 셋째 자리까지 같다. TFLite INT8 YOLO는 mAP 0.12로 망가진다. 원인은 상자 복원까지 정수화한 것이고, 시험으로 확인했다.
+- E850 4스레드(CPU4~7)는 스케줄러가 OpenMP 스레드를 적은 코어에 몰아 놓아(표본 70%) 덜 빨라진다. `OMP_PROC_BIND=close OMP_PLACES=cores`로 1.4~2.65배 빨라진다. 8스레드에서는 묶지 않는다.
+- Jetson 첫 판의 1·4스레드는 DVS 디코더(CPU1)와 코어를 같이 써서 0.84코어만 받았다. 그래서 1 → CPU5, 4 → CPU2~5로 바꿔 다시 재는 중이다.
+- Phase 7: Jetson에 sudo 없이 TensorRT 11.4.1, PyTorch 2.14.1+cu130, onnxruntime-gpu 1.24.0을 `~/jp`에 넣었다.
+  - TensorRT FP16이 가장 빠르다: YOLO11n-640 6.4 ms, 320 3.4 ms, 분류 1.3 ms.
+  - TensorRT INT8은 FP16보다 느리고(strongly typed, Q/DQ 배치), ResNet18 INT8은 빌드에 실패한다.
+- Phase 3: 보드6 USB 카메라 YOLO11n-320 NCNN FP16은 AI를 켠 평소 상태에서 2.35 fps, AI를 끄면 6.46 fps다(e2e 208 ms). Jetson 실시간은 측정 대기 중이다.
+- Phase 4·5(DVS 검출, 융합)는 라벨 데이터가 없어 N/A다. E850 전력은 센서가 없어 N/A다.
+
 **2026-11-26(11.115):** Jetson과 보드6을 같은 방법으로 비교했다. 같은 바이너리로 아키텍처 차이도 쟀다.
 - 실시간(30초, `tools/board/cmpload.sh`):
   - 두 보드 모두 DVS 창 30 fps, 카메라 창 15 fps, 손실 0이다.

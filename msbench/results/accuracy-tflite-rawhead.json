@@ -1,0 +1,62 @@
+{
+ "tflraw-320-float32.json": {
+  "images": 200,
+  "detections": 20175,
+  "map50_95": 0.3088,
+  "map50": 0.43,
+  "precision": 0.7357,
+  "recall": 0.3737,
+  "f1": 0.4956,
+  "miss_rate": 0.6263,
+  "tp": 590,
+  "fp": 212,
+  "gt": 1579,
+  "conf": 0.25,
+  "iou": 0.5
+ },
+ "tflraw-320-integer_quant.json": {
+  "images": 200,
+  "detections": 17425,
+  "map50_95": 0.3079,
+  "map50": 0.4261,
+  "precision": 0.7328,
+  "recall": 0.3768,
+  "f1": 0.4977,
+  "miss_rate": 0.6232,
+  "tp": 595,
+  "fp": 217,
+  "gt": 1579,
+  "conf": 0.25,
+  "iou": 0.5
+ },
+ "tflraw-640-float32.json": {
+  "images": 200,
+  "detections": 26652,
+  "map50_95": 0.4403,
+  "map50": 0.6165,
+  "precision": 0.7126,
+  "recall": 0.537,
+  "f1": 0.6125,
+  "miss_rate": 0.463,
+  "tp": 848,
+  "fp": 342,
+  "gt": 1579,
+  "conf": 0.25,
+  "iou": 0.5
+ },
+ "tflraw-640-integer_quant.json": {
+  "images": 200,
+  "detections": 21606,
+  "map50_95": 0.4302,
+  "map50": 0.6051,
+  "precision": 0.6978,
+  "recall": 0.544,
+  "f1": 0.6114,
+  "miss_rate": 0.456,
+  "tp": 859,
+  "fp": 372,
+  "gt": 1579,
+  "conf": 0.25,
+  "iou": 0.5
+ }
+}
