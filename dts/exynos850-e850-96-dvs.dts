@@ -2,6 +2,7 @@
 /* Upstream E850-96 board plus the DVS I2C/reset integration. */
 #include "exynos850-e850-96.dts"
 #include "exynos850-e850-96-dvs.dtsi"
+#include "exynos850-e850-96-dvs-csis.dtsi"
 
 /* Preserve the previous WLBT carveout even while WLAN is disabled.
  * Allocate 12 MiB below the secure-memory boundary, aligned to 1 MiB.

@@ -64,3 +64,26 @@ Standalone module build, DTS compilation, and shell syntax checks passed.
 The shared module was loaded on the board and reported the ready message
 shown above. CSI/PHY/DMA and the SDK sensor initialization recipe are not
 included in this module. No kernel-source patch is required.
+
+## Sensor control (sysfs, 2026-10-27)
+
+Attributes under `/sys/bus/i2c/drivers/dvs/<bus>-0010/`:
+
+- `ready`: 1 after the RESET + 0x303B write/readback check succeeded.
+- `load_settings`: write a file name relative to `/lib/firmware`, e.g.
+  `nrv/Delta_01_1000FPS.txt` from NRV's public
+  [DELTA_SDK](https://github.com/nrvcorp/DELTA_SDK). Lines are
+  `AA:RRRR=VV` (8-bit I2C address); `//` starts a comment. Lines for
+  another I2C address are rejected.
+- `stream`: read/write MODE_SELECT (0x0100).
+- `reg`: `echo 0x3901 > reg; cat reg` reads, `echo "0x3901 0x2a" > reg`
+  writes one register.
+
+`nrv,data-lanes` (DT, default 4) sets the wired lane count. NRV recipes
+write 0x3915 for the 4-lane carrier; the driver rewrites its lane bits
+([1] use_2_lane, [0] use_1_lane) to match, e.g. 0x24 -> 0x26 for the
+2-lane 22-to-15-pin FPC on CN4, and logs the change.
+
+The NRV recipes end with `0x0100=01`; start the CSIS capture
+([modules/csis](../csis/README.md)) before applying one.
+Build-tested on Linux 7.2.8; not yet tested on hardware.

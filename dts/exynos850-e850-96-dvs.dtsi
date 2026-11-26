@@ -40,6 +40,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&dvs_reset_pin>;
 		reset-gpios = <&gpc0 2 GPIO_ACTIVE_LOW>;
+		/* CN4 is 15-pin: the 22-to-15-pin FPC carries lanes 0/1 only. */
+		nrv,data-lanes = <2>;
 		status = "okay";
 	};
 };
