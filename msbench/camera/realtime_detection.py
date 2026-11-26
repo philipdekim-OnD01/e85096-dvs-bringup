@@ -234,7 +234,8 @@ def main():
          'mean_detections': round(sum(dets) / max(1, len(dets)), 2), 'process_cpu_cores':
          round((c1.user + c1.system - c0.user - c0.system) / wall, 2), 'rss_peak_mb':
          round(int(st.get('VmHWM', '0 kB').split()[0]) / 1024, 1), 'ms': {k: summary(v) for k, v in T.items()},
-         'runtime_info': rt.info, 'time': time.strftime('%Y-%m-%dT%H:%M:%S')}
+         'runtime_info': rt.info, 'env': {k: v for k, v in os.environ.items() if k.startswith('OMP_')},
+         'time': time.strftime('%Y-%m-%dT%H:%M:%S')}
     os.makedirs(os.path.join(ROOT, 'results', 'realtime'), exist_ok=True)
     f = os.path.join(ROOT, 'results', 'realtime', '%s-%s-%s-%s-t%d%s.json' % (dev, a.model, a.runtime, a.precision,
                                                                              a.threads, '-' + a.tag if a.tag else ''))

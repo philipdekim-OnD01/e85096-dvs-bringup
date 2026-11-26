@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""trt_int8.py DATA_DIR MODELS_DIR: model.int8s.onnx beside each model.onnx for TensorRT INT8 (msbench Phase 7).
+"""trt_int8.py DATA_DIR MODELS_DIR [MODEL ...]: model.int8s.onnx beside each model.onnx for TensorRT INT8 (msbench Phase 7).
 TensorRT 11 takes only symmetric INT8 (zero point 0, signed) from explicit Q/DQ, so this is model.int8.onnx's recipe
 (same 100 calibration images, MinMax, per-channel weights, Conv/MatMul/Gemm only) with signed symmetric activations
-instead of QUInt8, biases left float. Adds files['onnx_int8_sym'] to manifest.json. Export container."""
+instead of QUInt8, biases left float. Adds files['onnx_int8_sym'] to manifest.json. Export container.
+ResNet18 keeps its first convolution in float: TensorRT 11.4 on Orin (sm_87) has no implementation for the INT8
+conv1 (7x7, 3 channels) fused with ReLU and MaxPool, and the build fails (11.116)."""
 import json, os, sys
 
 import numpy as np
@@ -11,9 +13,10 @@ from onnxruntime.quantization import CalibrationDataReader, QuantFormat, QuantTy
 from onnxruntime.quantization.shape_inference import quant_pre_process
 
 DATA, d = sys.argv[1], sys.argv[2]
+EXCLUDE = {'resnet18': ['/net/conv1/Conv']}
 man = json.load(open(os.path.join(d, 'manifest.json')))
 for k, v in man.items():
-    if k.startswith('_'):
+    if k.startswith('_') or sys.argv[3:] and k not in sys.argv[3:]:
         continue
     s = v['input']['size']
     xs = np.load(os.path.join(DATA, 'coco-calib-%d.npz' % s if k.startswith('yolo') else 'imagenet-calib-224.npz'))['x']
@@ -31,6 +34,7 @@ for k, v in man.items():
             return None if x is None else {name: x}
     quantize_static(pre, dst, R(), quant_format=QuantFormat.QDQ, per_channel=True, activation_type=QuantType.QInt8,
                     weight_type=QuantType.QInt8, op_types_to_quantize=['Conv', 'MatMul', 'Gemm'],
+                    nodes_to_exclude=EXCLUDE.get(k, []),
                     extra_options={'ActivationSymmetric': True, 'WeightSymmetric': True,
                                    'QuantizeBias': False})                    # TensorRT: no Int32 bias DQ
     os.remove(pre)

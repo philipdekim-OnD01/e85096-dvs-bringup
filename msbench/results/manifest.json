@@ -298,8 +298,8 @@
    "ncnn": 46743506,
    "ncnn_int8": 11729591,
    "onnx_fp16": 23383491,
-   "onnx_int8_sym": 11779444,
-   "onnx_int8_fp16": 11764907
+   "onnx_int8_sym": 11806111,
+   "onnx_int8_fp16": 11772551
   },
   "parity_vs_torchscript": {
    "onnx": {

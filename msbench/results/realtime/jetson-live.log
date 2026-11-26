@@ -1,0 +1,120 @@
+== --model yolo11n-320 --runtime ncnn --precision fp16 --threads 4
+{"camera_fps": 15.12, "detect_fps": 14.52, "frames_dropped": 18, "mean_detections": 1.0, "process_cpu_cores": 1.71}
+  wait         {'n': 436, 'median': 34.98, 'p95': 44.74, 'mean': 31.29, 'max': 48.7}
+  rgb          {'n': 436, 'median': 3.38, 'p95': 3.53, 'mean': 3.06, 'max': 3.69}
+  prep         {'n': 436, 'median': 1.41, 'p95': 1.58, 'mean': 1.24, 'max': 1.61}
+  infer        {'n': 436, 'median': 26.4, 'p95': 85.35, 'mean': 32.15, 'max': 207.12}
+  nms          {'n': 436, 'median': 1.11, 'p95': 1.39, 'mean': 1.11, 'max': 2.72}
+  e2e          {'n': 436, 'median': 94.92, 'p95': 155.53, 'mean': 102.83, 'max': 334.22}
+  age_at_take  {'n': 436, 'median': 64.33, 'p95': 84.44, 'mean': 65.27, 'max': 128.44}
+wrote /home/philip/msbench/results/realtime/orin-nano-yolo11n-320-ncnn-fp16-t4-jetson-dvslive.json
+== --model yolo11n-640 --runtime ncnn --precision fp16 --threads 4
+{"camera_fps": 15.13, "detect_fps": 12.1, "frames_dropped": 91, "mean_detections": 0.38, "process_cpu_cores": 2.99}
+  wait         {'n': 364, 'median': 0.01, 'p95': 0.01, 'mean': 0.01, 'max': 0.05}
+  rgb          {'n': 364, 'median': 12.99, 'p95': 13.98, 'mean': 11.46, 'max': 15.99}
+  prep         {'n': 364, 'median': 4.55, 'p95': 5.02, 'mean': 4.39, 'max': 5.28}
+  infer        {'n': 364, 'median': 59.22, 'p95': 95.44, 'mean': 64.47, 'max': 253.08}
+  nms          {'n': 364, 'median': 2.27, 'p95': 2.49, 'mean': 2.27, 'max': 2.96}
+  e2e          {'n': 364, 'median': 176.8, 'p95': 212.62, 'mean': 177.99, 'max': 393.28}
+  age_at_take  {'n': 364, 'median': 94.67, 'p95': 126.59, 'mean': 95.4, 'max': 130.85}
+wrote /home/philip/msbench/results/realtime/orin-nano-yolo11n-640-ncnn-fp16-t4-jetson-dvslive.json
+== --model yolo11n-320 --runtime onnxruntime --precision int8 --threads 4
+{"camera_fps": 15.13, "detect_fps": 15.13, "frames_dropped": 0, "mean_detections": 0.87, "process_cpu_cores": 3.51}
+  wait         {'n': 454, 'median': 29.6, 'p95': 31.98, 'mean': 28.8, 'max': 34.02}
+  rgb          {'n': 454, 'median': 2.25, 'p95': 2.42, 'mean': 2.26, 'max': 4.18}
+  prep         {'n': 454, 'median': 0.77, 'p95': 0.88, 'mean': 0.8, 'max': 3.74}
+  infer        {'n': 454, 'median': 32.74, 'p95': 35.09, 'mean': 33.29, 'max': 61.09}
+  nms          {'n': 454, 'median': 0.93, 'p95': 0.99, 'mean': 0.93, 'max': 3.27}
+  e2e          {'n': 454, 'median': 100.64, 'p95': 103.67, 'mean': 100.2, 'max': 147.88}
+  age_at_take  {'n': 454, 'median': 64.21, 'p95': 65.04, 'mean': 62.91, 'max': 108.5}
+wrote /home/philip/msbench/results/realtime/orin-nano-yolo11n-320-onnxruntime-int8-t4-jetson-dvslive.json
+== --model yolo11n-320 --runtime tflite --precision fp32 --threads 4
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+{"camera_fps": 15.11, "detect_fps": 15.11, "frames_dropped": 0, "mean_detections": 0.98, "process_cpu_cores": 2.33}
+  wait         {'n': 454, 'median': 18.06, 'p95': 26.52, 'mean': 18.03, 'max': 33.88}
+  rgb          {'n': 454, 'median': 3.02, 'p95': 3.46, 'mean': 2.93, 'max': 4.43}
+  prep         {'n': 454, 'median': 0.87, 'p95': 1.04, 'mean': 0.85, 'max': 2.06}
+  infer        {'n': 454, 'median': 43.55, 'p95': 48.84, 'mean': 43.27, 'max': 71.11}
+  nms          {'n': 454, 'median': 1.09, 'p95': 1.29, 'mean': 1.11, 'max': 3.09}
+  e2e          {'n': 454, 'median': 110.78, 'p95': 118.07, 'mean': 111.09, 'max': 146.54}
+  age_at_take  {'n': 454, 'median': 64.23, 'p95': 65.21, 'mean': 62.94, 'max': 79.31}
+wrote /home/philip/msbench/results/realtime/orin-nano-yolo11n-320-tflite-fp32-t4-jetson-dvslive.json
+== --model yolo11n-320 --runtime tensorrt --precision fp16 --threads 1
+/home/philip/jp/py/torch/cuda/__init__.py:484: UserWarning: Found GPU0 Orin which is of compute capability (CC) 8.7.
+The following list shows the CCs this version of PyTorch was built for and the hardware CCs it supports:
+- 8.0 which supports hardware CC >=8.0,<9.0 except {8.7}
+- 9.0 which supports hardware CC >=9.0,<10.0
+- 10.0 which supports hardware CC >=10.0,<11.0 except {10.1}
+- 11.0 which supports hardware CC {10.1, 11.0}
+- 12.0 which supports hardware CC >=12.0,<13.0
+No published PyTorch CUDA builds for release 2.14.1+cu130 support this GPU. Visit https://pytorch.org/get-started/locally/ to find a compatible release.
+  _warn_unsupported_code(d, device_cc, code_ccs)
+{"camera_fps": 15.14, "detect_fps": 15.11, "frames_dropped": 1, "mean_detections": 1.0, "process_cpu_cores": 0.2}
+  wait         {'n': 454, 'median': 50.9, 'p95': 55.18, 'mean': 50.23, 'max': 59.21}
+  rgb          {'n': 454, 'median': 3.46, 'p95': 3.56, 'mean': 3.42, 'max': 4.06}
+  prep         {'n': 454, 'median': 1.91, 'p95': 1.99, 'mean': 1.89, 'max': 3.33}
+  infer        {'n': 454, 'median': 7.86, 'p95': 15.26, 'mean': 9.23, 'max': 16.89}
+  nms          {'n': 454, 'median': 1.38, 'p95': 1.46, 'mean': 1.37, 'max': 2.83}
+  e2e          {'n': 454, 'median': 78.79, 'p95': 85.84, 'mean': 78.62, 'max': 88.11}
+  age_at_take  {'n': 454, 'median': 64.23, 'p95': 64.97, 'mean': 62.69, 'max': 65.72}
+wrote /home/philip/msbench/results/realtime/orin-nano-yolo11n-320-tensorrt-fp16-t1-jetson-dvslive.json
+== --model yolo11n-640 --runtime tensorrt --precision fp16 --threads 1
+/home/philip/jp/py/torch/cuda/__init__.py:484: UserWarning: Found GPU0 Orin which is of compute capability (CC) 8.7.
+The following list shows the CCs this version of PyTorch was built for and the hardware CCs it supports:
+- 8.0 which supports hardware CC >=8.0,<9.0 except {8.7}
+- 9.0 which supports hardware CC >=9.0,<10.0
+- 10.0 which supports hardware CC >=10.0,<11.0 except {10.1}
+- 11.0 which supports hardware CC {10.1, 11.0}
+- 12.0 which supports hardware CC >=12.0,<13.0
+No published PyTorch CUDA builds for release 2.14.1+cu130 support this GPU. Visit https://pytorch.org/get-started/locally/ to find a compatible release.
+  _warn_unsupported_code(d, device_cc, code_ccs)
+{"camera_fps": 15.12, "detect_fps": 15.09, "frames_dropped": 1, "mean_detections": 0.29, "process_cpu_cores": 0.52}
+  wait         {'n': 453, 'median': 25.5, 'p95': 33.05, 'mean': 24.8, 'max': 39.21}
+  rgb          {'n': 453, 'median': 16.95, 'p95': 18.82, 'mean': 17.36, 'max': 24.72}
+  prep         {'n': 453, 'median': 7.08, 'p95': 7.29, 'mean': 7.06, 'max': 13.81}
+  infer        {'n': 453, 'median': 12.21, 'p95': 23.53, 'mean': 13.39, 'max': 29.21}
+  nms          {'n': 453, 'median': 3.6, 'p95': 4.06, 'mean': 3.64, 'max': 7.7}
+  e2e          {'n': 453, 'median': 103.23, 'p95': 115.21, 'mean': 104.1, 'max': 122.93}
+  age_at_take  {'n': 453, 'median': 64.23, 'p95': 64.99, 'mean': 62.65, 'max': 65.28}
+wrote /home/philip/msbench/results/realtime/orin-nano-yolo11n-640-tensorrt-fp16-t1-jetson-dvslive.json
+== --model yolo11n-640 --runtime tensorrt --precision int8 --threads 1
+/home/philip/jp/py/torch/cuda/__init__.py:484: UserWarning: Found GPU0 Orin which is of compute capability (CC) 8.7.
+The following list shows the CCs this version of PyTorch was built for and the hardware CCs it supports:
+- 8.0 which supports hardware CC >=8.0,<9.0 except {8.7}
+- 9.0 which supports hardware CC >=9.0,<10.0
+- 10.0 which supports hardware CC >=10.0,<11.0 except {10.1}
+- 11.0 which supports hardware CC {10.1, 11.0}
+- 12.0 which supports hardware CC >=12.0,<13.0
+No published PyTorch CUDA builds for release 2.14.1+cu130 support this GPU. Visit https://pytorch.org/get-started/locally/ to find a compatible release.
+  _warn_unsupported_code(d, device_cc, code_ccs)
+{"camera_fps": 15.12, "detect_fps": 15.09, "frames_dropped": 1, "mean_detections": 0.01, "process_cpu_cores": 0.62}
+  wait         {'n': 453, 'median': 21.24, 'p95': 27.61, 'mean': 20.72, 'max': 32.89}
+  rgb          {'n': 453, 'median': 16.76, 'p95': 18.34, 'mean': 17.2, 'max': 23.78}
+  prep         {'n': 453, 'median': 8.2, 'p95': 8.53, 'mean': 8.13, 'max': 9.92}
+  infer        {'n': 453, 'median': 17.02, 'p95': 23.4, 'mean': 17.24, 'max': 30.46}
+  nms          {'n': 453, 'median': 2.87, 'p95': 3.56, 'mean': 2.98, 'max': 4.47}
+  e2e          {'n': 453, 'median': 108.18, 'p95': 115.4, 'mean': 108.24, 'max': 124.83}
+  age_at_take  {'n': 453, 'median': 64.24, 'p95': 64.99, 'mean': 62.7, 'max': 65.13}
+wrote /home/philip/msbench/results/realtime/orin-nano-yolo11n-640-tensorrt-int8-t1-jetson-dvslive.json
+== --model yolo11n-640 --runtime pytorch-cuda --precision fp32 --threads 1
+/home/philip/jp/py/torch/jit/_serialization.py:176: FutureWarning: `torch.jit.load` is deprecated. Please switch to `torch.export`.
+  warnings.warn(
+/home/philip/jp/py/torch/cuda/__init__.py:484: UserWarning: Found GPU0 Orin which is of compute capability (CC) 8.7.
+The following list shows the CCs this version of PyTorch was built for and the hardware CCs it supports:
+- 8.0 which supports hardware CC >=8.0,<9.0 except {8.7}
+- 9.0 which supports hardware CC >=9.0,<10.0
+- 10.0 which supports hardware CC >=10.0,<11.0 except {10.1}
+- 11.0 which supports hardware CC {10.1, 11.0}
+- 12.0 which supports hardware CC >=12.0,<13.0
+No published PyTorch CUDA builds for release 2.14.1+cu130 support this GPU. Visit https://pytorch.org/get-started/locally/ to find a compatible release.
+  _warn_unsupported_code(d, device_cc, code_ccs)
+{"camera_fps": 15.12, "detect_fps": 15.09, "frames_dropped": 1, "mean_detections": 0.29, "process_cpu_cores": 0.74}
+  wait         {'n': 453, 'median': 15.91, 'p95': 21.22, 'mean': 15.46, 'max': 24.38}
+  rgb          {'n': 453, 'median': 18.5, 'p95': 20.52, 'mean': 18.35, 'max': 24.87}
+  prep         {'n': 453, 'median': 7.5, 'p95': 8.67, 'mean': 7.74, 'max': 12.57}
+  infer        {'n': 453, 'median': 21.89, 'p95': 25.16, 'mean': 22.12, 'max': 28.75}
+  nms          {'n': 453, 'median': 2.63, 'p95': 3.06, 'mean': 2.57, 'max': 4.42}
+  e2e          {'n': 453, 'median': 113.25, 'p95': 120.13, 'mean': 113.48, 'max': 124.77}
+  age_at_take  {'n': 453, 'median': 64.21, 'p95': 64.97, 'mean': 62.69, 'max': 65.34}
+wrote /home/philip/msbench/results/realtime/orin-nano-yolo11n-640-pytorch-cuda-fp32-t1-jetson-dvslive.json
+LIVEDONE

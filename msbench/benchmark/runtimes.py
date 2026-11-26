@@ -205,7 +205,9 @@ class TRT:
             cmd = [os.environ.get('TRTEXEC') or shutil.which('trtexec'), '--onnx=' + os.path.join(d, f),
                    '--saveEngine=' + eng, '--noTF32', '--skipInference']
             p = subprocess.run(cmd, capture_output=True, text=True)
-            if p.returncode or not os.path.exists(eng):
+            if p.returncode or not os.path.exists(eng) or not os.path.getsize(eng):
+                if os.path.exists(eng):
+                    os.remove(eng)                   # trtexec leaves an empty file behind on a failed build
                 raise RuntimeError('trtexec failed: ' + p.stdout[-2000:] + p.stderr[-2000:])
             self.info['engine_build_s'] = round(time.time() - t0, 1)
         self.t = torch

@@ -58,7 +58,7 @@ Jetson GPU 런타임은 `. benchmark/jetson-gpu-env.sh`가 `MSB_PYPATH`(CPU용 `
 | `models/Dockerfile`, `models/export.py` | Mac Docker(linux/arm64)에서 모든 모델 파일을 한 번 만든다: TorchScript, ONNX FP32, ONNX INT8(QDQ), TFLite FP32·INT8(onnx2tf 정적 정수 양자화), NCNN FP32(pnnx)·INT8(ncnn2table aciq). 같은 보정 이미지 100장. `manifest.json`에 크기, 파라미터, FLOPs, 출력 모양, TorchScript 대비 출력 차이, INT8 모델에 FP32로 남은 비율 |
 | `data/prepare.py` | 같은 입력: COCO val2017 200장(정확도) + 100장(보정), Ultralytics LetterBox 640·320. Imagenette(ImageNet 10개 클래스) 200장 + 100장, 224 중앙 크롭 |
 | `benchmark/runtimes.py` | CPU 어댑터(PyTorch·onnxruntime·TFLite·NCNN FP32/FP16/INT8), Jetson GPU 어댑터(PyTorch CUDA FP32/FP16, onnxruntime CUDA FP32/FP16, TensorRT FP32/FP16/INT8: 호스트 numpy→numpy를 동기로 재고, H2D·계산·D2H를 따로도 잰다), YOLO NMS(클래스별, 자체 시험 포함) |
-| `models/fp16_onnx.py`, `models/trt_int8.py` | GPU용 ONNX: FP16(입출력 float32), TensorRT용 대칭 INT8 QDQ(TensorRT 11은 strongly typed라 정밀도를 ONNX가 정한다) |
+| `models/fp16_onnx.py`, `models/trt_int8.py` | GPU용 ONNX: FP16(입출력 float32), TensorRT용 대칭 INT8 QDQ(TensorRT 11은 strongly typed라 정밀도를 ONNX가 정한다). ResNet18은 첫 합성곱을 float로 둔다(INT8로 하면 Orin용 구현이 없어 빌드 실패) |
 | `benchmark/jetson-gpu-env.sh` | Jetson GPU 런타임 경로 |
 | `benchmark/threadprobe.sh`, `benchmark/placement.py` | 스레드 진단: 코어 집합·환경 변수만 바꿔 설정 하나를 돌림, 런타임 스레드가 어느 코어에 몇 개 몰리는지 표본 |
 | `camera/realtime_detection.py`, `camera/jetson-live.sh` | 실시간 USB 카메라 YOLO(Phase 3): V4L2 mmap, YUYV→RGB, 레터박스, 어댑터, NMS, 카메라→검출 지연 |
@@ -103,13 +103,15 @@ python3 benchmark/run_benchmark.py --device orin-nano --sensor camera --runtime 
 |---|---|---|
 | 1 | 기존 코드 분석, 환경 확인 | 이 문서, `results/env/` |
 | 2 | 같은 데이터로 CPU 런타임 비교 | 됨(11.116): 두 장비 × 4모델 × 8설정 × 스레드 3, 정확도 |
-| 3 | E850 CIS 실시간 YOLO | 됨(11.116): 보드6 USB 카메라, DVS AI 켬·끔. Jetson도 같은 카메라로 |
+| 3 | E850 CIS 실시간 YOLO | 됨(11.116): 보드6 USB 카메라, DVS AI 켬·끔, 코어 고정. Jetson도 같은 카메라로 CPU·GPU 8설정(`camera/jetson-live.sh`) |
 | 4 | E850 DVS 실시간 YOLO | 아직(위 N/A) |
 | 5 | CAMERA+DVS 융합(A·B·C) | 아직 |
 | 6 | Jetson 센서·영상처리 | DVS·USB 카메라는 이미 동작(11.108, 11.113) |
 | 7 | Jetson CUDA·TensorRT | 됨(11.116): 홈에 설치, PyTorch CUDA·ORT CUDA·TensorRT FP32/FP16/INT8 |
 | 8 | 세 장비 같은 조건 | AGX Orin 없음 → 두 장비 |
 | 9 | 전력·에너지 | Jetson만(INA3221 VDD_IN, 결과의 `power_w`·`energy_j_per_inference`), E850은 외부 측정기 필요 |
-| 10 | 통합 뷰어, HTML 보고서 | HTML 보고서 `results/report.html`. 실시간 통합 뷰어는 아직 |
+| 10 | 통합 뷰어, HTML 보고서 | HTML 보고서 `results/report.html`, 문서용 표 `dashboard/tables.py`. 실시간 통합 뷰어는 아직 |
+
+RQ 답(RQ1~RQ3 실측, RQ4 일부, RQ5~RQ8 N/A와 원인)은 저장소 `docs/E85096-LINUX510-BOOT.md` 11.116 끝에 있다.
 
 큰 파일(모델, 데이터, wheel, `py/`)은 저장소에 넣지 않는다(`.gitignore`). 결과(`results/`의 JSON·CSV)는 넣는다.

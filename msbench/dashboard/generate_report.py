@@ -118,6 +118,7 @@ PAGE = r'''<!doctype html>
 body{margin:0;background:var(--surface);color:var(--text);font:14px/1.5 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
 main{max-width:1100px;margin:0 auto;padding:24px 16px 64px}
 h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;margin:32px 0 8px}p.sub{color:var(--text2);margin:0 0 16px}
+h1,h2,p.sub,#envs,#na{overflow-wrap:anywhere}main>*{min-width:0}
 .filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 12px}
 .filters label{color:var(--text2);font-size:13px}
 select,button{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px}

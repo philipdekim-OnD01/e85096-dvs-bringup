@@ -1,0 +1,85 @@
+{
+ "device": "orin-nano",
+ "host": "ubuntu",
+ "sensor": "camera",
+ "data": "live",
+ "model": "yolo11n-640",
+ "runtime": "pytorch-cuda",
+ "precision": "fp32",
+ "threads": 1,
+ "cpus": [
+  5
+ ],
+ "camera": "640x480",
+ "secs": 30.0,
+ "yuv_downscale": 1,
+ "frames_delivered": 454,
+ "frames_detected": 453,
+ "frames_dropped": 1,
+ "camera_fps": 15.12,
+ "detect_fps": 15.09,
+ "seq_gaps": 0,
+ "mean_detections": 0.29,
+ "process_cpu_cores": 0.74,
+ "rss_peak_mb": 1127.6,
+ "ms": {
+  "wait": {
+   "n": 453,
+   "median": 15.91,
+   "p95": 21.22,
+   "mean": 15.46,
+   "max": 24.38
+  },
+  "rgb": {
+   "n": 453,
+   "median": 18.5,
+   "p95": 20.52,
+   "mean": 18.35,
+   "max": 24.87
+  },
+  "prep": {
+   "n": 453,
+   "median": 7.5,
+   "p95": 8.67,
+   "mean": 7.74,
+   "max": 12.57
+  },
+  "infer": {
+   "n": 453,
+   "median": 21.89,
+   "p95": 25.16,
+   "mean": 22.12,
+   "max": 28.75
+  },
+  "nms": {
+   "n": 453,
+   "median": 2.63,
+   "p95": 3.06,
+   "mean": 2.57,
+   "max": 4.42
+  },
+  "e2e": {
+   "n": 453,
+   "median": 113.25,
+   "p95": 120.13,
+   "mean": 113.48,
+   "max": 124.77
+  },
+  "age_at_take": {
+   "n": 453,
+   "median": 64.21,
+   "p95": 64.97,
+   "mean": 62.69,
+   "max": 65.34
+  }
+ },
+ "runtime_info": {
+  "torch": "2.14.1+cu130",
+  "cuda": "13.0",
+  "cudnn": 92400,
+  "gpu": "Orin",
+  "dtype": "torch.float32",
+  "tf32": false
+ },
+ "time": "2026-11-26T14:23:18"
+}
