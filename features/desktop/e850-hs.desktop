@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=고속 촬영
+Name[en]=High-speed camera
+Comment=DVS와 USB 카메라 1초를 1000 fps 슬로모션으로 (둘 다 연결됐을 때만)
+Comment[en]=1 s of the DVS and the USB camera as a 1000 fps slow motion (with both connected)
+Exec=/usr/local/bin/e850-open hs
+Icon=camera-video
+Terminal=false
+Categories=AudioVideo;Video;

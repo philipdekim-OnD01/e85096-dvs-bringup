@@ -45,10 +45,13 @@ docker run --rm --platform linux/arm64 -v "$R/tools/linux510:/s:ro" -v "$ORT/inc
     apt-get -qq update && apt-get -qq install -y gcc libc6-dev zlib1g-dev pkg-config libgtk-3-dev libcjson-dev libegl-dev libgles-dev libx11-dev >/dev/null &&
     gcc -O2 -Wall -shared -fPIC -DDVS_AI -I/ort -o /x/libdvsview.so /s/dvsview.c -lpthread -lm -lz -ldl &&
     gcc -O2 -Wall -o /x/dvspanel /s/dvspanel.c $(pkg-config --cflags --libs gtk+-3.0 libcjson) -lm &&
-    gcc -O2 -Wall -o /x/dvsgl /s/dvsgl.c -lEGL -lGLESv2 -lX11' > "$S/build-dvsview.log" 2>&1 ||
+    gcc -O2 -Wall -o /x/dvsgl /s/dvsgl.c -lEGL -lGLESv2 -lX11 &&
+    gcc -O2 -Wall -fopenmp -o /x/dvshs /s/dvshs.c -lm &&
+    gcc -O2 -Wall -DDVSVIEW_TEST -o /x/dvsview-t /s/dvsview.c -lpthread -lm -lz' > "$S/build-dvsview.log" 2>&1 ||
     { tail -20 "$S/build-dvsview.log"; exit 1; }
 cp "$R/tools/linux510/ov5647-cap.py" "$R/tools/linux510/dvsctl.py" "$R/tools/linux510/dvsctl.html" \
-    "$R/tools/linux510/dvsact.py" "$R/tools/linux510/dvsx11.py" "$R/tools/linux510/dvsface.py" "$R/tools/board/dvslive.sh" \
+    "$R/tools/linux510/dvsact.py" "$R/tools/linux510/dvsx11.py" "$R/tools/linux510/dvsface.py" "$R/tools/linux510/dvshs.py" \
+    "$R/tools/board/dvslive.sh" \
     "$R/tools/board/dvslive.service" "$B/dvs/"
 # the face detector (11.99): OpenCV zoo YuNet 2023mar (MIT), fetched once into out/ and checked
 YUNET=$R/out/face/face_detection_yunet_2023mar.onnx

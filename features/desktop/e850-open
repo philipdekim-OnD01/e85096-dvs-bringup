@@ -1,15 +1,18 @@
 #!/bin/sh
-# e850-open dvs|scope|cam: what the desktop icons run (e850-feature desktop, docs 11.107, 11.114). A window already open
+# e850-open dvs|scope|cam|hs: what the desktop icons run (e850-feature desktop, docs 11.107, 11.114). A window already open
 # comes to the front. Each runs only with its device connected, else says so (e850-say):
 #   dvs    e850-dvs-desk.service: root, and the polkit rule lets the desktop user start it, so no password; `dvs` itself
 #          finds out whether the DVS answers on CN4 (it says so without, no demo recording any more)
 #   scope  the microscope viewer (:8090, e850-scope.service) as an app window, with the SOL kit (04b4:00c3) on USB
 #   cam    another USB (UVC) camera in mpv (the GPU output: Xv and the x11 output need MIT-SHM, which this kernel lacks)
+#   hs     the high-speed camera (11.121): 1 s of the DVS and the USB camera fused into 1 ms frames, played slowed down;
+#          dvshs.py says what is missing (the DVS view must run: it records through its page)
+[ "${1:-}" = hs ] && exec python3 /usr/local/share/dvsview/dvshs.py demo   # a new recording each time, no window to raise
 case ${1:-} in
 dvs) T='^DVS$' ;;
 scope) T='^SOL Microscope' ;;
 cam) T='^USB 카메라$' ;;
-*) echo "usage: e850-open dvs|scope|cam" >&2; exit 2 ;;
+*) echo "usage: e850-open dvs|scope|cam|hs" >&2; exit 2 ;;
 esac
 xdotool search --name "$T" windowactivate 2>/dev/null && exit 0
 SCOPE=04b4:00c3

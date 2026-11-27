@@ -6,6 +6,7 @@
 # Without the sensor `dvs` and dvslive.service end (exit 3, 11.114); demo.gz (a dvs_record() file, 11.97) is only for
 # `ov5647-cap.py --replay` by hand now. The GPU desktop
 # (x-kms.sh) runs `dvs --auto` when it starts: the window and panel open by themselves if the sensor answers (11.98).
+# dvshs, dvsview-t, dvshs.py: the high-speed camera of the DVS + a USB camera (11.121; desktop icon `e850-open hs`).
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd); . "$ROOT/common.sh"; H=$DEST/dvs
 SHARE=/usr/local/share/dvsview
@@ -14,9 +15,9 @@ install)
     ko_install fimc-is is-cis-s5krc1s csis-irqstat
     apt_need libcjson1                  # dvspanel
     install -m 644 "$H/libdvsview.so" /usr/local/lib/
-    install -m 755 "$H/ov5647-cap.py" "$H/dvslive.sh" "$H/dvs" "$H/dvspanel" "$H/dvsgl" /usr/local/bin/
+    install -m 755 "$H/ov5647-cap.py" "$H/dvslive.sh" "$H/dvs" "$H/dvspanel" "$H/dvsgl" "$H/dvshs" "$H/dvsview-t" /usr/local/bin/
     install -d "$SHARE" /var/lib/dvsview
-    install -m 644 "$H/dvsctl.py" "$H/dvsctl.html" "$H/dvsact.py" "$H/dvsx11.py" "$H/dvsface.py" "$SHARE/"
+    install -m 644 "$H/dvsctl.py" "$H/dvsctl.html" "$H/dvsact.py" "$H/dvsx11.py" "$H/dvsface.py" "$H/dvshs.py" "$SHARE/"
     [ ! -f "$H/dvsfont.json" ] || install -m 644 "$H/dvsfont.json" "$SHARE/"
     [ ! -f "$H/demo.gz" ] || install -m 644 "$H/demo.gz" /var/lib/dvsview/demo.gz
     [ ! -f "$H/face.onnx" ] || install -m 644 "$H/face.onnx" /var/lib/dvsview/face.onnx
@@ -25,8 +26,9 @@ install)
 remove)
     unit_remove dvslive.service
     rm -f /usr/local/bin/dvs /usr/local/bin/dvspanel /usr/local/bin/dvsgl /usr/local/bin/dvslive.sh /usr/local/lib/libdvsview.so /var/lib/dvsview/demo.gz \
+        /usr/local/bin/dvshs /usr/local/bin/dvsview-t \
         /var/lib/dvsview/face.onnx
-    rm -f "$SHARE/dvsface.py" "$SHARE/dvsx11.py" "$SHARE/dvsctl.py" "$SHARE/dvsctl.html" "$SHARE/dvsact.py" "$SHARE/dvsfont.json"
+    rm -f "$SHARE/dvsface.py" "$SHARE/dvsx11.py" "$SHARE/dvsctl.py" "$SHARE/dvsctl.html" "$SHARE/dvsact.py" "$SHARE/dvsfont.json" "$SHARE/dvshs.py"
     ko_remove fimc-is is-cis-s5krc1s csis-irqstat
     log "dvs: fimc_is stays loaded until reboot (it cannot be loaded again once removed); ov5647-cap.py is the image's";;
 status)

@@ -1,0 +1,35 @@
+#!/bin/sh
+# e850-restore: after the GPU desktop (X :1) starts, reopen the windows board 6 showed (docs 11.122): the USB camera
+# (e850-open cam) and the last 고속 촬영 result looping (dvshs.py demo plays it so), where they were; the terminal that
+# session.sh opens goes to the taskbar. The DVS window and its panel open by themselves (x-kms.sh starts e850-dvs).
+# Board 6 has no root for session.sh, so the wallpaper tool session.sh runs (~/.local/bin/xbg) starts this:
+#   mv ~/.local/bin/xbg ~/.local/bin/xbg.bin and make ~/.local/bin/xbg (755):
+#     #!/bin/sh
+#     "$0.bin" "$@"; r=$?
+#     setsid "$HOME/.local/bin/e850-restore" >/tmp/e850-restore.log 2>&1 </dev/null &
+#     exit $r
+# Once per X server start: the X socket's time names the lock.
+export PATH="$HOME/.local/bin:$PATH"
+L=/tmp/.e850-restore-$(stat -c %Y /tmp/.X11-unix/X1 2>/dev/null) && mkdir "$L" 2>/dev/null || exit 0
+win() { xdotool search --onlyvisible --name "$1" 2>/dev/null; }
+wait_win() { i=0; while [ $i -lt "$2" ]; do [ -n "$(win "$1")" ] && return 0; sleep 1; i=$((i + 1)); done; return 1; }
+# windowmove places the frame and the title bar pushes the window down (+1, +20 here): move, read, move by the difference
+place() {
+    wait_win "$1" 30 || return
+    for w in $(win "$1"); do
+        xdotool windowmove "$w" "$2" "$3"; sleep 0.3; eval "$(xdotool getwindowgeometry --shell "$w")"
+        xdotool windowmove "$w" $(($2 * 2 - X)) $(($3 * 2 - Y))
+    done
+}
+# the DVS opens its window and panel when the sensor answers: ours come after, on top as they were
+if [ -x /usr/local/bin/dvs ]; then wait_win '^DVS$' 90 && wait_win '^DVS 설정$' 30; fi
+for w in $(xdotool search --onlyvisible --class lxterminal 2>/dev/null); do xdotool windowminimize "$w"; done
+# the camera can enumerate after the desktop: wait for a capture node (index 0) before e850-open looks for it
+i=0; while [ $i -lt 60 ] && ! grep -qx 0 /sys/class/video4linux/video*/index 2>/dev/null; do sleep 1; i=$((i + 1)); done
+e850-open cam &
+place '^USB 카메라$' 2 549
+R=$(ls -t /var/tmp/dvshs/*/slowmo.mp4 2>/dev/null | head -1)
+if [ -n "$R" ]; then
+    mpv --loop --no-terminal --title='고속 촬영 (왼쪽 카메라 15 fps, 오른쪽 합성 1000 fps)' "$R" &
+    place '^고속 촬영 ' 640 549
+fi
