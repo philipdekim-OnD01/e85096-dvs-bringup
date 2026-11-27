@@ -7802,3 +7802,560 @@ RQ8. DVS 선택적 추론 E850이 RGB 연속 추론 Jetson보다 에너지에서
 - Jetson:
   - 바꾼 디렉터리는 `~/msbench`, `~/jp`(TensorRT, CUDA PyTorch, onnxruntime-gpu)다. 시스템 패키지는 그대로다.
   - USB 카메라 뷰어는 시험 동안 닫았고, 끝난 뒤 다시 띄웠다.
+
+**결과 보고서와 메일(사용자: "지금까지 실험결과를 메일로 보내줘").**
+- 11.115와 11.116을 한 보고서로 묶었다: `docs/MSBENCH-RESULTS-20261126.html`. 편집할 수 있는 HTML이고, A4 PDF로 12쪽이다.
+  - 장 구성: 요약, 환경과 방법, CPU 런타임 비교, 정밀도와 정확도, Jetson GPU, 실시간 카메라, 아키텍처 원인, RQ1~RQ8, 하지 못한 것, 용어.
+  - PDF는 headless Chrome으로 만들었다. 12쪽을 그림으로 떠서 표가 잘리지 않은 것을 확인했다.
+- 2026-11-26 16:27:59 KST에 Mail.app으로 사용자의 학교 주소에 보냈다. 보낸편지함에서 첨부 4개를 확인했다.
+  - PDF(1.1 MB).
+  - 보고서 HTML.
+  - 대화형 대시보드(`msbench/results/report.html`).
+  - `summary.csv`.
+
+### 11.117 E850 GPU(Mali-G52)로 AI 추론: TFLite GL, E850 CPU·Jetson과 비교 (2026-11-26)
+
+**요청(사용자):** "850 지피유도 활용해서 비교해". 이어서 "이미 드라이버를 설치해서 최적화 한건데 락칩 드라이버가 왜 필요하지?"
+
+**방향.**
+- 처음에는 OpenCL을 쓰려고 다른 SoC(Rockchip)용 Mali 사용자 드라이버(libmali)를 받아 보드4에 두었다. 실행하지는 않았다. 사용자의 위 말에 따라 이 방법을 버리고 파일을 지웠다.
+- 대신 이미 있는 GLES 3.1을 쓴다. Mesa panfrost와 kbase shim(11.82)이고, dvsgl이 compute 셰이더로 쓰는 그 드라이버다. 그 위에서 도는 AI 런타임은 TFLite GPU 위임자의 OpenGL ES 백엔드다.
+
+**빌드(`msbench/e850gpu/build-tflite-gl.sh`).**
+- pip의 ai-edge-litert와 TFLite CMake 판에는 GL 백엔드가 없다(CMake는 `-DCL_DELEGATE_NO_GL`). 그래서 TF v2.20.0의 C API와 GPU 위임자를 Bazel(7.4.1)로 빌드했다.
+  - 빌드는 Mac Docker의 debian:12 arm64에서 했다. 보드와 같은 glibc 2.36이다.
+  - 소스와 Bazel 캐시는 Docker 볼륨 `msbench-tf`에 둔다. 결과는 `~/e850-logs/tflite-gl/`이다.
+- 위임자 v2를 `experimental_flags = GL_ONLY`로 만든다. 창이 없으므로 `EGL_PLATFORM=surfaceless`를 쓴다(`e850gpu/gpu-env.sh`).
+- 위임자가 몇 층을 맡았는지("Replacing N out of M node(s)")는 VERBOSE 로그에만 나온다. 그래서 `minimal_logging_default.cc` 하나만 NDEBUG 없이 빌드했다.
+- 패치 `e850gpu/tflite-gl.patch`: OpenCL이 없을 때(GL) TRANSPOSE와 BATCH_MATMUL을 GPU에서 뺀다.
+  - 위임자는 이 둘을 받는데, GL에는 셰이더가 없다. 그래서 YOLO 초기화가 실패했다("No shader implementation for transpose").
+  - 패치 뒤 YOLO11n은 346개 연산 중 167개(GPU 분할 1개, 기본값)를 GPU가 맡는다. 분할 2개면 301개다.
+- 분할 3개 이상은 초기화가 실패한다: `Couldn't read scalar of const vector data`.
+  - 이 오류는 GL 두 입력 원소 연산(`elementwise.cc`)에서 난다. 둘째 입력이 스칼라도 1차원 상수도 아닌 상수 텐서일 때다.
+  - YOLO11n에는 SUB가 2개 있다. 모델 구조로 보아 박스 디코드(앵커 − 거리)다(가설). 실패하면 TFLite가 위임 전체를 버리고 CPU 계획으로 돌아간다.
+- 어댑터는 `benchmark/runtimes.py`의 `TFLiteGL`과 `TFLiteGL16`이다. FP16은 `is_precision_loss_allowed`다. E850에서 `--runtime gpu`가 이 둘을 고른다.
+  - GPU가 맡지 않은 층은 CPU(XNNPACK)가 `--threads`만큼 돌린다.
+  - `MSB_GL_PARTITIONS`로 GPU 분할 수를 정한다(기본 1). 맡은 층 수, 분할 수, GPU 잠금 상태는 `runtime_info`에 남는다.
+  - 잰 구간은 다른 GPU 런타임과 같다: numpy 입력 → 출력 numpy, 동기. H2D·D2H는 CPU 텐서 복사다. GPU로 올리고 내리는 시간은 계산(Invoke)에 들어 있다.
+
+**GPU 자체 성능(`e850gpu/gltest.c`, 보드4, 관찰).** GLES 3.1 compute로 잰 최고치다. GPU는 1001 MHz였다(데스크톱 X :1이 최저 클럭을 잠가 둔 상태, `dvfs_min_lock_status`).
+
+| 항목 | 값 |
+|---|---:|
+| FMA highp(FP32) | 38.0 GFLOPS |
+| FMA mediump(FP16) | 37.9 GFLOPS |
+| 버퍼 복사(읽기+쓰기) | 6.77 GB/s |
+| dispatch 1개 + glFinish | 중앙값 0.23 ms(최소 0.094) |
+| dispatch 100개를 잇달아(사이마다 glMemoryBarrier) | 1개에 0.095 ms |
+
+- 결과 검사(카운터 2201회, GL 오류 0)는 통과했다.
+- mediump가 빠르지 않은 원인(관찰, 보드6에서 `BIFROST_MESA_DEBUG=shaders`로 덤프):
+  - 컴파일러는 `FMA.v2f16`을 낸다. 그러나 피연산자가 모두 `.h00`(두 칸에 같은 값)이다. 명령 하나가 FP16 값 하나만 계산하므로 FP32와 처리량이 같다.
+  - 즉 이 Mesa(22.2)에서 FP16의 이득은 저장 공간과 대역폭이 줄어드는 것뿐이다.
+- CPU와 비교: 11.115에서 A55 코어 하나의 FP32 FMA 최고치는 15.5 GFLOPS였다. 이 GPU의 최고치는 A55 약 2.5코어 몫이다. A55의 FP16(`fmla.8h`)은 그 2배라 FP16로 보면 약 1.2코어 몫이다(계산).
+
+**출력 검증(`e850gpu/gpucheck.py`, 보드4, 처음 8장, 관찰).**
+- 같은 tflite 파일을 CPU(ai-edge-litert 4스레드, 코어 고정 없음), GL FP32, GL FP16으로 돌려 출력을 비교했다.
+- 시간은 8장의 중앙값(ms)이다.
+
+| 모델 | GPU가 맡은 연산 | CPU | GL FP32 | GL FP16 | 최대 차 FP32 / FP16 | top-1 같음 |
+|---|---:|---:|---:|---:|---:|---:|
+| MobileNetV2 | 71/71 | 50.3 | 94.5 | 70.5 | 2e-5 / 0.077 | 8/8 |
+| ResNet18 | 38/38 | 149.5 | 710.5 | 525.0 | 1.5e-5 / 0.019 | 8/8 |
+| YOLO11n-320, 분할 1 | 167/346 | 109.1 | 243.6 | 240.6 | 3.0e-5 / 0.0043 | |
+| YOLO11n-320, 분할 2 | 301/346 | 111.4 | 266.4 | 258.0 | 1.6e-5 / 0.034 | |
+| YOLO11n-640, 분할 1 | 167/346 | 401.6 | 948.4 | 930.9 | 5.3e-5 / 0.027 | |
+| YOLO11n-640, 분할 2 | 301/346 | 395.2 | 1085.8 | 1004.9 | 1.9e-5 / 0.049 | |
+
+- GL FP32는 CPU와 소수 넷째 자리 아래까지 같다. AFBC·IDVS처럼 이 GPU에서 틀리는 경로(11.88)는 compute에는 없었다.
+- 이 시험(코어 고정 없음)에서는 분할 2가 분할 1보다 조금 느렸다. 코어를 고정한 전체 벤치마크에서는 반대였다(아래).
+
+**전체 벤치마크(보드4, 관찰).**
+- 명령: `. e850gpu/gpu-env.sh; run_benchmark.py --device e850 --runtime gpu --precision all --threads 4 --accuracy --tag e850gpu`.
+- 17:44~18:19 KST에 돌렸다. CPU 폴백은 4스레드이고 CPU4~7에 고정했다. 현미경 뷰어(`e850-scope`)는 11.116의 CPU 측정 때처럼 켜 둔 채였다. 이 뷰어는 CPU만 쓰고, GPU 사용률은 1%였다.
+- 원자료: `msbench/results/raw/e850-e850-96-20261126-084447-e850gpu.jsonl`.
+  - 이 판은 GPU 클럭을 kHz로 적었다(`clock` 파일의 단위). 원자료의 `gpu_mhz_*`를 MHz로 바꿨다(단위만). 코드도 고쳤다.
+- 정확도는 같은 200장으로 쟀다. YOLO는 Mac `msbench-exp`의 `evaluate.py`로 계산했다.
+- 표의 중앙값(ms)은 블록 3개 전체, 프로세스 코어는 마지막 블록의 값이다. 비교한 CPU 값은 같은 보드4의 11.116 원자료(`…-000915-full.jsonl`), 4스레드 CPU4~7이다.
+
+| 모델 | GL FP32 | GL FP16 | GL FP16 프로세스 코어 | CPU TFLite FP32 4스레드 (코어) | CPU NCNN FP16 4스레드 (코어) | GL 정확도 (CPU FP32) |
+|---|---:|---:|---:|---:|---:|---|
+| YOLO11n-640 | 1105 | 1091 | 1.10 | 644 (2.23) | 449 (2.35) | mAP50-95 0.4403 / FP16 0.4401 (0.4403) |
+| YOLO11n-320 | 319 | 325 | 1.41 | 170 (2.05) | 68.7 (2.52) | 0.3088 / FP16 0.3086 (0.3088) |
+| ResNet18 | 710 | 525 | **0.02** | 264 (2.36) | 50.5 (3.55) | top-1 0.795, FP16도 같음 (0.795) |
+| MobileNetV2 | 94.6 | **68.6** | 0.39 | 72.4 (2.30) | 22.4 (3.94) | top-1 0.800, FP16도 같음 (0.800) |
+
+- 정확도는 CPU FP32와 같다. FP16은 mAP가 0.0002 낮고 top-1은 같다.
+- 빠르기는 어느 모델에서도 NCNN FP16 CPU를 넘지 못했다. MobileNetV2 GL FP16만 TFLite CPU 4스레드보다 빠르다(68.6 대 72.4 ms).
+- **CPU를 덜 쓰는 것이 GPU의 몫이다.** 추론 한 번에 쓴 CPU 시간(프로세스 코어 × 중앙값, 계산)은 다음과 같다.
+  - ResNet18: GL FP16 10 코어·ms. TFLite CPU 622, NCNN FP16 179 코어·ms다.
+  - MobileNetV2: GL FP16 27. TFLite CPU 167, NCNN FP16 88 코어·ms다.
+  - YOLO11n-320(분할 1): GL 458. TFLite CPU 348, NCNN FP16 173 코어·ms다. 반을 넘는 연산이 CPU에 남아서 오히려 많다.
+  - 층 하나에 CPU가 드는 값은 MobileNetV2 27/71, ResNet18 10/38로 모두 약 0.3 ms다(계산). 가설: GL 호출, 셰이더 상태, 제출을 준비하는 Mesa와 shim의 CPU 비용이다.
+- **GPU 효율(계산).** manifest의 FLOPs로 나눴다.
+  - ResNet18(3.65 GFLOP): FP32 5.1 GFLOPS, FP16 7.0 GFLOPS다. 최고치 38의 13%, 18%다.
+  - MobileNetV2(0.655 GFLOP): FP32 6.9, FP16 9.5 GFLOPS다.
+  - 같은 보드에서 NCNN FP16 4스레드는 ResNet18을 72 GFLOPS로 돌렸다. 이미 이 GPU의 최고치보다 높다. GPU가 100% 효율이어도 ResNet18은 96 ms라 NCNN FP16(50.5 ms)보다 느리다(계산).
+  - dispatch 비용(층당 0.1 ms)은 ResNet18 710 ms에서 4 ms 안팎이라 원인이 아니다. 낮은 효율은 TFLite GL 셰이더와 이 컴파일러의 몫이다(가설, 셰이더별로 재지 않음).
+- FP16은 GPU만 쓰는 두 모델에서 1.35~1.38배 빨라졌다(저장 대역폭). YOLO는 CPU 부분이 커서 거의 같았다.
+- YOLO는 이 표가 gpucheck보다 느리다(320: 319 대 244 ms). 이 표는 CPU4~7에 고정했고 gpucheck는 고정하지 않았다. 가설: CPU에 남은 179개 연산이 11.116의 4스레드 몰림을 겪는다. GPU만 쓰는 두 모델은 두 측정이 같았다.
+- YOLO11n-640의 블록 끝 GPU 클럭은 0이었다. 그 순간 GPU 전원이 꺼져 있었다는 뜻이다(CPU 부분을 도는 중, coarse_demand). 나머지는 1001 MHz였다.
+
+**YOLO 분할 2(보드4, 관찰).** 같은 방법에 `--env MSB_GL_PARTITIONS=2 --precision fp16`을 주었다. 18:22~18:33 KST, 원자료는 `…-092231-e850gpu-p2.jsonl`이다.
+
+| 모델 | GPU가 맡은 연산 | 중앙값 (p95) | 프로세스 코어 | 추론당 CPU 코어·ms | mAP50-95 |
+|---|---:|---:|---:|---:|---:|
+| YOLO11n-640 | 301/346 | **1050** (1074) | 0.39 | 409 (분할 1: 1200, NCNN FP16 4스레드: 1055) | 0.4403 |
+| YOLO11n-320 | 301/346 | **279** (294) | 0.65 | 181 (분할 1: 458, NCNN FP16 4스레드: 173) | 0.3091 |
+
+- 코어를 고정하면 분할 2가 분할 1보다 빠르다(1091 → 1050, 325 → 279 ms). CPU 시간은 1/3로 준다.
+- 고정하지 않은 gpucheck에서는 반대였다(244 대 266 ms). 가설: CPU4~7에 고정한 XNNPACK 4스레드는 11.116의 스레드 몰림을 겪으므로, CPU에 남는 연산이 적을수록 낫다.
+- YOLO11n-640은 분할 2에서 추론당 CPU가 NCNN FP16 4스레드의 39%다. 320은 NCNN과 비슷하다.
+
+**보드6 실시간: USB 카메라 YOLO11n-320, 평소 상태(관찰).**
+- 평소 상태는 DVS 실시간, AI 스레드 3개(`dvs-act`, `dvs-bin`, `dvs-face`), DVS GPU 뷰어 `dvsgl`이다. 그래서 GPU는 dvsgl과 나눠 쓴다.
+- 스크립트는 `msbench/e850gpu/b6-live-gpu.sh`(보드 `/var/tmp/msb-rt3.sh`)이고, 17:47~17:50 KST에 돌렸다. 원자료는 `msbench/results/realtime/*gpu-p*.json`, `*aion-bind2.json`, `run4.log`다.
+- 11.116처럼 USB 카메라 뷰어(mpv)는 시험 동안 닫았다. 끝난 뒤 다시 띄웠고, mpv와 AI 스레드 3개가 떠 있는 것을 확인했다.
+- 판마다 30초, CPU 폴백 4스레드(CPU4~7)다. 카메라는 15.1 fps로 들어왔다.
+
+| 설정 | 검출 fps | 추론 ms 중앙값 (p95) | e2e ms 중앙값 (p95) | 프로세스 코어 | 프레임당 코어·초 |
+|---|---:|---:|---:|---:|---:|
+| GL FP16, 분할 1 (167/346 GPU) | 2.32 | 418 (482) | 535 (612) | 1.28 | 0.55 |
+| GL FP16, 분할 2 (301/346 GPU) | 3.15 | 298 (336) | 421 (452) | **0.45** | **0.14** |
+| GL FP32, 분할 1 | 2.29 | 420 (476) | 531 (601) | 1.27 | 0.55 |
+| NCNN FP16 코어 고정(같은 시간대 기준) | **7.89** | 104 (131) | **220** (267) | 1.77 | 0.22 |
+| (11.116) TFLite FP32 CPU, 고정 없음 | 3.60 | 259 | 375 | 1.67 | 0.46 |
+
+- 프레임당 코어·초는 프로세스 코어를 검출 fps로 나눈 값이다(계산). 캡처, 색 변환, NMS가 들어 있다.
+- 분할 2가 CPU를 가장 적게 쓴다. 프레임당 NCNN FP16의 64%이고, 프로세스 전체로는 0.45코어다. 그러나 fps는 NCNN FP16의 40%다.
+- 보드6에서도 분할 2가 분할 1보다 빠르다(298 대 418 ms). 보드4의 코어 고정 측정과 같은 방향이다. 보드6은 AI 스레드가 CPU4~6을 쓰므로 그 차이가 더 크다(가설).
+- 이때 AI 스레드와 dvsgl이 얼마나 느려졌는지는 재지 않았다.
+- 실패한 첫 시도(`run4-failed.log`): GL 판 셋이 시작하지 않았다.
+  - `gpu-env.sh`가 변수 `L`에 Mesa 경로를 넣었는데, 스크립트도 로그 경로를 `L`에 두고 있었다. 그래서 `>> $L`이 디렉터리를 가리켜 실패했다.
+  - `gpu-env.sh`가 `MESA_KBASE`만 쓰게 고쳤다. 그 첫 시도의 NCNN 판(8.0 fps, 102 ms)은 다시 잰 판에 덮였다.
+
+**세 가지 처리기 비교(중앙값 ms, 관찰값을 모음).**
+- E850 GPU는 위 보드4의 GL FP16이다(YOLO는 분할 2).
+- E850 CPU는 11.116에서 가장 빠르고 정확한 설정이다(NCNN FP16; YOLO는 4스레드 + `OMP_PROC_BIND`, ResNet18은 8스레드).
+- Jetson GPU는 TensorRT FP16이다(11.116).
+
+| 모델 | E850 GPU | E850 CPU | Jetson GPU | E850 GPU / E850 CPU | E850 GPU / Jetson GPU |
+|---|---:|---:|---:|---:|---:|
+| YOLO11n-640 | 1050 | 186 | 6.41 | 5.6배 | 164배 |
+| YOLO11n-320 | 279 | 48.6 | 3.39 | 5.7배 | 82배 |
+| ResNet18 | 525 | 49 | 1.32 | 10.7배 | 398배 |
+| MobileNetV2 | 68.6 | 22 | 1.32 | 3.1배 | 52배 |
+
+**RQ 보강.**
+- RQ2(E850에서 가장 효율적인 런타임): 지연으로는 답이 그대로 NCNN FP16 CPU다. CPU 예산으로 보면 GPU만 쓰는 모델(ResNet18, MobileNetV2)은 TFLite GL이 CPU를 거의 비운다. ResNet18은 0.02코어, MobileNetV2는 0.39코어다. 다른 일(DVS AI 등)에 CPU를 남겨야 할 때 쓸 수 있다.
+- RQ2 보강: YOLO11n-640은 GL FP16 분할 2가 CPU 0.39코어로 돈다(1050 ms).
+- RQ3(정밀도): E850 GPU FP16은 GPU만 쓰는 모델에서 1.35~1.38배다. 정확도 손실은 mAP 0.0002 이하이고 top-1은 같다. INT8은 N/A다(아래).
+- 명세의 "에너지 효율"은 여전히 N/A다. E850 GPU 전력도 잴 센서가 없다.
+
+**N/A와 원인.**
+- E850 GPU INT8: TFLite GL 백엔드에는 정수 연산이 없다. 양자화 모델은 float로 풀어서 돈다. 그래서 FP32·FP16만 쟀다.
+- E850 GPU의 ORT·NCNN(Vulkan)·ArmNN: 이 커널(kbase r38p1)에 맞는 Mali OpenCL·Vulkan 사용자 드라이버가 없다. 다른 SoC용 libmali는 쓰지 않기로 했다(위).
+- YOLO 전부를 GPU에: 위 TRANSPOSE·BATCH_MATMUL과 상수 텐서 SUB 때문이다. 풀려면 GL 셰이더를 더 쓰거나, C2PSA 주의 블록과 디코드를 모델에서 떼어 CPU로 돌린다.
+- 연산자별 GPU 시간: 재지 않았다.
+
+**코드 고친 것(이 절).**
+- `run_benchmark.py`, `camera/realtime_detection.py`: TFLite의 정규화 좌표(0~1)를 되돌리는 판정이 `runtime == 'tflite'`였다. 그래서 `tflite-gl`은 좌표를 되돌리지 않았다. `startswith('tflite')`로 고쳤다.
+  - 첫 전체 측정은 이 때문에 YOLO 정확도가 틀렸을 것이다. 그래서 시작 직후 멈추고, 결과를 지운 뒤 다시 돌렸다.
+- `run_benchmark.py`:
+  - E850 GPU 클럭(`/sys/class/misc/mali0/device/clock`)을 kHz로 읽는다.
+  - `--env`를 준 판의 YOLO 검출 파일 이름에 그 값을 붙인다. 기본 판의 정확도를 덮지 않게 하기 위해서다.
+- `dashboard/tables.py`, `dashboard/generate_report.py`: GPU 표에 E850 행을 넣었다. 가장 빠른 설정 표에 "E850 GPU" 열을 더했다. N/A 목록을 고쳤다. GPU 행의 정확도를 Jetson 것으로 찾던 잘못도 고쳤다.
+
+**보드에 바꾼 것.**
+- 보드4:
+  - `~/msbench/e850gpu/`(TFLite GL 라이브러리 둘, `gltest`, `gpu-env.sh`, `gpucheck.py`), `~/msbench/benchmark/` 갱신, 결과 파일.
+  - 받아 두었던 Rockchip libmali 파일은 지웠다. 시스템 파일은 바꾸지 않았다.
+- 보드6:
+  - `~/msbench/e850gpu/`, `benchmark/`·`camera/` 갱신, `/var/tmp/msb-rt3.sh`, `/var/tmp/gltest-shaders.txt`.
+  - mpv 뷰어는 닫았다가 다시 띄웠다. DVS와 AI는 그대로 두었다.
+- Mac: Docker 볼륨 `msbench-tf`(TF 소스, Bazel 캐시), `~/e850-logs/tflite-gl/`, `~/e850-logs/msbench/work/det-e850gpu/`.
+
+### 11.118 NCNN의 GPU 경로(Vulkan)를 E850 GPU에서: panvk, CPU·GPU 동시 실행, 층별 비용과 층 나누기 (2026-11-26~27, 사용자 자는 동안)
+
+**요청(사용자):**
+- "그럼 분산해서 나누어 연산하면 되자나 cpu, gpu NMME의 특징이 그거자나 분산처리, 내 논문은 그걸 확장해서 GPU까지 , 어때?"
+- 이어서 "NCNN이다", 그리고 "여러가지로 최적화 해봐, 낼 아침에 보자".
+- 논문 주제는 NCNN이 CPU에서 하는 분산 처리를 GPU까지 넓히는 것이다. 그래서 이 절은 세 가지를 잰다. NCNN이 E850 GPU를 쓸 수 있는지, 두 처리기를 함께 돌리면 얼마나 얻는지, 층을 나누면 얼마나 얻는지다.
+
+**방향.**
+- NCNN의 GPU 경로는 Vulkan이다. 보드4의 pip NCNN(1.0.20261020)은 Vulkan을 넣고 빌드되어 있다. 그러나 Vulkan 드라이버가 없어 `vkCreateInstance failed -9`로 GPU 0개였다(관찰).
+- 우리 Mesa 트리(Icecream95 kbase-g52, 22.2-devel)에 Bifrost v7용 Vulkan 드라이버 panvk가 들어 있다. GL 빌드(`tools/gpu/build-mesa.sh`)는 `-Dvulkan-drivers=`로 이를 꺼 두었다.
+- 그래서 같은 트리와 같은 kbase shim으로 panvk만 따로 빌드했다. 보드 데스크톱이 쓰는 GL Mesa(`~/gpu/mesa-kbase`)는 건드리지 않았다.
+- Mesa는 panvk를 미완성으로 표시한다. 그래서 `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1`이 있어야 뜬다.
+
+**빌드와 환경(`msbench/e850gpu/`).**
+- `build-panvk.sh`: Mac Docker `e850-mesa-build:1`에서 `-Dvulkan-drivers=panfrost`, GL·EGL·GBM은 끄고 빌드한다. 결과는 `~/e850-gpu/out/mesa-vk.tgz`이고, 보드4 `~/gpu/mesa-vk`에 풀었다.
+- `vk-env.sh`: ICD json, drm-shim `LD_PRELOAD`, 위 변수를 잡는다. Vulkan 로더(`libvulkan1` 1.3.239)는 이미 보드에 있었다.
+- NCNN이 본 장치(관찰): Mali-G52, fp16-p=1, fp16-s=0, fp16-a=0, subgroup 64다. 즉 16비트 저장과 연산이 없다. NCNN의 "FP16"은 버퍼를 FP16으로 묶어 두는 것(packed)만 되고, 계산은 FP32다.
+- 어댑터: `benchmark/runtimes.py`의 `NCNNVK`(FP32)와 `NCNNVK16`(FP16 packed)이다. `--runtime ncnn-vk`로 고른다. GPU 구현이 없는 층은 NCNN이 CPU에서 `--threads`로 돌린다.
+
+**Mesa에서 고친 것(관찰, `tools/gpu/mesa-kbase-g52-e850.patch`에 넣음).**
+1. **`vkResetFences failed -13`.** NCNN은 이 오류가 나면 제출 전에 멈추고 쓰레기 값을 낸다.
+   - 원인: kbase shim(`panfrost_kbase.c`)에 DRM `SYNCOBJ_RESET`(0xC4)·`SYNCOBJ_SIGNAL`(0xC5)이 없었다. GL 드라이버는 이 둘을 부르지 않는다.
+   - 고침: 둘을 넣었다. reset된 syncobj는 다음 제출이나 sync-file 가져오기가 순번을 줄 때까지 "아직 안 끝남"으로 센다.
+   - 남은 한계(코드 주석 `shortcut:`): 다른 스레드에서 뒤늦게 제출한 것을, 이미 기다리기 시작한 쪽은 보지 못하고 시간 초과까지 기다린다. NCNN과 panvk는 reset, 제출, 대기를 한 스레드에서 한다.
+2. **그 뒤 `vkEnumeratePhysicalDevices failed -3`.**
+   - 원인: drm-shim(`src/drm-shim/device.c`)의 `core_ioctls[]` 배열이 0xC5까지 닿지 않았다. 위에서 넣은 두 처리기가 배열 밖에 쓰였다.
+   - 고침: 배열 초기값에 두 칸을 넣었다.
+3. **Padding, Permute, 패딩 있는 3×3 합성곱이 틀림.** 고친 뒤 MobileNetV2·ResNet18 출력이 CPU와 같아졌다.
+   - 찾은 방법: 작은 층 하나짜리 망을 CPU와 GPU에서 돌려 비교했다(`/var/tmp/vkpad1.py`, `vkconv*.py`). 출력마다 읽은 입력 위치를 찍었더니, 둘째 줄부터 입력 행이 바뀌지 않았다(5×5 입력 패딩 1에서 모든 줄이 0~4).
+   - 원인: `nir_lower_explicit_io_impl`가 문제였다. robustBufferAccess(NCNN은 받은 기능을 모두 켠다)면 SSBO 접근마다 범위 검사 `if`를 넣는다. 그러고도 block index와 dominance 메타데이터가 그대로라고 표시했다. 그 뒤 `nir_lower_vars_to_ssa`가 낡은 지배 정보로 phi를 빠뜨렸다(undef). 이어 `nir_lower_undef_to_zero`가 그 값을 0으로 바꿨다. `psc(x)`(특수화 상수) 계산이 이렇게 0이 되었다.
+   - 고침: 진전이 있으면 `nir_metadata_none`을 표시한다.
+   - GL에도 같은 함수가 쓰이지만, 보드의 GL Mesa는 이 고침으로 다시 빌드하지 않았다.
+
+**남은 문제(관찰, 고치지 않음).**
+- **winograd 합성곱 셰이더의 컴파일이 끝나지 않는다.** 3×3 패딩 1 합성곱 하나짜리 망(c16 hw16 o16, c32 hw16 o64, c32 hw56 o64)이 셋 다 120초 안에 끝나지 않았다.
+  - 셰이더 통계(`BIFROST_MESA_DEBUG=shaderdb`)를 찍으며 다시 돌렸다. 12개를 컴파일한 뒤 13번째에서 멈춰 있었다(55초 동안 봄, 프로세스는 CPU를 계속 씀).
+  - SPIR-V 덤프로 보니 그 셰이더는 4×4 winograd 입력 변환(`v00`~`v55`, vec4 36개)이다.
+  - 원인은 Bifrost 레지스터 할당이 스필을 하나씩 하며 최대 1000번 도는 것으로 본다(가설, 스필 수는 재지 않음).
+  - 우회: `NCNNVK`에서 `use_winograd_convolution = False`.
+  - 기본 옵션으로 끝까지 돈 c32 hw56 o64 3×3(`vkconv.py`)은 최대 차 7.92로 틀렸다. winograd만 끈 c32 hw56 o64 3×3 패딩 1은 5.7e-6으로 맞았다. 틀린 쪽이 winograd 경로였는지는 확인하지 않았다.
+- **winograd 2×2(F(2,3))만 켜기(`/var/tmp/vkopt.py`, 관찰).** NCNN은 23과 43을 따로 켤 수 있다. 23만 켜면 4×4와 달리 컴파일은 끝난다(ResNet18 14 s, YOLO11n-320 18 s).
+  - 그러나 GPU 작업이 kbase `JOB_READ_FAULT`(이벤트 0x42, dmesg `GPU fault 0x42 from job slot 1`)로 수백 번 실패한다. 출력은 틀린다: ResNet18 최대 차 3.4e38(또는 출력이 0), YOLO11n-320 최대 차 1048.
+  - 시간도 길다. ResNet18 1721 ms(winograd 끔 654 ms), YOLO11n-320 2825 ms(400 ms)다.
+  - 캐시 끈 앞 판 드라이버에서도 오류가 났다. 따라서 이번 캐시 고침 탓이 아니다. 그 판에서 처음 한 번(4회)은 출력이 맞았는데, 그때는 오류 줄을 걸러 버려 오류가 났는지 모른다. 다시 돌리니(2회) 틀렸다.
+  - MobileNetV2는 3×3 s1 일반 합성곱이 없어 영향이 없다(140.7 → 143.4 ms, 출력 같음). 원인은 보지 않았다.
+- **subgroup 연산은 쓸 수 없다.** panvk가 subgroup 연산을 하나도 알리지 않는다(NCNN 출력 `subgroup=64(64~64) ops=0/0/0/0/0/0/0/0/0/0`). `use_subgroup_ops=True`를 줘도 NCNN이 끄고, 시간도 같다(ResNet18 654.1 대 654.2 ms).
+- **sgemm·winograd를 모두 끈 직접 합성곱(pack4)도 틀린다.** c4 hw8 o8 3×3에서 출력 채널 7의 홀수 행(1, 3, 5)이 틀렸다(최대 차 0.747).
+  - 기본값(sgemm 켬)에서는 모델 출력이 맞으므로 우회하지 않았다. 어느 층이 어느 경로를 타는지는 보지 않았다.
+- **`PANVK_NO_ROBUST`(실험, 지금 빌드에는 없음).** robustBufferAccess를 꺼서 범위 검사 분기를 없애 보았다.
+  - MobileNetV2는 151.7 → 147.6 ms로 거의 같았다. ResNet18은 665 → 2263 ms로 3.4배 느려졌다. 출력은 둘 다 맞았다.
+  - 원인은 보지 않았다. 주소 형식이 `64bit_bounded_global`에서 `64bit_global_32bit_offset`으로 바뀐다. 그래서 코드를 되돌렸다.
+
+**출력 검증(`e850gpu/gpucheck.py MODEL N vk`, 보드4, `taskset -c 4-7`, 관찰).**
+- 같은 NCNN 파일을 NCNN CPU FP32 4스레드, Vulkan FP32, Vulkan FP16 packed로 돌렸다. 시간은 N장의 중앙값(ms)이다.
+
+| 모델 (N) | CPU NCNN FP32 | VK FP32 | VK FP16 packed | 최대 차 FP32 / FP16 | top-1 같음 |
+|---|---:|---:|---:|---:|---:|
+| MobileNetV2 (8) | 43.4 | 151.0 | 169.2 | 1.9e-5 / 0.11 | 8/8 |
+| ResNet18 (8) | 93.5 | 667.0 | 706.3 | 3.1e-5 / 0.022 | 8/8 |
+| YOLO11n-320 (4) | 206.2 | 422.2 | 416.2 | 0.0036 / 5.48(평균 0.0042) | |
+
+- FP32는 CPU와 소수 넷째 자리까지 같다. FP16 packed는 빠르지 않다. 16비트 연산이 없어서 풀고 묶는 일만 더해진다(가설).
+- 같은 모델의 TFLite GL(11.117 gpucheck)과 비교하면 다음과 같다. MobileNetV2는 GL FP32 94.5 ms 대 VK 151 ms, ResNet18은 710.5 대 667 ms, YOLO11n-320은 GL 분할 2 266.4 대 VK 422 ms다. NCNN Vulkan이 GL보다 빠른 모델은 ResNet18 하나다.
+
+**전체 벤치마크(보드4, 관찰).**
+- 명령: `. e850gpu/vk-env.sh; run_benchmark.py --device e850 --runtime ncnn-vk --precision all --threads 4 --accuracy --tag e850vk-sync`.
+- 두 번 돌렸다. CPU 폴백은 4스레드이고 CPU4~7에 고정했다. 현미경 뷰어와 Chrome은 11.116·11.117 때처럼 켜 둔 채였다. GPU는 1001 MHz로 잠겨 있었다.
+  - 앞 판(01:18~01:50 KST): 아래 캐시 고침 **전** 드라이버다(1 MB 넘는 BO를 제출마다 통째로 clean). 원자료 `msbench/results/raw/e850-e850-96-20261126-161838-e850vk.jsonl`.
+  - 지금 판(02:37~03:08 KST): 캐시 + 직접 동기화 드라이버다(아래 "고친 것 2"). 원자료 `e850-e850-96-20261126-173651-e850vk-sync.jsonl`. 보고서는 이 판을 쓴다.
+- YOLO mAP는 Mac `msbench-export:1` 컨테이너의 `evaluate.py`로 계산했다(`results/accuracy.json`, 지금 판 값). 검출 파일은 Mac `~/e850-logs/msbench/work/det-e850vk/`(앞 판)와 `det-e850vk-sync/`(지금 판)에 있다.
+- 중앙값(ms)은 블록 3개 전체다. 프로세스 코어는 블록 셋이 모두 같았다(±0.01).
+
+| 모델 | VK FP32 지금 (앞 판) | VK FP16 packed 지금 (앞 판) | 프로세스 코어 FP32 지금 (앞 판) | 추론당 CPU 코어·ms 지금 (앞 판) | GL FP16 (11.117) | NCNN FP16 CPU 4스레드 (11.117 표) | 정확도 FP32 / FP16 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| YOLO11n-640 | 1251 (1264) | 1268 (1282) | 0.18 (0.19) | 221 (244) | 1050 (409) | 449 (1055) | mAP50-95 0.4403 / 0.4407 |
+| YOLO11n-320 | 406 (416) | 422 (430) | 0.40 (0.43) | 162 (180) | 279 (181) | 68.7 (173) | 0.3088 / 0.3086 |
+| ResNet18 | 655 (666) | 698 (706) | 0.04 (0.05) | 26 (33) | 525 (10) | 50.5 (179) | top-1 0.795 / 0.795 |
+| MobileNetV2 | 142 (152) | 163 (172) | 0.20 (0.26) | 28 (40) | 68.6 (27) | 22.4 (88) | top-1 0.800 / 0.800 |
+
+- GL과 CPU 열의 괄호 안은 추론당 CPU 코어·ms(프로세스 코어 × 중앙값, 계산)다. GL은 YOLO가 분할 2다.
+- 캐시 고침으로 네 모델이 1~7% 빨라졌고, 추론당 CPU 일은 9~30% 줄었다. 정확도는 앞 판과 같다(FP16 YOLO11n-640만 0.4404 → 0.4407).
+- 정확도는 CPU FP32(0.4403, 0.3088, 0.795, 0.800)와 같다.
+- NCNN Vulkan은 네 모델 모두 TFLite GL FP16보다 느리다. ResNet18만 GL FP32(710)보다 빠르다.
+- YOLO는 NCNN Vulkan이 CPU를 덜 쓴다. 640에서 0.18코어(GL 분할 2는 0.39)다. NCNN은 YOLO의 거의 모든 층을 GPU에서 돈다(층 종류별로 세지는 않음).
+- FP16 packed는 모든 모델에서 FP32보다 느렸다(1~15%). panvk에 16비트 저장·연산이 없어 풀고 묶는 일만 늘어난다(가설).
+- 블록 끝 CPU4~7 클럭은 546~855 MHz였다. GPU가 일하는 동안 CPU가 놀아 DVFS가 내린 것이다. NCNN이 CPU에서 하는 제출 준비도 이 클럭으로 돈다.
+
+**GPU 호출 한 번의 고정 비용과 CPU 캐시(관찰, 보드4).**
+- 4×4×4 ReLU 하나짜리 망(`/var/tmp/vktiny2.py`)의 `extract` 한 번이 중앙값 3.05 ms였다. gltest의 GL dispatch + glFinish는 0.1~0.33 ms다.
+- shim 통계(`PAN_KBASE_STATS=1`): extract 한 번에 제출이 4개였다. CPU 캐시 clean(to device)은 약 16 MB, 2.1 ms였다.
+- 원인: shim은 1 MB~64 MB의 실행 불가 BO를 CPU 캐시로 잡고, 그 BO를 담은 제출마다 BO 전체를 clean한다. GL의 화면 읽기를 빠르게 하려던 정책이다(11.82). GL 리소스는 CPU가 쓴 뒤에만 clean하지만(11.87), panvk BO에는 그 표시가 없다.
+- 한 가지 더(코드를 읽고 내린 판단, 시험은 안 함): panvk는 이 메모리를 HOST_COHERENT로 알리고 invalidate를 하지 않는다. 그래서 CPU가 GPU 결과를 옛 캐시 줄로 읽을 수 있다. 측정한 출력은 모두 맞았다.
+- 고친 것 1(`vk-env.sh`): `PAN_KBASE_UNCACHED=1`로 캐시를 껐다. extract가 3.05 → 0.99 ms가 됐다. MobileNetV2는 152.6 → 145.1 ms, ResNet18은 664 → 655 ms였고 출력은 같다.
+  - 대신 CPU가 캐시 없는 메모리를 읽어 큰 전송이 느려졌다. ReLU 망이 옮기는 양이 12.8 MB면 25.9 → 57.4 ms다.
+- 고친 것 2(panvk + shim, `tools/gpu/mesa-kbase-g52-e850.patch`): "캐시됨, 비일관" 메모리 종류를 더했다.
+  - panvk의 메모리 종류 0은 `DEVICE_LOCAL | HOST_VISIBLE | HOST_CACHED`이고, 1은 예전 coherent 종류다. NCNN이 블롭에 첫 device-local 종류를 쓰고 CPU로 매핑하므로 캐시 쪽을 0번에 두었다. 처음에 1번에 두었더니 NCNN이 쓰지 않았다(관찰).
+  - 버퍼는 두 종류를 다 받고, 이미지와 가져온 메모리는 coherent 종류만 받는다.
+  - `vkFlushMappedMemoryRanges`는 clean, `vkInvalidateMappedMemoryRanges`는 invalidate로 shim의 MEM_SYNC를 부른다. 주소는 GPU VA로 넘긴다. SAME_VA라 shim의 kbase 매핑과 같은 주소이기 때문이다. Mesa의 CPU 매핑 주소(`ptr.cpu`)는 같은 페이지의 두 번째 매핑이라 kbase가 `EINVAL`을 냈다(관찰).
+  - 새 BO 플래그 `PANFROST_BO_E850_CACHED`: shim은 이 BO를 크기와 상관없이 캐시로 잡고, 자동 clean이나 invalidate를 하지 않는다. GL은 이 플래그를 쓰지 않는다.
+  - NCNN은 비일관 메모리면 직접 flush와 invalidate를 부른다(`VulkanDevice::is_coherent`). 확인한 것은 invalidate 호출(6.4 MB 단위)이다.
+- 결과(보드4, 같은 측정):
+
+| 측정 | 캐시 켬, 제출마다 clean(벤치마크 판) | 캐시 끔 | 캐시 + 직접 동기화(지금 기본) |
+|---|---:|---:|---:|
+| extract 고정 비용 | 3.05 ms | 0.99 ms | 0.99 ms |
+| ReLU 망, 1.6 MB 옮김 | — | 8.2 ms | 5.4 ms |
+| ReLU 망, 6.4 MB 옮김 | — | 29.3 ms | 14.5 ms |
+| ReLU 망, 12.8 MB 옮김 | 25.9 ms | 57.4~71.8 ms | 40.3 ms |
+| MobileNetV2 (gpucheck 8장) | 152.6 | 145.1 | 141.6 |
+| ResNet18 (gpucheck 8장) | 664.0 | 655.0 | 653.9 |
+| YOLO11n-320 (gpucheck 4장) | 422.2 | — | 406.1 |
+
+- 세 판의 출력 오차 통계는 소수 넷째 자리까지 같다. `—`는 그 판으로 재지 않은 것이다.
+- 고정 비용 0.99 ms는 extract마다 제출 4개(약 0.22 ms)와 대기(약 0.09 ms), 나머지 NCNN·panvk의 CPU 일이다(shim 통계로 계산).
+- 보드4의 기본 `~/gpu/mesa-vk`를 이 판으로 바꿨다. 예전 판은 `~/gpu/mesa-vk.uncached-11118`로 남겼다. 위 벤치마크의 "지금" 값이 이 판이다.
+
+**층별 비용(`e850gpu/layercost.py resnet18`, 보드4, 캐시 끈 판, 관찰).**
+- 방법: ResNet18의 합성곱 20개와 FC 하나를 각각 층 하나짜리 망으로 만들어 잰다. 모델 안에서 받는 입력 모양과 같은 매개변수를 쓰고, 가중치는 난수다.
+  - CPU: NCNN FP16 4스레드, `taskset -c 4-7`, `OMP_PROC_BIND=close OMP_PLACES=cores`.
+  - GPU: NCNN Vulkan FP32(winograd 끔).
+  - 층 하나짜리 망은 입력을 올리고 출력을 내리는 비용도 든다. 같은 양을 옮기는 ReLU 망의 시간을 빼서 층 자체의 시간(net)을 얻는다(크기 5개에서 잰 값 사이를 보간).
+- 원자료: `msbench/results/layercost/e850-resnet18-20261126-165813.json`.
+
+| 층 종류 | 층 수 | CPU net ms (실효 GFLOPS) | GPU net ms (GFLOPS) | GPU/CPU |
+|---|---:|---|---|---:|
+| 7×7 s2 첫 층(3→64, 224) | 1 | 4.95 (47.7) | 79.1 (3.0) | 16.0 |
+| 3×3 s1 | 13 | 1.69~3.87 (60~137) | 37.0~47.3 (4.9~6.2) | 9.8~23.7 |
+| 3×3 s2 | 3 | 2.01~4.24 (27~58) | 19.7~24.2 (4.8~5.9) | 5.7~9.9 |
+| 1×1 s2 (shortcut) | 3 | 0.57~1.89 (7~23) | 1.11~2.46 (5~12) | 0.88~4.3 |
+| FC 512→1000 | 1 | 0.18 | 0.16 | 0.91 |
+| **합** | 21 | **51.2** | **674.2** | |
+
+- CPU의 "실효 GFLOPS"는 직접 합성곱의 연산 수를 시간으로 나눈 값이다. CPU의 3×3은 winograd를 쓰므로 A55 4코어 FP16 최고치를 넘는 것처럼 보인다.
+- 합(51.2 / 674.2 ms)은 모델 전체 시간(NCNN FP16 4스레드 약 50 ms, VK 655 ms)과 맞는다. 즉 시간 대부분이 합성곱이다.
+- **GPU의 3×3 합성곱은 약 6 GFLOPS다.** 최고치 38의 16%다. winograd를 끈 sgemm 경로이고, 1×1(최대 11.6 GFLOPS)보다도 낮다.
+- 컴파일러 정적 통계(`BIFROST_MESA_DEBUG=shaderdb`, 원자료 `msbench/results/layercost/e850-vk-shaderdb-20261127.txt`)로 원인을 짐작할 수 있다. 정적 추정이고, 실행 중 카운터는 재지 않았다.
+
+| 모델 | 셰이더 수 | 스필 있음 | 스레드 1개(점유 절반) | load/store 사이클 > 연산 사이클 | 큰 셰이더(300명령 이상) 연산/ld-st 비 중앙값 |
+|---|---:|---:|---:|---:|---:|
+| ResNet18 | 91 | 15 | 17 | 83 | 0.37 |
+| MobileNetV2 | 110 | 1 | 22 | 92 | 0.66 |
+| YOLO11n-320 | 160 | 15 | 38 | 149 | 0.53 |
+
+  - 거의 모든 셰이더에서 load/store 사이클이 연산 사이클보다 많다. ResNet18의 큰 셰이더는 연산이 load/store의 37%뿐이다. 즉 메모리 명령이 병목이다(가설: robustBufferAccess의 범위 검사 주소 형식과 NCNN의 pack4 버퍼 읽기).
+  - 큰 셰이더 일부는 레지스터가 모자라 스필하고(ResNet18 15개, 예: 9:38, 7:33), 스레드를 1개만 띄운다. 그러면 메모리 지연을 숨기지 못한다.
+- 층마다 이상적으로 나누면(GPU 몫 = t_cpu / (t_cpu + t_gpu), 동기화 0) 합은 51.2 → 45.7 ms로 1.12배다. 3×3 층의 GPU 몫은 4~14%, 1×1 shortcut과 FC는 19~53%다.
+
+**층별 비용, YOLO11n-320(`layercost.py yolo11n-320`, 보드4, 캐시 + 직접 동기화 판, 관찰).**
+- 방법은 ResNet18과 같다. 원자료: `msbench/results/layercost/e850-yolo11n-320-20261126-182327.json`.
+- 처음에는 NCNN 안에서 segfault가 났다. `blob_shapes`가 임시 numpy 배열로 `ncnn.Mat`을 만들었는데, Mat은 그 메모리를 가리키기만 한다. 배열이 해제된 뒤 `in0`를 꺼내다 죽었다. 배열을 붙잡아 두게 고쳤다.
+  - ResNet18 판(같은 버그)은 죽지 않았다. 모양만 쓰는 함수라 결과는 그대로 맞다(가설: 해제된 메모리가 아직 매핑되어 있었다).
+
+| 층 종류 | 층 수 | CPU net ms 합 | GPU net ms 합 | GPU/CPU (최소 / 중앙 / 최대) |
+|---|---:|---:|---:|---|
+| 1×1 합성곱 | 46 | 19.0 | 68.0 | 0.90 / 4.55 / 37.9 |
+| 3×3 합성곱 | 35 | 25.3 | 211.9 | 2.14 / 7.8 / 17.7 |
+| depthwise | 7 | 0.5 | 2.4 | 1.34 / 8.73 / 100 |
+| **합** | 88 | **44.8** | **282.3** | |
+
+- CPU 합 44.8 ms는 모델 전체(NCNN FP16 4스레드 47~69 ms)의 대부분이다. GPU 합 282 ms와 모델 전체 VK 406 ms의 차는 합성곱 밖의 층과 층 사이 비용이다(계산).
+- GPU가 CPU보다 빠른 층은 3개이고 모두 1×1이다: `conv_32`(128×10×10), `conv_67`(64×40×40), `conv_70`(64×20×20). 비는 0.90~0.99라 거의 같다.
+- GPU/CPU 비가 2 미만인 층은 12개이고, CPU 시간 합은 9.8 ms다. 작은 1×1에서는 CPU 효율도 낮다(예: `conv_51` 192→128 20×20, 12.3 GFLOPS).
+- 층마다 이상적으로 나누면(동기화 0) 44.8 → 35.2 ms로 1.27배다. ResNet18(1.12배)보다 높다. 비 2 미만인 12층만 나눠도 이득 9.7 ms 중 4.3 ms다.
+- 다만 위 층 나누기 측정에서 실제 나누기는 층마다 0.1~1.4 ms의 함께 돌리는 비용과 1 ms 고정 비용이 붙었다. 그래서 지금 방식으로는 이 이득을 얻을 수 없다(계산).
+- 작은 층의 net 값은 믿기 어렵다. ReLU 망으로 잰 올리기·내리기 비용을 빼므로, 일부 1×1은 GPU net이 거의 0이 되어 GFLOPS가 270처럼 나온다. 합과 중앙값만 쓴다.
+
+**층 나누기 시제품(`e850gpu/splitconv.py`, 보드4, 관찰).**
+- 합성곱 하나의 출력 채널을 CPU 몫(NCNN FP16, CPU4~7 4스레드)과 GPU 몫(NCNN Vulkan, CPU3에 고정한 Python 스레드)으로 나눈다. 두 몫을 동시에 돌리고 결과를 이어 붙인다.
+- NCNN Python의 `extract`는 GIL을 푼다(바인딩 소스 요약에서 봄). 실제로 두 몫을 함께 돌린 시간이 두 몫의 합보다 짧았다. 예: 3×3 c128 hw28 GPU 8채널은 7.35 ms이고, 합은 9.78 ms다.
+- 오차는 float64 직접 합성곱 기준이다. GPU FP32는 1e-6 이하다. **NCNN CPU FP16(winograd)의 3×3은 최대 상대 오차 4.4~7.0%다.** 1×1은 0.2~0.5%다.
+- 코어 고정에서 두 번 틀렸다.
+  - 첫 판의 CPU 몫이 3배 느렸다. ssh 세션의 CPU 마스크가 0~6이라 `OMP_PLACES={4},{5},{6},{7}`에서 CPU7이 빠졌다(libgomp "Number of places reduced from 4 to 3"). 그래서 `taskset -c 3-7`로 띄운다.
+  - **GPU 스레드가 CPU4로 옮겨져 있었다.** `OMP_PROC_BIND`가 있으면 libgomp는 OpenMP 영역에 처음 들어온 스레드를 첫 place(CPU4)에 묶는다. GPU 스레드는 CPU3에 고정한 뒤 NCNN을 한 번 돌리자 affinity가 `[4]`가 되었다(`/proc/self/task/TID/stat`로 확인). CPU4는 CPU 몫의 스레드 하나가 도는 코어다. 다시 고정하면 그 뒤로는 CPU3에 머문다. 그래서 스크립트가 실행마다 다시 고정하게 고쳤다.
+- 원자료: `msbench/results/layercost/e850-split.jsonl`.
+  - 앞 18줄: 캐시 끈 드라이버, GPU 스레드 CPU4.
+  - 다음 24줄: 캐시 + 직접 동기화, GPU 스레드 CPU4.
+  - 마지막 20줄: 캐시 + 직접 동기화, GPU 스레드 CPU3. 아래 표는 이 20줄이다.
+  - 앞 42줄에는 `pin_note`를 달았다.
+- 표의 값은 모두 같은 방법(입력 → 두 몫을 함께 → 이어 붙이기, 30회 중앙값)으로 잰 시간(ms)이다. "CPU만"은 나누지 않은 것이다.
+
+| 층 (C, HW, O, k, s) | CPU만 | GPU 가장 작은 몫 | GPU 1/4 | GPU 1/2 | GPU만 |
+|---|---:|---:|---:|---:|---:|
+| 64, 56, 128, 1×1, 2 | **2.08** | 3.93 (8채널) | 4.76 | 5.59 | 6.28 |
+| 128, 28, 128, 3×3, 1 | **2.88** | 7.35 (8채널) | 14.40 | 21.51 | 40.99 |
+| 64, 56, 64, 3×3, 1 | **4.41** | 14.88 (16채널 = 1/4) | 14.88 | 22.07 | 44.09 |
+| 256, 14, 256, 1×1, 1 | **1.06** | 3.03 (16채널) | 4.12 | 4.72 | 6.19 |
+
+- **나누면 언제나 느려졌다.** GPU 몫만 따로 재면 가장 작은 몫도 2.0~13.7 ms다. CPU가 층 전체를 하는 시간(0.9~4.2 ms)보다 길다.
+- GPU 몫이 작아도 느린 까닭(계산): 입력 전체를 올리고(0.4~0.8 MB) 출력을 내리는 비용, extract 고정 비용 약 1 ms, 그리고 3×3의 낮은 GPU 효율이다.
+- 두 몫을 함께 돌린 시간은 느린 쪽 몫보다 1×1에서 0.6~1.4 ms, 3×3에서 0.1~1.2 ms 길었다. GPU 스레드가 CPU4에 있던 앞 판에서는 1×1이 1.4~2.5 ms였다.
+
+**가지 나누기 시제품(`e850gpu/branchsplit.py`, 보드4, 관찰).**
+- ResNet 다운샘플 블록 하나를 가지로 나눈다. 블록은 입력 C×HW에서 출력 2C×HW/2를 낸다.
+  - CPU(NCNN FP16, CPU4~7 4스레드)는 본 경로를 맡는다: 3×3 s2 → ReLU → 3×3.
+  - 같은 시간에 GPU(NCNN Vulkan, CPU3의 Python 스레드)는 1×1 s2 shortcut을 맡는다.
+  - 두 출력을 호스트에서 더한다. 가중치는 난수이고, float64 기준과 비교했다(상대 오차 0.9~5%, CPU FP16 몫).
+- 위의 GPU 스레드 고정 고침을 넣은 판이다. 원자료는 `msbench/results/layercost/e850-branch.jsonl`의 마지막 3줄이고, 앞 11줄은 GPU 스레드가 CPU4에 있던 판이다.
+- 30회 중앙값(ms)이다. "넘겨주기만"은 GPU 스레드가 아무것도 하지 않을 때, 본 경로에 같은 barrier 두 번을 붙인 시간이다.
+
+| 블록 (C, HW) | CPU가 블록 전체 | CPU 본 경로만 | GPU shortcut만 (GPU 스레드 CPU 시간) | 넘겨주기만 | 나눠서 |
+|---|---:|---:|---:|---:|---:|
+| 64, 56 | **5.63** | 4.97 | 6.31 (2.94) | 6.03 | 8.53 |
+| 128, 28 | **4.73** | 4.48 | 5.47 (2.62) | 5.14 | 6.37 |
+| 256, 14 | **7.61** | 7.36 | 5.25 (1.92) | 7.99 | 8.00 |
+
+- **가지로 나눠도 세 블록 모두 느려졌다**(+5~52%).
+- 앞 두 블록은 GPU shortcut 하나가 CPU 본 경로보다 길다. 입력 올리기와 고정 비용 때문이다(계산).
+- 셋째 블록은 GPU 쪽이 먼저 끝난다. 그런데도 "넘겨주기만"(7.99 ms)과 같은 8.00 ms가 됐다. 즉 GPU 일은 완전히 겹쳤고, 늘어난 것은 넘겨주기 비용뿐이다.
+- 넘겨주기 비용은 Python barrier 두 번과 다른 코어의 스레드 깨우기다. 0.6~1.1 ms로, 1×1 층 하나의 CPU 시간과 비슷하다.
+  - GIL 전환 간격을 0.1 ms로 줄여도 같았다(GPU 스레드가 CPU4에 있던 판에서 잼).
+  - 이 비용은 Python 시제품의 몫이다. C++에서 futex나 spin으로 넘기면 수십 µs일 것이다(가설, 재지 않음).
+- GPU 경로는 shortcut 한 번에 CPU3 시간 1.9~2.9 ms를 쓴다(`time.thread_time`). 입력을 올리고, 제출하고, 출력을 내리고 캐시를 정리하는 일이다. GPU에 맡겨도 CPU 일이 0이 되지 않는다.
+
+**FP16 phi 실험(실패, 고치지 않고 되돌림).**
+- 가설: Bifrost는 벡터화(`nir_opt_vectorize`) 전에 phi를 모두 스칼라로 쪼갠다. 그래서 반복문 누적값이 v2f16로 묶이지 않는다. 묶이면 mediump FMA가 2배가 될 수 있다.
+- 시도: 환경 변수 `BI_F16_PHI`로, (1) Bifrost 백엔드의 `nir_lower_phis_to_scalar`에서 16비트 phi를 남기고, (2) GLSL 링커 최적화 반복(`gl_nir_linker.c`)의 phi 쪼개기도 건너뛰었다. 보드4의 따로 둔 GL Mesa(`~/gpu/mesa-f16`, `-f16b`, `-f16c`)로 쟀다.
+- 결과: gltest mediump는 세 판 모두 38.0 GFLOPS 그대로였다. 셰이더 덤프에서 누적값은 여전히 16비트 스칼라 레지스터 16개(`decl_reg vec1 16`)였다.
+- 결론: 쪼개는 곳이 더 앞에 있다. 찾지 못했다. 코드는 Mesa 트리에서 되돌렸고 패치에 넣지 않았다.
+
+**CPU와 GPU를 함께: 프레임 단위(`e850gpu/corun.py`, 보드4, 관찰).**
+- 방법: 한 조합마다 CPU 워커만 30초, GPU 워커만 30초, 둘을 함께 30초 돌린다. 워커는 따로 된 프로세스이고, 같은 평가 이미지 하나를 쉬지 않고 추론한다.
+  - CPU 워커: NCNN FP16 4스레드, CPU4~7.
+  - GPU 워커: TFLite GL FP16 또는 NCNN Vulkan FP32. CPU 폴백 4스레드는 CPU0~3이다.
+  - 배경은 11.116과 같다(현미경 뷰어 + Chrome, 약 1코어). GPU는 1001 MHz로 잠겨 있었다(데스크톱 X).
+- 첫 판(00:34 KST): CPU 워커에 코어 묶기가 없었다. 그래서 YOLO CPU 워커가 11.116의 꼬리(p90 409 ms)를 겪었다. 이 판의 YOLO 조합 둘은 판단에 쓰지 않는다. 같은 모델 YOLO 조합에서는 함께 돌릴 때 오히려 CPU가 2배 빨랐는데, 이는 꼬리가 사라진 탓으로 본다(가설).
+- 둘째 판(02:13~02:36 KST): CPU 워커에 `OMP_PROC_BIND=close OMP_PLACES=cores`를 주었다. NCNN Vulkan은 캐시 + 직접 동기화 판이다.
+- 셋째 판(04:00 KST): 둘째 판과 같은 방법으로 TFLite GL의 MobileNetV2·ResNet18을 다시 쟀다. 첫 판의 이 둘은 코어 묶기가 없었다.
+- 원자료: `msbench/results/corun/e850-20261126-153452.json`(첫 판), `e850-20261126-173622.json`(둘째 판), `e850-20261126-190148.json`(셋째 판).
+
+| 조합 (CPU 모델 : GPU 모델, GPU 런타임) | CPU 워커 혼자 → 함께 (초당 추론) | GPU 워커 혼자 → 함께 | GPU 워커 프로세스 코어 | 처리량 합 / CPU 혼자 |
+|---|---|---|---:|---:|
+| ResNet18 : ResNet18, VK FP32 | 20.59 → 19.06 (−7.4%) | 1.53 → 1.53 | 0.03 | **+0.0%** |
+| MobileNetV2 : MobileNetV2, VK FP32 | 44.56 → 42.05 (−5.7%) | 7.20 → 6.87 | 0.17 | +9.8% |
+| YOLO11n-320 : 같은 모델, VK FP32 | 20.91 → 19.68 (−5.9%) | 2.64 → 2.54 | 0.32 | +6.2% |
+| YOLO11n-320 : 같은 모델, GL FP16 분할 2 | 21.00 → 19.34 (−7.9%) | 3.88 → 3.67 | 0.59 | +9.5% |
+| YOLO11n-320 : ResNet18, VK FP32 | 21.14 → 19.90 (−5.9%) | 1.53 → 1.53 | 0.03 | (다른 모델) |
+| YOLO11n-320 : ResNet18, GL FP16 | 20.95 → 18.82 (−10.2%) | 1.90 → 1.84 | 0.02 | (다른 모델) |
+| (셋째 판) ResNet18 : ResNet18, GL FP16 | 20.30 → 18.17 (−10.5%) | 1.89 → 1.86 | 0.02 | **−1.4%** |
+| (셋째 판) MobileNetV2 : MobileNetV2, GL FP16 | 45.67 → 40.99 (−10.3%) | 14.44 → 13.49 | 0.32 | **+19.3%** |
+| (첫 판, 코어 묶기 없음) ResNet18 : ResNet18, GL FP16 | 18.26 → 17.31 (−5.2%) | 1.90 → 1.86 | 0.02 | +5.0% |
+| (첫 판, 코어 묶기 없음) MobileNetV2 : MobileNetV2, GL FP16 | 41.46 → 40.42 (−2.5%) | 14.61 → 13.64 | 0.32 | +30.4% |
+
+- 코어 묶기를 하니 YOLO11n-320 CPU 워커는 21 ips(중앙값 47.4 ms, p90 49.7 ms)로 안정됐다. 묶지 않은 첫 판은 7.2 ips, p90 409 ms였다.
+- **코어를 묶은 판에서 GPU 워커가 돌면 CPU 워커는 5.7~10.5% 느려진다.** GPU 워커 프로세스의 CPU 사용은 0.02~0.59코어이고, CPU0~3에서 돈다. ResNet18 GPU 워커는 0.03코어인데도 CPU 워커가 7.4% 느려졌다. 처음에는 DRAM 공유를 의심했다. 아래 시험에서 열 제한이 더 크게 나왔다.
+- GPU 워커는 함께 돌려도 0~6.7%만 느려졌다.
+- 첫 판의 MobileNetV2 GL이 +30%였던 것은 CPU 워커가 묶이지 않아 혼자일 때 느렸기(41.5 ips, 묶으면 45.7) 때문이다. 같은 조건의 셋째 판은 +19%다.
+- **순이득은 대략 "GPU 처리량 ÷ CPU 처리량 − 6~12%"다**(계산, 코어를 묶은 판). 빼는 몫이 CPU 워커가 잃는 처리량이고, 아래 한 프로세스 실험에서 그 몫이 CPU 클럭 하락과 맞았다. 같은 모델 조합의 GPU/CPU 처리량 비와 이득은 다음과 같다.
+  - MobileNetV2 GL: 32% → +19%.
+  - YOLO GL 분할 2: 18% → +9.5%.
+  - MobileNetV2 VK: 16% → +10%.
+  - YOLO VK: 13% → +6%.
+  - ResNet18 GL: 9.3% → −1.4%.
+  - ResNet18 VK: 7.4% → 0%.
+- 다른 모델을 나눠 맡기는 경우(YOLO는 CPU, ResNet18은 GPU)는 CPU 검출이 6~10% 느려지는 대신 분류 1.5~1.8 ips가 CPU 시간 거의 없이 더해진다.
+
+**GPU가 바쁠 때 CPU가 느려지는 까닭(`gltest load`, 보드4, 관찰).**
+- `gltest`에 `load fma|copy SECS` 모드를 넣었다. GPU에 한 가지 일만 계속 준다(CPU0에서 띄움).
+  - fma: 메모리를 거의 쓰지 않는 FMA 셰이더다. 37.6 GFLOPS를 유지했다.
+  - copy: 64 MB 버퍼 복사다. DRAM 5.6~5.9 GB/s(읽기 + 쓰기)를 유지했다.
+- 그동안 CPU 워커(NCNN FP16 4스레드, CPU4~7, `corun.py worker`)를 30초씩 돌렸다. "혼자"는 앞뒤 두 번의 평균이다.
+- 원자료: `msbench/results/corun/e850-gpuload-20261127.txt`(스크립트, 출력, 클럭·온도 표본).
+
+| CPU 워커 모델 | 혼자 (초당 추론) | GPU fma 중 | GPU copy 중 |
+|---|---:|---:|---:|
+| ResNet18 | 20.42 | 18.92 (−7.4%) | 13.34 (−34.7%) |
+| YOLO11n-320 | 20.18 | 18.73 (−7.2%) | 15.14 (−25.0%) |
+| MobileNetV2 | 44.03 | 38.96 (−11.5%) | 32.30 (−26.6%) |
+
+- **메모리를 쓰지 않는 GPU 일만으로도 CPU가 7~12% 느려진다.** 이것은 열 제한이다. ResNet18 워커 20초 동안 0.5초마다 표본을 떴다:
+  - 혼자: CPU4 평균 1626 MHz(1586~2002), LITTLE1 평균 87.2°C(최대 91.0), G3D 74.8°C. 혼자 돌려도 이미 최고 클럭 아래다.
+  - GPU fma 중: CPU4 평균 1342 MHz(1053~1846, −17%), LITTLE1 90.7°C(최대 93.0), G3D 87.3°C.
+  - LITTLE1 트립 온도는 76·81·86·91·96°C다. GPU가 칩을 데워 CPU 클러스터 클럭이 내려간다.
+  - MIF(1539 MHz)와 INT(667 MHz)는 최대로 고정되어 있었다(데스크톱 X). 메모리 버스 DVFS 탓은 아니다.
+- DRAM을 많이 쓰는 GPU 일은 25~35%를 깎는다. 열과 DRAM 공유가 겹친 값이다. 둘을 나눠 재지는 않았다.
+- corun의 GPU 워커(NCNN Vulkan·TFLite GL)가 깎은 5.7~10.5%는 fma 쪽(7~12%)에 가깝다. corun 때는 클럭을 재지 않았다. 아래 한 프로세스 실험에서 클럭을 함께 재어 확인했다.
+- 보드4의 방열판·바람 같은 냉각 조건은 확인하지 않았다. 냉각이 좋으면 프레임 단위 이득이 커질 것이다(가설).
+
+**한 프로세스 안에서 함께 돌리기(`e850gpu/cothread.py`, 보드4, 관찰).**
+- NCNN을 넓힌다면 CPU와 GPU가 한 프로세스에서 프레임을 나눠 맡을 것이다. 그래서 corun을 한 프로세스의 두 스레드로 다시 했다.
+  - CPU 일: NCNN FP16 4스레드, OpenMP place CPU4~7.
+  - GPU 일: NCNN Vulkan FP32 1스레드, Python 스레드를 실행마다 CPU3에 다시 고정.
+  - 혼자 30초씩, 함께 30초 돌렸다. 0.5초마다 CPU4 클럭과 온도 표본을 떴다.
+- **첫 판은 CPU 일을 새 Python 스레드에서 돌렸는데, 혼자서도 30% 느렸다.** MobileNetV2가 27 ips(별도 프로세스는 44)였다.
+  - 원인(관찰): 모델을 읽을 때 주 스레드가 libgomp 풀을 만든다(CPU5~7). 새 스레드가 OpenMP를 쓰면 같은 코어에 풀이 하나 더 생긴다.
+  - 그러면 OpenMP 스레드 수가 쓸 수 있는 CPU보다 많아진다. libgomp는 이때 짧게만 돌고 잠든다(throttled spin).
+  - 같은 프로세스에서 주 스레드는 21 ms, 새 스레드는 27~30 ms였다. 새 스레드의 프로세스 코어는 2.61이었다(주 스레드 3.91).
+  - `OMP_WAIT_POLICY=active`로 돌게 하면 새 스레드는 48.8 ms로 더 느려졌다. 쉬던 주 스레드 풀이 CPU5~7에서 계속 돌며 다퉜기 때문이다.
+  - malloc 아레나 탓은 아니다: `MALLOC_ARENA_MAX=1`로도 같았고, 페이지 폴트는 추론당 0~3번이었다.
+  - 고침: CPU 일은 주 스레드에서, GPU 일만 새 스레드에서 돌린다. 첫 판 결과는 `msbench/results/corun/e850-thread-20261126-184141.json`에 `note`를 달아 남겼다.
+- 고친 판: `msbench/results/corun/e850-thread-20261126-185116.json`.
+
+| 조합 (CPU : GPU) | CPU 혼자 → 함께 (초당 추론) | GPU 혼자 → 함께 | 합 / CPU 혼자 | CPU4 평균 클럭 혼자 → 함께 | LITTLE1 °C 혼자 → 함께 |
+|---|---|---|---:|---|---|
+| MobileNetV2 : MobileNetV2 | 44.90 → 40.43 (−10.0%) | 7.28 → 6.93 | +5.5% | 1670 → 1483 MHz (−11%) | 86.0 → 89.5 |
+| ResNet18 : ResNet18 | 19.85 → 17.98 (−9.4%) | 1.54 → 1.53 | −1.7% | 1567 → 1343 MHz (−14%) | 88.6 → 89.3 |
+| YOLO11n-320 : YOLO11n-320 | 20.41 → 18.57 (−9.0%) | 2.78 → 2.67 | +4.1% | 1601 → 1422 MHz (−11%) | 87.3 → 89.2 |
+| YOLO11n-320 : ResNet18 | 20.38 → 18.77 (−7.9%) | 1.55 → 1.54 | (다른 모델) | 1593 → 1428 MHz (−10%) | 87.4 → 88.9 |
+
+- **CPU가 잃는 몫(8~10%)은 같은 시간의 CPU4 클럭 하락(10~14%)과 맞는다.** GPU가 돌면 G3D가 74~77°C에서 83~85°C로 오르고, CPU 클러스터가 트립 온도(86·91°C) 근처에서 클럭을 내린다. 이로써 corun 손실의 주원인이 열이라는 것을 함께 돌리는 실험 안에서 확인했다.
+- 이득은 별도 프로세스(corun 둘째 판)보다 조금 작다: MobileNetV2 +5.5%(+9.8%), YOLO +4.1%(+6.2%), ResNet18 −1.7%(+0.0%). 두 판은 시각과 열 상태가 다르고, GPU 쪽 CPU 폴백 스레드도 1개 대 4개로 다르다. 한 번씩만 쟀으니 이 차이는 잡음 범위일 수 있다(가설).
+- 한 프로세스에서 쓰려면 지켜야 할 것 둘(관찰):
+  - CPU 추론은 OpenMP 풀을 만든 스레드(주 스레드)에서 한다.
+  - GPU를 부리는 스레드는 실행마다 다시 고정한다.
+  - NCNN에 넣는다면 GPU 제출을 OpenMP 밖의 전용 스레드가 맡게 하는 것이 맞다(가설).
+
+**논문 관점 정리("NCNN의 분산 처리를 GPU까지", 측정과 계산, 가설은 표시).**
+- **E850 GPU를 쓸 수 있는 길은 생겼다.** NCNN이 수정 없이 Vulkan(panvk)으로 Mali-G52를 쓰고, 정확도는 CPU FP32와 같다. 다만 Mesa 고침 셋, 캐시 동기화, winograd 끄기가 필요했다.
+- **프레임·모델 단위로 함께 돌리면 이득이 있다(코어를 묶은 판에서 −2~+19%).** 이득은 GPU가 그 모델을 CPU에 비해 얼마나 빨리 하는지와 CPU가 잃는 5~10%로 정해진다. CPU가 잃는 몫은 주로 열 제한이다. GPU fma만 돌려도 CPU 클럭이 −17%였고, 한 프로세스 실험에서도 CPU 손실 8~10%가 클럭 하락 10~14%와 맞았다. 이 보드에서는 열이 CPU와 GPU가 나눠 쓰는 자원이다. 그래서 "GPU에 맡길 모델"을 고르는 규칙이 필요하다. 위 계산으로는 GPU/CPU 처리량 비가 6~12%를 넘어야 한다.
+- **한 층을 CPU와 GPU가 나누면 지금은 언제나 손해다.**
+  - 이상적으로 나눠도(동기화 0) ResNet18은 1.12배, YOLO11n-320은 1.27배다.
+  - 실제로 나누면 GPU 몫 하나가 CPU의 층 전체보다 오래 걸린다(2.0~13.7 ms 대 0.9~4.2 ms).
+  - ResNet 블록을 가지로 나눠도(GPU가 1×1 shortcut) 세 블록 모두 느려졌다(+5~52%). GPU가 먼저 끝나는 블록에서도 넘겨주기 비용(Python 시제품에서 0.6~1.1 ms)만큼 늘었다.
+  - 원인(관찰): GPU 3×3 합성곱 효율이 6 GFLOPS(최고치 16%)다. GPU 호출 한 번에 약 1 ms 고정 비용이 든다. 층마다 입력을 올리고 출력을 내려야 하고, 그 일에 CPU 시간도 1.9~2.9 ms 든다. 넘겨주기(동기화) 비용이 1×1 층 하나의 시간과 비슷하다.
+- **층 분할이 이득이 되려면(가설, 다음 실험 후보):**
+  1. GPU 몫을 여러 층에 걸쳐 GPU에 머물게 해서 호출과 전송을 줄인다. 일반 합성곱은 다음 층이 모든 입력 채널을 읽으므로, 채널로 나누면 층마다 합쳐야 한다. 여러 층을 이어 가려면 공간(행)으로 나누고, 층마다 경계 몇 줄(halo)만 주고받는다.
+  2. 넘겨주기를 NCNN 안(C++)에서 한다. Python barrier 대신 futex나 spin으로 넘기면 0.6~1.1 ms가 수십 µs로 줄 것이다(가설). 가지 나누기의 이상적인 최대 이득은 1×1 세 개의 CPU 시간(약 3.7 ms)이니 ResNet18 약 50 ms의 7%다(계산). 그래서 넘겨주기와 올리기·내리기가 거의 0이어야 의미가 있다.
+  3. GPU 합성곱 효율을 올린다. 셰이더가 load/store에 묶여 있고 일부는 스필한다(위 shaderdb). 그래서 Bifrost용으로 메모리 읽기를 줄인 sgemm(타일을 레지스터에 더 오래 두기)이 먼저다. GPU winograd도 후보다(4×4는 컴파일이 끝나지 않고, 2×2는 `JOB_READ_FAULT`). 이론상 3×3의 곱셈이 4배(4×4) 또는 2.25배(2×2) 준다.
+  4. 층마다 비용 모델로 나눌 층만 고른다. 1×1, FC처럼 GPU/CPU 비가 1 근처인 층이다(`layercost.py`가 그 표를 준다).
+  5. 이 SoC는 CPU와 GPU가 같은 DRAM을 쓰므로 복사 없는 공유 버퍼가 가능하다. NCNN의 올리기·내리기 대신 같은 메모리를 양쪽이 보게 한다. 다만 GPU가 IO-coherent가 아니어서 캐시 동기화(이번에 넣은 flush·invalidate)가 필요하다.
+- 비교 대상 연구(CoDL, μLayer 등)는 다른 SoC와 프레임워크(모바일 GPU + OpenCL)에서 층 분할 이득을 보고했다. E850에서는 GPU가 CPU에 비해 훨씬 약하다(38 GFLOPS 대 A55 4코어 FP16 약 124 GFLOPS 최고치, 계산). 이 차이를 논문의 조건으로 적어야 한다(가설: 그 연구들의 GPU/CPU 비가 더 컸다. 수치는 확인하지 않음).
+
+**코드 고친 것(이 절).**
+- `tools/gpu/mesa-kbase-g52-e850.patch`(Mesa 트리 `git diff`로 다시 만듦):
+  - shim의 SYNCOBJ_RESET·SIGNAL과 drm-shim `core_ioctls[]` 크기(위 1, 2).
+  - `nir_lower_explicit_io` 메타데이터(위 3).
+  - panvk의 캐시 메모리 종류, flush·invalidate, `PAN_BO_E850_CACHED` / `PANFROST_BO_E850_CACHED`(위 "고친 것 2").
+  - 보드의 GL Mesa(`~/gpu/mesa-kbase`)는 이 패치로 다시 빌드하지 않았다. 실험용 GL 빌드(`mesa-f16*`, 이 패치의 shim·pan_bo 변경 포함)에서 gltest는 `RESULT OK`였다. 데스크톱 렌더링 시험(`run-test.sh`)은 하지 않았다.
+- `e850gpu/layercost.py`: 입력 배열을 붙잡아 두게 고쳤고(위 segfault), 필요한 블롭만 꺼낸다.
+- `e850gpu/gltest.c`: `load fma|copy SECS` 모드. 보드4의 예전 바이너리는 `~/msbench/e850gpu/gltest.11117`로 남겼다.
+- `e850gpu/cothread.py`(새): 프레임 단위 동시 실행을 한 프로세스 안의 두 스레드로 한다.
+- `msbench/e850gpu/`: 새로 `build-panvk.sh`, `vk-env.sh`, `corun.py`, `layercost.py`, `splitconv.py`, `branchsplit.py`. `gpucheck.py`에 `vk` 모드를 넣었다. `splitconv.py`·`branchsplit.py`는 GPU 스레드를 실행마다 CPU3에 다시 고정한다(libgomp 다시 묶기).
+- `benchmark/runtimes.py`: `NCNNVK`, `NCNNVK16`, `E850GPU`에 `ncnn-vk`를 넣었다.
+- `benchmark/run_benchmark.py`: E850의 `--runtime gpu`는 TFLite GL만 고른다. `ncnn-vk`는 환경(`LD_PRELOAD`)이 달라 이름으로만 고른다.
+- `dashboard/tables.py`, `dashboard/generate_report.py`: NCNN Vulkan 행을 GPU 행으로 보인다(H2D·계산·D2H는 N/A). N/A 목록을 고쳤다.
+- `msbench/README.md`: 장비 GPU 행, 런타임 표, `e850gpu/` 설명, N/A 표, Phase 7 상태.
+
+**보드에 바꾼 것.**
+- 보드4:
+  - `~/gpu/mesa-vk`(지금 판: 캐시 + 직접 동기화), `~/gpu/mesa-vk.uncached-11118`(캐시 끈 앞 판), `~/gpu/mesa-vk2`(같은 고침의 진단 출력 판).
+  - `mesa-vk.uncached-11118/icd.json`은 이름을 바꾼 뒤에도 `~/gpu/mesa-vk/lib`를 가리키고 있었다. 제 폴더를 가리키게 고쳤고, 원래 파일은 `icd.json.bak-pointed-to-mesa-vk`로 남겼다. 기록한 결과 중 이 폴더로 돌린 것은 winograd 2×2 비교뿐이고, 고친 뒤에 돌렸다.
+  - 실험용 GL Mesa `~/gpu/mesa-f16`, `mesa-f16b`, `mesa-f16c`(FP16 phi 실험, 쓰지 않음).
+  - `~/msbench/e850gpu/`(위 스크립트), `benchmark/` 갱신, 결과 파일(`results/raw`, `det`, `corun`, `layercost`).
+  - `/var/tmp/`: 시험 스크립트(`vktiny*.py`, `vkconv*.py`, `vkpad*.py`, `vkopt.py`, `vkopt-sg.py`, `vkopt-run*.sh`, `lc-yolo.sh`, `gpuload.sh`, `gpuload-clk.sh`, `cothread.sh`)와 로그(`vkopt*.log`, `lc-yolo.log`, `gpuload.log`, `clk-*.txt`, `cothread*.log`, `corun3.log`, `bench-vk2.log`), SPIR-V 덤프(`spv`, `spv2`), 셰이더 덤프(`f16dump*.txt`), 로그, tgz.
+  - 시스템 파일과 데스크톱 GL Mesa(`~/gpu/mesa-kbase`)는 바꾸지 않았다. 현미경 뷰어와 Chrome은 그대로 두었다.
+- Mac: `~/e850-gpu/`(Mesa 트리, `build-vk`, `build-f16` 빌드 디렉터리, `out/`), `~/e850-gpu/ncnn-src/`(참고용 NCNN 소스 몇 개), `~/e850-logs/msbench/work/det-e850vk/`(앞 판), `det-e850vk-sync/`(지금 판), `~/e850-logs/msbench/layercost-superseded/`(GFLOPS 단위를 잘못 쓴 첫 layercost 결과).
+
+### 11.119 보드6을 보드3에 전체 복제 (2026-11-27)
+
+**요청.** 사용자가 보드3(192.168.0.234)을 Mac에 꽂고 보드6을 그대로 복사하라고 했다. 절차는 [BOARD-CLONE.md](BOARD-CLONE.md) 12장이다. 11-24 이미지(`clone-20261124-b6`) 이후 보드6에서 바뀐 파일이 많아서(`/home` 1,508개, `/var/tmp` 97, `/var/lib` 54, `/usr` 25, `/opt` 14, `/etc` 6) 보드6에서 새로 받았다.
+
+**보드3이 initramfs에 멈춤(관찰).**
+- 전원을 넣은 부팅에서 Linux가 10.07 s에 `mmcblk0` 0번 섹터 읽기 I/O 오류(`blk_update_request: I/O error, dev mmcblk0, sector 0`)를 냈다. 파티션이 하나도 잡히지 않았고(`/proc/partitions`에 `mmcblk0p*` 없음), initramfs가 `waiting for PARTLABEL=userdata`에서 기다렸다. ACM에는 initramfs root 셸이 떴다.
+- 보드4도 11.102에서 한 번 비슷하게 eMMC 문제로 initramfs에 떨어졌다. 원인은 확인하지 않았다. 이어진 굽기와 다음 부팅에서는 오류가 없었다.
+- 그래서 보드3의 옛 자료는 백업하지 못했다. 11-23에 보드3에서 받은 이미지(`~/e850-logs/clone-20261123/`)는 남아 있다. 그 뒤 보드3에서 바뀐 것은 이번 복제로 없어졌다.
+
+**과정.**
+- fastboot: initramfs 셸에서 `to-fastboot`(`/bin/to-fastboot`)를 실행했다. 약 35초 뒤 fastboot에 `00000a749c9c23e0`(보드3)이 보였다.
+- boot: `~/e850-logs/boot-nocpu/boot.img`를 구웠다(OKAY, 2.4 s).
+- rootfs 받기:
+  - 보드6 root가 필요했다. 사용자가 Mac 터미널에서 `sudo systemd-run --unit=rootfs-send …`를 직접 실행했다. 비밀번호는 저장소와 보드에 남기지 않았다.
+  - 17:00:10 KST에 시작했다. 8,221,388,800바이트를 2,576 s(3.2 MB/s)에 받았고, md5 `bd019b52…`가 보드6의 `rootfs-send.md5`와 같다.
+  - 그동안 보드3은 LK fastboot에서 43분 기다렸다. 문제는 없었다(관찰).
+- 이미지: `~/e850-logs/clone-20261127-b6/`(권한 700, README.txt).
+  - `BLOCKS=3145728`(12 GiB)로 만들었다. 사용량이 7.7 GB라 전처럼 10 GiB로 하면 78%가 차기 때문이다.
+  - `MACHINE_ID`는 보드3 것(`16314a5388d4ae81da9694fe6a29e30b`, 11-23 tar의 `/etc/machine-id`)을 주었다. 그래서 DHCP 주소 .234가 유지됐다.
+  - 경고 0, e2fsck 깨끗. 조각은 12개(0~11)다.
+- 굽기: 12조각 모두 OKAY였다. 합계 1,884 s이고, 조각마다 29~240 s 걸렸다. `fbmini reboot` 뒤 45초 안에 Wi-Fi .234로 나왔다.
+
+**확인(관찰).**
+- machine-id는 보드3 것이다. `systemctl is-system-running` = running이고 failed 유닛은 0이다. 명령줄에 `cgroup_disable=cpu`가 있다. 루트는 12G 중 7.8G를 쓴다.
+- 파일 비교: manifest 44,123개 가운데 philip으로 읽을 수 있는 44,019개의 md5가 모두 같다. 나머지 104개는 root만 읽을 수 있어 비교하지 못했다. ACM이 없고(`e850-scope`가 USB 호스트를 가져감), 보드3 sudo는 쓰지 않았다.
+- 서비스: 떠 있는 서비스 목록이 보드6과 같다. 보드6에만 있는 `e850-dvs`는 GPU 데스크톱이 센서를 보고 띄운 임시 유닛(`/run/systemd/transient`, `dvs --auto`)이라 이미지와 관계없다.
+- 확인하지 않은 것: HDMI 화면, GPU 데스크톱(`e850-x`), 현미경 뷰어 실제 동작, BT.
+
+**보드3에 바뀐 것.**
+- 보드3은 이제 보드6 전체 복제본이다(DVS 데스크톱 + 현미경 뷰어 + `bt`·`dvs` 기능 + `e850-wifiwatch` + Chrome GPU + `dvsgl`). boot는 `boot-nocpu`다.
+- 부팅 때 `e850-scope`가 USB 호스트를 가져가서 ACM이 없다. root가 필요하면 ssh에서 sudo로 한다.
+- 보드3에는 DVS 센서가 없다.
+- `resize2fs`: 사용자가 sudo로 했다. 루트가 54G가 됐고 43G가 남았다(관찰, 같은 날).
+- 아직 안 한 것: BT 기기 다시 페어링.
+
+**그 밖에 바꾼 것.**
+- 처음에는 보드4에 복제하려 해서 보드4의 11.118 자료(결과, panvk 빌드 3벌, 11-25 이후 `/var/tmp` 파일)를 Mac `~/e850-logs/board4-backup-20261127/board4-20261127.tgz`(193 MB)에 받아 두었다. 보드4는 바꾸지 않았다.
+- Mac `~/e850-logs`에서 17:19에 하위 디렉터리 12개가 없어졌다. 11-14·11-15 복제 디렉터리와 옛 boot 디렉터리(`boot-dvs`, `boot-dvs2`, `boot-mpidr`, `boot-c2t` 등)다. 이 작업과 별도로 정리한 것이다(CLAUDE.md "로그와 백업 위치"에 같은 날 적혀 있다). `boot-dvs3`, `boot-nocpu`, `boot-nokvm`(복구용)은 남아 있다.

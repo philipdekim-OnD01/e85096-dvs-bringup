@@ -232,3 +232,8 @@ for f in $(ls $D/part.simg.* | sort -t. -k3 -n); do ~/e850-logs/fbmini flash use
 - 첫 부팅은 23.84 s에 MFC 경합으로 패닉했다(11.102). 다음 부팅은 eMMC 시간 초과로 initramfs에 떨어졌다. 워치독이 fastboot로 보냈고, `fastboot reboot` 뒤 정상이었다.
 - 굽고 나서 바로 Wi-Fi에 나오지 않으면 Mac의 ACM(`/dev/cu.usbmodeme850_961`)을 본다. 이때 ACM이 보이면 initramfs 셸이다(Debian이면 `e850-scope`가 USB를 가져간다). 셸에서 `dmesg`를 보고, 워치독 리셋을 기다리거나 다시 부팅한다.
 - 확인: manifest 42,074개 파일이 모두 같았다. 서비스 상태가 원본과 같고, failed 유닛은 0이었다.
+
+**보드3에 구운 기록(2026-11-27, E85096-LINUX510-BOOT.md 11.119).**
+- 보드6에서 새로 받은 판이다: `~/e850-logs/clone-20261127-b6/`(rootfs.tar md5 `bd019b52…`, 8.2 GB, 3.2 MB/s). 사용량이 7.7 GB라 `BLOCKS=3145728`(12 GiB)로 만들었고, 조각은 12개다.
+- 보드3은 전원을 넣었을 때 eMMC 읽기 오류로 initramfs 셸에 떨어져 있었다. 거기서 `to-fastboot`을 실행했다. 보드6 `rootfs-send`는 사용자가 sudo로 띄웠다. 받는 43분 동안 보드3은 fastboot에서 기다렸다.
+- 12조각 모두 OKAY였다(합계 1,884초). 45초 뒤 Wi-Fi에 나왔다. running, failed 0, philip이 읽을 수 있는 파일 44,019개가 manifest와 같았다.

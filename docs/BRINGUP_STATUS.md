@@ -1,6 +1,43 @@
-# E850-96 bring-up 현재 상태 (2026-11-26 KST)
+# E850-96 bring-up 현재 상태 (2026-11-27 KST)
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다.
+
+**2026-11-27(11.119):** 보드6을 보드3(192.168.0.234)에 전체 복제했다. 보드6에서 새로 받은 rootfs(8.2 GB, md5 보드6과 같음)로 12 GiB 이미지(`~/e850-logs/clone-20261127-b6/`)를 만들어 보드3 machine-id로 구웠다(12조각 모두 OKAY).
+- 보드3은 running이고 failed 0이다. 읽을 수 있는 파일 44,019개가 manifest와 같다(root 전용 104개는 비교 못 함).
+- 전원을 넣은 첫 부팅에서 eMMC 0번 섹터 I/O 오류로 initramfs에 멈췄다(원인 미확인). 그 셸에서 fastboot에 넣었다. 그래서 보드3의 옛 자료는 백업하지 못했다.
+- `resize2fs`는 사용자가 했다(54G, 43G 남음). 남은 일: BT 다시 페어링. 보드3에도 이제 ACM이 없다(`e850-scope`가 USB 호스트).
+
+**2026-11-27(11.118):** NCNN의 GPU 경로(Vulkan)를 E850 GPU에서 돌렸다. 논문 주제("NCNN의 분산 처리를 GPU까지")에 맞춰 CPU와 GPU를 함께 쓰는 방법을 쟀다(보드4, `msbench/e850gpu/`).
+- Mesa panvk(Vulkan)를 GL과 같은 트리·kbase shim으로 따로 빌드했다(`build-panvk.sh`, `vk-env.sh`). 데스크톱 GL Mesa는 건드리지 않았다.
+- Mesa에서 세 가지를 고쳤다: shim의 `SYNCOBJ_RESET`·`SIGNAL`, drm-shim ioctl 배열 크기, `nir_lower_explicit_io` 메타데이터(robustBufferAccess 범위 검사 뒤 패딩 합성곱이 틀리던 것).
+  - 그 뒤 NCNN이 수정 없이 Mali-G52를 쓰고, 출력과 정확도는 CPU FP32와 같다.
+  - winograd는 끈다. 4×4는 셰이더 컴파일이 끝나지 않고, 2×2는 `JOB_READ_FAULT`가 난다.
+- panvk에 "캐시됨, 비일관" 메모리 종류를 넣었다. flush·invalidate가 shim MEM_SYNC를 부른다(`PANFROST_BO_E850_CACHED`).
+  - extract 고정 비용이 3.05 → 0.99 ms가 됐다. 벤치마크는 1~7% 빨라졌고, 추론당 CPU 일은 9~30% 줄었다.
+- VK FP32 시간: YOLO11n-640 1251 ms, 320 406 ms, ResNet18 655 ms, MobileNetV2 142 ms. CPU 사용은 0.04~0.40코어다.
+  - TFLite GL FP16보다 느리다. ResNet18만 GL FP32보다 빠르다. FP16은 packed만 되어(16비트 연산 없음) FP32보다 느리다.
+- 프레임 단위로 CPU 워커와 GPU 워커를 함께 돌리면 처리량 합이 −2~+19% 바뀐다(`corun.py`, CPU 워커 코어 묶음). 가장 큰 것은 MobileNetV2 TFLite GL +19%다.
+  - CPU 워커가 5.7~10.5% 느려진다. 주원인은 열 제한이다.
+  - GPU가 메모리를 거의 안 쓰는 FMA만 돌려도 CPU4~7 클럭이 평균 −17%(91°C 근처), CPU 추론은 7~12% 느려진다(`gltest load`). DRAM 복사(5.8 GB/s)를 돌리면 25~35% 느려진다.
+  - 한 프로세스 판(`cothread.py`)에서도 CPU 손실 8~10%가 같은 시간의 클럭 하락 10~14%와 맞았다. 처리량 합은 MobileNetV2 +5.5%, YOLO11n-320 +4.1%, ResNet18 −1.7%였다.
+  - 순이득은 대략 "GPU 처리량 ÷ CPU 처리량 − 6~12%"다.
+- 층 하나를 나누면 언제나 느려졌다. 채널로 나누기(`splitconv.py`)와 ResNet 가지로 나누기(`branchsplit.py`) 둘 다다.
+  - 동기화 비용을 0으로 놓은 이상값도 ResNet18 1.12배, YOLO11n-320 1.27배다(`layercost.py`).
+  - 원인: GPU 3×3이 6 GFLOPS다. 호출마다 고정 비용 약 1 ms, 올리기·내리기 비용, Python 넘겨주기 0.6~1.1 ms가 붙는다.
+- 함정 셋:
+  - `OMP_PROC_BIND`를 쓰면 libgomp가 새 스레드를 첫 OpenMP 영역에서 첫 place(CPU4)에 묶는다. 따라서 GPU를 부리는 스레드는 실행마다 다시 고정한다.
+  - `ncnn.Mat(numpy 배열)`은 배열을 복사하지 않는다. 배열을 붙잡아 두어야 한다.
+  - NCNN CPU 추론을 주 스레드가 아닌 스레드에서 하면 30% 느리다. libgomp 풀이 둘이 되어 CPU5~7을 나눠 쓰고, 스레드가 CPU보다 많아 짧게만 돈다. CPU 추론은 풀을 만든 스레드에서 한다.
+- 아직 커밋하지 않았다.
+
+**2026-11-26(11.117):** E850 GPU(Mali-G52 MP1)로 AI를 돌려 E850 CPU·Jetson과 비교했다. 이미 있는 GLES 3.1(Mesa panfrost + kbase shim) 위에 TFLite GPU 위임자의 GL 백엔드를 직접 빌드해 얹었다(`msbench/e850gpu/`). 다른 SoC용 libmali(OpenCL)는 쓰지 않는다.
+- GPU 최고치는 FP32 38 GFLOPS(A55 약 2.5코어 몫)다. mediump도 같다: Mesa 22.2 컴파일러가 FP16을 둘씩 묶지 않는다(셰이더 덤프). 복사는 6.8 GB/s, dispatch는 0.1~0.23 ms다.
+- 출력과 정확도는 CPU FP32와 같다. YOLO11n-640 mAP50-95 0.4403, ResNet18 top-1 0.795다.
+- 보드4 GL FP16은 YOLO11n-640 1050 ms, 320 279 ms, ResNet18 525 ms, MobileNetV2 68.6 ms다. 모두 NCNN FP16 CPU(186 / 48.6 / 49 / 22 ms)보다 3~11배 느리다.
+- 대신 CPU를 적게 쓴다. ResNet18은 0.02코어, MobileNetV2는 0.39코어, YOLO11n-640은 0.39코어다.
+- YOLO는 GL에 TRANSPOSE·BATCH_MATMUL·상수 텐서 SUB가 없어 346개 중 301개만 GPU가 맡는다(`MSB_GL_PARTITIONS=2`; 기본 1이면 167개).
+- 보드6 실시간(DVS + AI 켬): GL FP16 분할 2는 3.15 fps에 0.45코어다. NCNN FP16 고정은 7.89 fps에 1.77코어다.
+- INT8은 GL에 정수 연산이 없어 N/A다. GPU 전력도 N/A다.
 
 **2026-11-26(11.116):** 명세 "E850 vs Jetson Multi-Sensor AI Runtime Benchmark"를 `msbench/`로 했다. Phase 1·2·3·7은 됐고, RQ1~RQ3는 실측으로 답했다. RQ4는 일부만 답했고, RQ5~RQ8은 N/A와 원인을 적었다. HTML 보고서는 `msbench/results/report.html`이다.
 - Phase 2(같은 COCO·Imagenette 입력, 4모델 × 8 CPU 설정 × 스레드 1/4/최대):

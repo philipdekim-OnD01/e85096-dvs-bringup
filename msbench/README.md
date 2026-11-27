@@ -10,7 +10,7 @@ E850-96(Exynos 850)과 NVIDIA Jetson에서 AI 영상처리 성능을 비교하�
 | CPU | Cortex-A55 ×8, 546~2002 MHz(schedutil) | 같음. 측정 때 CPU4~7은 1846 MHz | Cortex-A78AE ×6, 729~1344 MHz(nvpmodel 25W) | |
 | 메모리 | 3565 MB, zram | 같음 | 7485 MB | |
 | OS / 커널 | Debian 12, vendor 5.10.157, Python 3.11.2 | 같음 | Ubuntu 24.04.4, 6.8.12-tegra, L4T R39.2.1, Python 3.12.3 | |
-| GPU | Mali-G52(mali_kbase). OpenCL·Vulkan ICD 없음. GLES 3.1은 Mesa panfrost + kbase shim(`tools/gpu`)으로만 | 같음 | Ampere(nvgpu), 드라이버 595.78, CUDA 드라이버 API 13.2, Vulkan ICD 1개 | |
+| GPU | Mali-G52 MP1(mali_kbase). OpenCL 없음. GLES 3.1은 Mesa panfrost + kbase shim(`tools/gpu`), Vulkan은 같은 트리의 panvk를 따로 빌드(`e850gpu/build-panvk.sh`, Mesa가 미완성으로 표시). AI는 그 위의 TFLite GL(11.117)과 NCNN Vulkan(11.118) | 같음 | Ampere(nvgpu), 드라이버 595.78, CUDA 드라이버 API 13.2, Vulkan ICD 1개 | |
 | CUDA / TensorRT | 해당 없음 | 해당 없음 | 시스템에는 설치 안 됨(apt 후보 JetPack 7.2.2, TensorRT 11.4.1+cuda13.4). sudo 없이 홈 `~/jp`에 풀어 씀(아래, Phase 7) | |
 | DLA | 없음 | 없음 | 없음(Orin Nano에는 DLA가 없다) | |
 | 전력 측정 | **센서 없음** | 없음 | INA3221: VDD_IN, VDD_CPU_GPU_CV, VDD_SOC(사용자 권한으로 읽힘) | |
@@ -28,6 +28,8 @@ E850-96(Exynos 850)과 NVIDIA Jetson에서 AI 영상처리 성능을 비교하�
 | numpy | 2.4.6 | 2.5.5 | `msbench/py` 안의 것 |
 | PyTorch CUDA | 해당 없음 | 2.14.1+cu130 | `~/jp/py`, pip.pyz `--target`(download.pytorch.org/whl/cu130, cuDNN 9.24 등 nvidia-* wheel 포함). 빌드 목록에 sm_87이 없고 sm_80 커널이 돈다(같은 8.x) |
 | onnxruntime GPU | 해당 없음 | onnxruntime-gpu 1.24.0 | `~/jp/py-ort`, pypi.jetson-ai-lab.io sbsa/cu130. CUDA EP는 PyTorch wheel의 cuDNN·cuBLAS를 쓴다 |
+| TFLite GL (GPU) | TF v2.20.0 C API + GPU 위임자 v2를 Bazel로 직접 빌드(`e850gpu/`), `GL_ONLY`(GLES 3.1 compute) | 해당 없음 | 보드의 Mesa panfrost + kbase shim을 쓴다(`. e850gpu/gpu-env.sh`). pip wheel·CMake 판에는 GL 백엔드가 없다. FP32·FP16만(INT8은 GL에 정수 연산이 없음) |
+| NCNN Vulkan (GPU) | pip NCNN 1.0.20261020(Vulkan 포함) + panvk(`~/gpu/mesa-vk`, `. e850gpu/vk-env.sh`) | 해당 없음 | `--runtime ncnn-vk`. winograd 끔(셰이더 컴파일이 끝나지 않음). panvk에 16비트 저장·연산이 없어 FP16은 버퍼만 FP16(packed), 계산은 FP32 |
 | TensorRT | 해당 없음 | 11.4.1 | `~/jp/root`: L4T r39.2 apt 저장소의 deb를 `apt-get download` + `dpkg -x`(cudart 13.2 포함). `trtexec`도 여기 |
 
 Jetson GPU 런타임은 `. benchmark/jetson-gpu-env.sh`가 `MSB_PYPATH`(CPU용 `py/`보다 앞), `LD_LIBRARY_PATH`, `TRTEXEC`를 잡는다.
@@ -60,6 +62,7 @@ Jetson GPU 런타임은 `. benchmark/jetson-gpu-env.sh`가 `MSB_PYPATH`(CPU용 `
 | `benchmark/runtimes.py` | CPU 어댑터(PyTorch·onnxruntime·TFLite·NCNN FP32/FP16/INT8), Jetson GPU 어댑터(PyTorch CUDA FP32/FP16, onnxruntime CUDA FP32/FP16, TensorRT FP32/FP16/INT8: 호스트 numpy→numpy를 동기로 재고, H2D·계산·D2H를 따로도 잰다), YOLO NMS(클래스별, 자체 시험 포함) |
 | `models/fp16_onnx.py`, `models/trt_int8.py` | GPU용 ONNX: FP16(입출력 float32), TensorRT용 대칭 INT8 QDQ(TensorRT 11은 strongly typed라 정밀도를 ONNX가 정한다). ResNet18은 첫 합성곱을 float로 둔다(INT8로 하면 Orin용 구현이 없어 빌드 실패) |
 | `benchmark/jetson-gpu-env.sh` | Jetson GPU 런타임 경로 |
+| `e850gpu/` | E850 GPU(11.117): `build-tflite-gl.sh`(Mac Docker, debian:12 arm64 + Bazel, `tflite-gl.patch`: GL에 셰이더가 없는 TRANSPOSE·BATCH_MATMUL을 GPU에서 뺌), `gpu-env.sh`(Mesa 경로), `gpucheck.py`(CPU와 출력 비교), `gltest.c`·`build-gltest.sh`(GLES compute 최고 GFLOPS·대역폭·dispatch 지연), `b6-live-gpu.sh`(보드6 실시간 카메라 GPU 시험). 어댑터는 `runtimes.py`의 `TFLiteGL`(`--runtime gpu`가 E850에서 고름, `MSB_GL_PARTITIONS`로 GPU 분할 수, 기본 1). 11.118: `build-panvk.sh`·`vk-env.sh`(NCNN Vulkan, 어댑터 `NCNNVK`, `--runtime ncnn-vk`로만 고름: `LD_PRELOAD`가 GL과 다름), `corun.py`(CPU NCNN과 GPU 워커를 함께 돌려 처리량·간섭), `layercost.py`(모델의 합성곱마다 CPU·GPU 시간, 이상적 층 분할), `splitconv.py`(합성곱 하나를 출력 채널로 나눠 CPU·GPU가 동시에), `branchsplit.py`(ResNet 다운샘플 블록: CPU가 본 경로, GPU가 1×1 shortcut), `cothread.py`(corun을 한 프로세스의 두 스레드로, CPU 클럭·온도 표본 포함). `gltest load fma|copy SECS`는 GPU에 계산만 또는 DRAM 복사만 계속 준다(GPU가 CPU를 얼마나 깎는지). 둘 다 GPU 스레드를 실행마다 CPU3에 다시 고정한다: `OMP_PROC_BIND` 아래에서 libgomp가 첫 OpenMP 영역에서 CPU4로 묶는다 |
 | `benchmark/threadprobe.sh`, `benchmark/placement.py` | 스레드 진단: 코어 집합·환경 변수만 바꿔 설정 하나를 돌림, 런타임 스레드가 어느 코어에 몇 개 몰리는지 표본 |
 | `camera/realtime_detection.py`, `camera/jetson-live.sh` | 실시간 USB 카메라 YOLO(Phase 3): V4L2 mmap, YUYV→RGB, 레터박스, 어댑터, NMS, 카메라→검출 지연 |
 | `dashboard/generate_report.py`, `dashboard/tables.py` | `results/report.html`(한 파일, 네트워크 없음)과 `summary.csv`, 문서용 Markdown 표. 장비마다 모든 원자료를 이름순으로 읽고 같은 설정은 나중 판이 덮는다 |
@@ -89,7 +92,9 @@ python3 benchmark/run_benchmark.py --device orin-nano --sensor camera --runtime 
 | 항목 | 원인 | 풀려면 |
 |---|---|---|
 | AGX Orin 전부, DLA FP16·INT8 | 장비가 없다. Orin Nano에는 DLA가 없다 | AGX Orin 장비 |
-| E850 GPU 가속 AI | Mali-G52에 OpenCL·Vulkan 드라이버가 없다: ORT·NCNN(Vulkan)·TFLite GPU(OpenCL)·ArmNN이 쓸 길이 없다. GLES 3.1 compute는 panfrost shim으로 동작한다(11.82). 그러나 이를 쓰는 TFLite GL 위임자는 pip wheel에 없다 | TFLite GPU delegate(GL 백엔드)를 직접 빌드해 시험. 결과가 맞는지 보장 못 함(이 GPU는 AFBC·IDVS가 틀렸다, 11.88) |
+| E850 GPU의 INT8, ORT·ArmNN GPU | TFLite GL(11.117)과 NCNN Vulkan(11.118)을 잰다. GL 백엔드에는 정수 연산이 없고(양자화 모델은 float로 푼다), NCNN의 INT8은 CPU에서만 돈다. OpenCL 드라이버가 없어 ORT·ArmNN GPU 경로가 없다 | 이 커널(kbase r38p1)에 맞는 Mali OpenCL 사용자 드라이버. 다른 SoC용 libmali는 쓰지 않기로 했다(11.117) |
+| E850 NCNN Vulkan의 H2D·계산·D2H | NCNN Python에 GPU 버퍼를 따로 올리고 내리는 API가 없다. 전체(numpy → numpy, 동기)만 잰다 | NCNN C++ API |
+| E850 GPU의 YOLO 전부 | GL에 TRANSPOSE·BATCH_MATMUL 셰이더와, 둘째 입력이 상수 텐서인 SUB(박스 디코드)가 없다. 346개 연산 중 GPU는 167개(분할 1개) 또는 301개(분할 2개)이고 나머지는 CPU | GL 셰이더를 더 쓰거나, 모델에서 C2PSA 주의 블록·디코드를 떼어 CPU로 |
 | E850 전력·에너지 | 전력 센서가 없다 | 외부 전력계. 명세대로 두 보드를 같은 지점(DC 입력)에서 같은 장비로 잰다. Jetson의 INA3221 `VDD_IN`은 모듈 입력이라 E850 DC 입력과 직접 비교하지 않는다 |
 | Jetson PyTorch·onnxruntime CUDA INT8 | 이 모델들에 INT8 CUDA 커널 경로가 없다(QDQ는 CUDA EP에서 역양자화 뒤 FP32 합성곱) | GPU INT8은 TensorRT로만 잰다 |
 | Jetson GPU 클럭 고정 | `jetson_clocks`·nvpmodel 변경에 sudo가 필요하다 | GPU DVFS(306~1020 MHz)를 그대로 두고 블록 끝 클럭을 기록 |
@@ -107,7 +112,7 @@ python3 benchmark/run_benchmark.py --device orin-nano --sensor camera --runtime 
 | 4 | E850 DVS 실시간 YOLO | 아직(위 N/A) |
 | 5 | CAMERA+DVS 융합(A·B·C) | 아직 |
 | 6 | Jetson 센서·영상처리 | DVS·USB 카메라는 이미 동작(11.108, 11.113) |
-| 7 | Jetson CUDA·TensorRT | 됨(11.116): 홈에 설치, PyTorch CUDA·ORT CUDA·TensorRT FP32/FP16/INT8 |
+| 7 | Jetson CUDA·TensorRT | 됨(11.116): 홈에 설치, PyTorch CUDA·ORT CUDA·TensorRT FP32/FP16/INT8. E850 GPU(Mali-G52) TFLite GL FP32/FP16도 됨(11.117), NCNN Vulkan FP32/FP16(packed)도 됨(11.118) |
 | 8 | 세 장비 같은 조건 | AGX Orin 없음 → 두 장비 |
 | 9 | 전력·에너지 | Jetson만(INA3221 VDD_IN, 결과의 `power_w`·`energy_j_per_inference`), E850은 외부 측정기 필요 |
 | 10 | 통합 뷰어, HTML 보고서 | HTML 보고서 `results/report.html`, 문서용 표 `dashboard/tables.py`. 실시간 통합 뷰어는 아직 |

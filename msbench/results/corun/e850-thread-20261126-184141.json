@@ -1,0 +1,203 @@
+{
+ "secs": 30.0,
+ "cpu_worker": "ncnn fp16, 4 threads, OMP places CPU4-7, own Python thread",
+ "gpu_worker": "ncnn-vk fp32, 1 thread, Python thread re-pinned to CPU3 before every run",
+ "driver": {
+  "VK_ICD_FILENAMES": "/home/philip/gpu/mesa-vk/icd.json",
+  "PAN_KBASE_UNCACHED": "1"
+ },
+ "cases": [
+  {
+   "cpu_model": "mobilenetv2",
+   "gpu_model": "mobilenetv2",
+   "cpu_alone": {
+    "n": 813,
+    "ips": 27.088,
+    "median_ms": 30.54,
+    "p90_ms": 58.89,
+    "thread_cores": 0.757
+   },
+   "clock_cpu_alone": {
+    "cpu4_mhz": 1555,
+    "little1_c": 80.8,
+    "g3d_c": 72.0
+   },
+   "gpu_alone": {
+    "n": 221,
+    "ips": 7.351,
+    "median_ms": 135.2,
+    "p90_ms": 142.02,
+    "thread_cores": 0.148
+   },
+   "clock_gpu_alone": {
+    "cpu4_mhz": 615,
+    "little1_c": 70.2,
+    "g3d_c": 73.1
+   },
+   "cpu_with": {
+    "n": 642,
+    "ips": 21.316,
+    "median_ms": 37.36,
+    "p90_ms": 77.63,
+    "thread_cores": 0.721
+   },
+   "gpu_with": {
+    "n": 217,
+    "ips": 7.217,
+    "median_ms": 137.88,
+    "p90_ms": 146.05,
+    "thread_cores": 0.151
+   },
+   "clock_with": {
+    "cpu4_mhz": 1290,
+    "little1_c": 83.0,
+    "g3d_c": 80.2
+   },
+   "sum_over_cpu_alone": 0.0533
+  },
+  {
+   "cpu_model": "resnet18",
+   "gpu_model": "resnet18",
+   "cpu_alone": {
+    "n": 478,
+    "ips": 15.91,
+    "median_ms": 55.55,
+    "p90_ms": 84.49,
+    "thread_cores": 0.828
+   },
+   "clock_cpu_alone": {
+    "cpu4_mhz": 1648,
+    "little1_c": 85.1,
+    "g3d_c": 75.0
+   },
+   "gpu_alone": {
+    "n": 47,
+    "ips": 1.541,
+    "median_ms": 648.97,
+    "p90_ms": 655.76,
+    "thread_cores": 0.024
+   },
+   "clock_gpu_alone": {
+    "cpu4_mhz": 572,
+    "little1_c": 71.1,
+    "g3d_c": 74.8
+   },
+   "cpu_with": {
+    "n": 434,
+    "ips": 14.464,
+    "median_ms": 59.9,
+    "p90_ms": 93.86,
+    "thread_cores": 0.808
+   },
+   "gpu_with": {
+    "n": 46,
+    "ips": 1.533,
+    "median_ms": 652.03,
+    "p90_ms": 657.66,
+    "thread_cores": 0.028
+   },
+   "clock_with": {
+    "cpu4_mhz": 1421,
+    "little1_c": 86.6,
+    "g3d_c": 83.0
+   },
+   "sum_over_cpu_alone": 0.0055
+  },
+  {
+   "cpu_model": "yolo11n-320",
+   "gpu_model": "yolo11n-320",
+   "cpu_alone": {
+    "n": 331,
+    "ips": 11.015,
+    "median_ms": 79.33,
+    "p90_ms": 137.65,
+    "thread_cores": 0.746
+   },
+   "clock_cpu_alone": {
+    "cpu4_mhz": 1503,
+    "little1_c": 79.1,
+    "g3d_c": 71.5
+   },
+   "gpu_alone": {
+    "n": 85,
+    "ips": 2.8,
+    "median_ms": 357.51,
+    "p90_ms": 372.83,
+    "thread_cores": 0.213
+   },
+   "clock_gpu_alone": {
+    "cpu4_mhz": 624,
+    "little1_c": 69.7,
+    "g3d_c": 72.2
+   },
+   "cpu_with": {
+    "n": 244,
+    "ips": 8.13,
+    "median_ms": 106.9,
+    "p90_ms": 193.28,
+    "thread_cores": 0.676
+   },
+   "gpu_with": {
+    "n": 83,
+    "ips": 2.753,
+    "median_ms": 363.64,
+    "p90_ms": 379.21,
+    "thread_cores": 0.227
+   },
+   "clock_with": {
+    "cpu4_mhz": 1121,
+    "little1_c": 78.0,
+    "g3d_c": 76.8
+   },
+   "sum_over_cpu_alone": -0.012
+  },
+  {
+   "cpu_model": "yolo11n-320",
+   "gpu_model": "resnet18",
+   "cpu_alone": {
+    "n": 343,
+    "ips": 11.374,
+    "median_ms": 74.58,
+    "p90_ms": 132.03,
+    "thread_cores": 0.741
+   },
+   "clock_cpu_alone": {
+    "cpu4_mhz": 1599,
+    "little1_c": 79.4,
+    "g3d_c": 71.1
+   },
+   "gpu_alone": {
+    "n": 47,
+    "ips": 1.539,
+    "median_ms": 649.55,
+    "p90_ms": 655.94,
+    "thread_cores": 0.026
+   },
+   "clock_gpu_alone": {
+    "cpu4_mhz": 589,
+    "little1_c": 69.6,
+    "g3d_c": 73.2
+   },
+   "cpu_with": {
+    "n": 299,
+    "ips": 9.95,
+    "median_ms": 87.31,
+    "p90_ms": 153.5,
+    "thread_cores": 0.713
+   },
+   "gpu_with": {
+    "n": 47,
+    "ips": 1.541,
+    "median_ms": 648.11,
+    "p90_ms": 655.62,
+    "thread_cores": 0.025
+   },
+   "clock_with": {
+    "cpu4_mhz": 1274,
+    "little1_c": 80.6,
+    "g3d_c": 79.6
+   }
+  }
+ ],
+ "note": "superseded: the CPU job ran in a new Python thread, whose OpenMP team was a second libgomp pool on CPU5-7 next to the main thread's; NCNN there was ~30% slower even alone (see the next e850-thread file, CPU job on the main thread)"
+}

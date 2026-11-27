@@ -1,0 +1,95 @@
+{
+ "device": "e850",
+ "host": "e850-96",
+ "sensor": "camera",
+ "data": "live",
+ "model": "yolo11n-320",
+ "runtime": "tflite-gl",
+ "precision": "fp16",
+ "threads": 4,
+ "cpus": [
+  4,
+  5,
+  6,
+  7
+ ],
+ "camera": "640x480",
+ "secs": 30.2,
+ "yuv_downscale": 2,
+ "frames_delivered": 456,
+ "frames_detected": 70,
+ "frames_dropped": 386,
+ "camera_fps": 15.11,
+ "detect_fps": 2.32,
+ "seq_gaps": 379,
+ "mean_detections": 0.84,
+ "process_cpu_cores": 1.28,
+ "rss_peak_mb": 274.2,
+ "ms": {
+  "wait": {
+   "n": 70,
+   "median": 0.01,
+   "p95": 0.04,
+   "mean": 0.02,
+   "max": 0.07
+  },
+  "rgb": {
+   "n": 70,
+   "median": 9.7,
+   "p95": 29.39,
+   "mean": 11.63,
+   "max": 46.14
+  },
+  "prep": {
+   "n": 70,
+   "median": 1.43,
+   "p95": 1.96,
+   "mean": 1.49,
+   "max": 2.29
+  },
+  "infer": {
+   "n": 70,
+   "median": 417.74,
+   "p95": 481.79,
+   "mean": 413.79,
+   "max": 534.91
+  },
+  "nms": {
+   "n": 70,
+   "median": 3.75,
+   "p95": 5.52,
+   "mean": 4.19,
+   "max": 15.23
+  },
+  "e2e": {
+   "n": 70,
+   "median": 535.03,
+   "p95": 611.7,
+   "mean": 526.69,
+   "max": 621.19
+  },
+  "age_at_take": {
+   "n": 70,
+   "median": 92.7,
+   "p95": 125.41,
+   "mean": 95.6,
+   "max": 130.32
+  }
+ },
+ "runtime_info": {
+  "tflite_c": "2.20.0-dev0+selfbuilt",
+  "delegate": "GPU v2, GL_ONLY (OpenGL ES 3.1 compute)",
+  "precision_loss_allowed": true,
+  "threads_cpu_fallback": 4,
+  "max_delegated_partitions": 1,
+  "delegated": {
+   "nodes": 167,
+   "of": 346,
+   "partitions": 3
+  },
+  "gpu_lock": "[0:0][1:1001000][2:0][3:0][4:0][5:0]",
+  "log": "INFO: Created TensorFlow Lite delegate for GPU.\nERROR: Following operations are not supported by GPU delegate:\nBATCH_MATMUL: Operation is not supported.\nTRANSPOSE: Operation is not supported.\n167 operations will run on the GPU, and the remaining 179 operations will run on the CPU.\nVERBOSE: Replacing 167 out of 346 node(s) with delegate (TfLiteGpuDelegateV2) node, yielding 3 partitions for subgraph 0.\nINFO: Initialized OpenGL-based API.\nINFO: Created 1 GPU delegate kernels.\n"
+ },
+ "env": {},
+ "time": "2026-11-26T08:48:08"
+}

@@ -1,0 +1,563 @@
+{
+ "model": "resnet18",
+ "threads": 4,
+ "reps": 15,
+ "env": {
+  "PAN_KBASE_UNCACHED": "1"
+ },
+ "relu_bytes_ms": {
+  "cpu": [
+   [
+    32768,
+    0.086
+   ],
+   [
+    401408,
+    0.517
+   ],
+   [
+    1605632,
+    2.021
+   ],
+   [
+    6422528,
+    7.44
+   ],
+   [
+    12845056,
+    14.885
+   ]
+  ],
+  "gpu": [
+   [
+    32768,
+    1.15
+   ],
+   [
+    401408,
+    2.763
+   ],
+   [
+    1605632,
+    8.321
+   ],
+   [
+    6422528,
+    29.25
+   ],
+   [
+    12845056,
+    57.362
+   ]
+  ]
+ },
+ "sum": {
+  "cpu_net_ms": 51.15,
+  "gpu_net_ms": 674.22,
+  "split_ms": 45.68,
+  "mflop": 3628.16
+ },
+ "ideal_split_speedup_vs_cpu": 1.12,
+ "layers": [
+  {
+   "layer": "convrelu_0",
+   "kind": "Convolution",
+   "in": [
+    3,
+    224,
+    224
+   ],
+   "cpu_ms": 9.452,
+   "cpu_net_ms": 4.947,
+   "out": [
+    64,
+    112,
+    112
+   ],
+   "gpu_ms": 96.97,
+   "gpu_net_ms": 79.056,
+   "mflop": 236.03,
+   "gpu_over_cpu": 15.98,
+   "split_ms": 4.656,
+   "gpu_share": 0.059,
+   "cpu_gflops": 47.7,
+   "gpu_gflops": 3.0
+  },
+  {
+   "layer": "convrelu_1",
+   "kind": "Convolution",
+   "in": [
+    64,
+    56,
+    56
+   ],
+   "cpu_ms": 4.938,
+   "cpu_net_ms": 2.917,
+   "out": [
+    64,
+    56,
+    56
+   ],
+   "gpu_ms": 45.874,
+   "gpu_net_ms": 37.553,
+   "mflop": 231.21,
+   "gpu_over_cpu": 12.87,
+   "split_ms": 2.707,
+   "gpu_share": 0.072,
+   "cpu_gflops": 79.3,
+   "gpu_gflops": 6.2
+  },
+  {
+   "layer": "conv_3",
+   "kind": "Convolution",
+   "in": [
+    64,
+    56,
+    56
+   ],
+   "cpu_ms": 4.817,
+   "cpu_net_ms": 2.796,
+   "out": [
+    64,
+    56,
+    56
+   ],
+   "gpu_ms": 48.512,
+   "gpu_net_ms": 40.191,
+   "mflop": 231.21,
+   "gpu_over_cpu": 14.37,
+   "split_ms": 2.614,
+   "gpu_share": 0.065,
+   "cpu_gflops": 82.7,
+   "gpu_gflops": 5.8
+  },
+  {
+   "layer": "convrelu_2",
+   "kind": "Convolution",
+   "in": [
+    64,
+    56,
+    56
+   ],
+   "cpu_ms": 4.668,
+   "cpu_net_ms": 2.647,
+   "out": [
+    64,
+    56,
+    56
+   ],
+   "gpu_ms": 45.969,
+   "gpu_net_ms": 37.648,
+   "mflop": 231.21,
+   "gpu_over_cpu": 14.22,
+   "split_ms": 2.473,
+   "gpu_share": 0.066,
+   "cpu_gflops": 87.3,
+   "gpu_gflops": 6.1
+  },
+  {
+   "layer": "conv_5",
+   "kind": "Convolution",
+   "in": [
+    64,
+    56,
+    56
+   ],
+   "cpu_ms": 4.689,
+   "cpu_net_ms": 2.668,
+   "out": [
+    64,
+    56,
+    56
+   ],
+   "gpu_ms": 48.794,
+   "gpu_net_ms": 40.473,
+   "mflop": 231.21,
+   "gpu_over_cpu": 15.17,
+   "split_ms": 2.503,
+   "gpu_share": 0.062,
+   "cpu_gflops": 86.7,
+   "gpu_gflops": 5.7
+  },
+  {
+   "layer": "convrelu_3",
+   "kind": "Convolution",
+   "in": [
+    64,
+    56,
+    56
+   ],
+   "cpu_ms": 4.778,
+   "cpu_net_ms": 3.258,
+   "out": [
+    128,
+    28,
+    28
+   ],
+   "gpu_ms": 26.194,
+   "gpu_net_ms": 19.726,
+   "mflop": 115.61,
+   "gpu_over_cpu": 6.05,
+   "split_ms": 2.796,
+   "gpu_share": 0.142,
+   "cpu_gflops": 35.5,
+   "gpu_gflops": 5.9
+  },
+  {
+   "layer": "conv_7",
+   "kind": "Convolution",
+   "in": [
+    128,
+    28,
+    28
+   ],
+   "cpu_ms": 4.884,
+   "cpu_net_ms": 3.866,
+   "out": [
+    128,
+    28,
+    28
+   ],
+   "gpu_ms": 42.443,
+   "gpu_net_ms": 37.827,
+   "mflop": 231.21,
+   "gpu_over_cpu": 9.78,
+   "split_ms": 3.508,
+   "gpu_share": 0.093,
+   "cpu_gflops": 59.8,
+   "gpu_gflops": 6.1
+  },
+  {
+   "layer": "conv_8",
+   "kind": "Convolution",
+   "in": [
+    64,
+    56,
+    56
+   ],
+   "cpu_ms": 2.775,
+   "cpu_net_ms": 1.256,
+   "out": [
+    128,
+    28,
+    28
+   ],
+   "gpu_ms": 7.577,
+   "gpu_net_ms": 1.108,
+   "mflop": 12.85,
+   "gpu_over_cpu": 0.88,
+   "split_ms": 0.589,
+   "gpu_share": 0.531,
+   "cpu_gflops": 10.2,
+   "gpu_gflops": 11.6
+  },
+  {
+   "layer": "convrelu_4",
+   "kind": "Convolution",
+   "in": [
+    128,
+    28,
+    28
+   ],
+   "cpu_ms": 2.712,
+   "cpu_net_ms": 1.694,
+   "out": [
+    128,
+    28,
+    28
+   ],
+   "gpu_ms": 41.634,
+   "gpu_net_ms": 37.019,
+   "mflop": 231.21,
+   "gpu_over_cpu": 21.85,
+   "split_ms": 1.62,
+   "gpu_share": 0.044,
+   "cpu_gflops": 136.5,
+   "gpu_gflops": 6.2
+  },
+  {
+   "layer": "conv_10",
+   "kind": "Convolution",
+   "in": [
+    128,
+    28,
+    28
+   ],
+   "cpu_ms": 2.864,
+   "cpu_net_ms": 1.846,
+   "out": [
+    128,
+    28,
+    28
+   ],
+   "gpu_ms": 42.106,
+   "gpu_net_ms": 37.49,
+   "mflop": 231.21,
+   "gpu_over_cpu": 20.31,
+   "split_ms": 1.759,
+   "gpu_share": 0.047,
+   "cpu_gflops": 125.2,
+   "gpu_gflops": 6.2
+  },
+  {
+   "layer": "convrelu_5",
+   "kind": "Convolution",
+   "in": [
+    128,
+    28,
+    28
+   ],
+   "cpu_ms": 2.777,
+   "cpu_net_ms": 2.01,
+   "out": [
+    256,
+    14,
+    14
+   ],
+   "gpu_ms": 23.66,
+   "gpu_net_ms": 19.97,
+   "mflop": 115.61,
+   "gpu_over_cpu": 9.94,
+   "split_ms": 1.826,
+   "gpu_share": 0.091,
+   "cpu_gflops": 57.5,
+   "gpu_gflops": 5.8
+  },
+  {
+   "layer": "conv_12",
+   "kind": "Convolution",
+   "in": [
+    256,
+    14,
+    14
+   ],
+   "cpu_ms": 2.328,
+   "cpu_net_ms": 1.811,
+   "out": [
+    256,
+    14,
+    14
+   ],
+   "gpu_ms": 44.286,
+   "gpu_net_ms": 41.523,
+   "mflop": 231.21,
+   "gpu_over_cpu": 22.93,
+   "split_ms": 1.735,
+   "gpu_share": 0.042,
+   "cpu_gflops": 127.7,
+   "gpu_gflops": 5.6
+  },
+  {
+   "layer": "conv_13",
+   "kind": "Convolution",
+   "in": [
+    128,
+    28,
+    28
+   ],
+   "cpu_ms": 2.658,
+   "cpu_net_ms": 1.89,
+   "out": [
+    256,
+    14,
+    14
+   ],
+   "gpu_ms": 5.394,
+   "gpu_net_ms": 1.705,
+   "mflop": 12.85,
+   "gpu_over_cpu": 0.9,
+   "split_ms": 0.896,
+   "gpu_share": 0.526,
+   "cpu_gflops": 6.8,
+   "gpu_gflops": 7.5
+  },
+  {
+   "layer": "convrelu_6",
+   "kind": "Convolution",
+   "in": [
+    256,
+    14,
+    14
+   ],
+   "cpu_ms": 2.282,
+   "cpu_net_ms": 1.765,
+   "out": [
+    256,
+    14,
+    14
+   ],
+   "gpu_ms": 42.95,
+   "gpu_net_ms": 40.187,
+   "mflop": 231.21,
+   "gpu_over_cpu": 22.77,
+   "split_ms": 1.691,
+   "gpu_share": 0.042,
+   "cpu_gflops": 131.0,
+   "gpu_gflops": 5.8
+  },
+  {
+   "layer": "conv_15",
+   "kind": "Convolution",
+   "in": [
+    256,
+    14,
+    14
+   ],
+   "cpu_ms": 2.216,
+   "cpu_net_ms": 1.699,
+   "out": [
+    256,
+    14,
+    14
+   ],
+   "gpu_ms": 42.95,
+   "gpu_net_ms": 40.187,
+   "mflop": 231.21,
+   "gpu_over_cpu": 23.65,
+   "split_ms": 1.63,
+   "gpu_share": 0.041,
+   "cpu_gflops": 136.1,
+   "gpu_gflops": 5.8
+  },
+  {
+   "layer": "convrelu_7",
+   "kind": "Convolution",
+   "in": [
+    256,
+    14,
+    14
+   ],
+   "cpu_ms": 4.642,
+   "cpu_net_ms": 4.242,
+   "out": [
+    512,
+    7,
+    7
+   ],
+   "gpu_ms": 26.49,
+   "gpu_net_ms": 24.166,
+   "mflop": 115.61,
+   "gpu_over_cpu": 5.7,
+   "split_ms": 3.609,
+   "gpu_share": 0.149,
+   "cpu_gflops": 27.3,
+   "gpu_gflops": 4.8
+  },
+  {
+   "layer": "conv_17",
+   "kind": "Convolution",
+   "in": [
+    512,
+    7,
+    7
+   ],
+   "cpu_ms": 3.235,
+   "cpu_net_ms": 2.953,
+   "out": [
+    512,
+    7,
+    7
+   ],
+   "gpu_ms": 45.911,
+   "gpu_net_ms": 44.026,
+   "mflop": 231.21,
+   "gpu_over_cpu": 14.91,
+   "split_ms": 2.767,
+   "gpu_share": 0.063,
+   "cpu_gflops": 78.3,
+   "gpu_gflops": 5.3
+  },
+  {
+   "layer": "conv_18",
+   "kind": "Convolution",
+   "in": [
+    256,
+    14,
+    14
+   ],
+   "cpu_ms": 0.968,
+   "cpu_net_ms": 0.569,
+   "out": [
+    512,
+    7,
+    7
+   ],
+   "gpu_ms": 4.78,
+   "gpu_net_ms": 2.457,
+   "mflop": 12.85,
+   "gpu_over_cpu": 4.32,
+   "split_ms": 0.462,
+   "gpu_share": 0.188,
+   "cpu_gflops": 22.6,
+   "gpu_gflops": 5.2
+  },
+  {
+   "layer": "convrelu_8",
+   "kind": "Convolution",
+   "in": [
+    512,
+    7,
+    7
+   ],
+   "cpu_ms": 3.23,
+   "cpu_net_ms": 2.948,
+   "out": [
+    512,
+    7,
+    7
+   ],
+   "gpu_ms": 49.209,
+   "gpu_net_ms": 47.324,
+   "mflop": 231.21,
+   "gpu_over_cpu": 16.05,
+   "split_ms": 2.775,
+   "gpu_share": 0.059,
+   "cpu_gflops": 78.4,
+   "gpu_gflops": 4.9
+  },
+  {
+   "layer": "conv_20",
+   "kind": "Convolution",
+   "in": [
+    512,
+    7,
+    7
+   ],
+   "cpu_ms": 3.469,
+   "cpu_net_ms": 3.187,
+   "out": [
+    512,
+    7,
+    7
+   ],
+   "gpu_ms": 46.309,
+   "gpu_net_ms": 44.424,
+   "mflop": 231.21,
+   "gpu_over_cpu": 13.94,
+   "split_ms": 2.974,
+   "gpu_share": 0.067,
+   "cpu_gflops": 72.5,
+   "gpu_gflops": 5.2
+  },
+  {
+   "layer": "linear_21",
+   "kind": "InnerProduct",
+   "in": [
+    512
+   ],
+   "cpu_ms": 0.267,
+   "cpu_net_ms": 0.181,
+   "out": [
+    1000
+   ],
+   "gpu_ms": 1.314,
+   "gpu_net_ms": 0.164,
+   "mflop": 1.02,
+   "gpu_over_cpu": 0.91,
+   "split_ms": 0.086,
+   "gpu_share": 0.525,
+   "cpu_gflops": 5.6,
+   "gpu_gflops": 6.2
+  }
+ ]
+}

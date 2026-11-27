@@ -1,0 +1,46 @@
+== Thu Nov 26 08:47:26 UTC 2026 mpv:  AI threads: 3
+== yolo11n-320 tflite-gl fp16 partitions 1
+INFO: Failed to load OpenCL library with dlopen: libOpenCL.so: cannot open shared object file: No such file or directory. Trying ICD loader.
+{"camera_fps": 15.11, "detect_fps": 2.32, "frames_dropped": 386, "mean_detections": 0.84, "process_cpu_cores": 1.28}
+  wait         {'n': 70, 'median': 0.01, 'p95': 0.04, 'mean': 0.02, 'max': 0.07}
+  rgb          {'n': 70, 'median': 9.7, 'p95': 29.39, 'mean': 11.63, 'max': 46.14}
+  prep         {'n': 70, 'median': 1.43, 'p95': 1.96, 'mean': 1.49, 'max': 2.29}
+  infer        {'n': 70, 'median': 417.74, 'p95': 481.79, 'mean': 413.79, 'max': 534.91}
+  nms          {'n': 70, 'median': 3.75, 'p95': 5.52, 'mean': 4.19, 'max': 15.23}
+  e2e          {'n': 70, 'median': 535.03, 'p95': 611.7, 'mean': 526.69, 'max': 621.19}
+  age_at_take  {'n': 70, 'median': 92.7, 'p95': 125.41, 'mean': 95.6, 'max': 130.32}
+wrote /home/philip/msbench/results/realtime/e850-yolo11n-320-tflite-gl-fp16-t4-b6-dvslive-gpu-p1.json
+== yolo11n-320 tflite-gl fp16 partitions 2
+INFO: Failed to load OpenCL library with dlopen: libOpenCL.so: cannot open shared object file: No such file or directory. Trying ICD loader.
+{"camera_fps": 15.13, "detect_fps": 3.15, "frames_dropped": 362, "mean_detections": 0.75, "process_cpu_cores": 0.45}
+  wait         {'n': 95, 'median': 0.01, 'p95': 0.03, 'mean': 0.01, 'max': 0.08}
+  rgb          {'n': 95, 'median': 9.72, 'p95': 16.16, 'mean': 10.66, 'max': 29.68}
+  prep         {'n': 95, 'median': 1.44, 'p95': 2.18, 'mean': 1.77, 'max': 17.69}
+  infer        {'n': 95, 'median': 297.68, 'p95': 336.34, 'mean': 301.09, 'max': 352.53}
+  nms          {'n': 95, 'median': 3.82, 'p95': 5.95, 'mean': 4.16, 'max': 10.5}
+  e2e          {'n': 95, 'median': 420.88, 'p95': 451.62, 'mean': 416.75, 'max': 490.31}
+  age_at_take  {'n': 95, 'median': 100.71, 'p95': 125.29, 'mean': 99.08, 'max': 130.59}
+wrote /home/philip/msbench/results/realtime/e850-yolo11n-320-tflite-gl-fp16-t4-b6-dvslive-gpu-p2.json
+== yolo11n-320 tflite-gl fp32 partitions 1
+INFO: Failed to load OpenCL library with dlopen: libOpenCL.so: cannot open shared object file: No such file or directory. Trying ICD loader.
+{"camera_fps": 15.13, "detect_fps": 2.29, "frames_dropped": 387, "mean_detections": 0.81, "process_cpu_cores": 1.27}
+  wait         {'n': 69, 'median': 0.01, 'p95': 0.02, 'mean': 0.01, 'max': 0.03}
+  rgb          {'n': 69, 'median': 11.48, 'p95': 21.36, 'mean': 12.49, 'max': 31.85}
+  prep         {'n': 69, 'median': 1.46, 'p95': 2.16, 'mean': 1.94, 'max': 28.34}
+  infer        {'n': 69, 'median': 420.02, 'p95': 476.16, 'mean': 418.46, 'max': 520.32}
+  nms          {'n': 69, 'median': 3.82, 'p95': 4.88, 'mean': 3.86, 'max': 5.67}
+  e2e          {'n': 69, 'median': 530.81, 'p95': 600.53, 'mean': 536.02, 'max': 645.44}
+  age_at_take  {'n': 69, 'median': 99.26, 'p95': 125.9, 'mean': 99.27, 'max': 129.21}
+wrote /home/philip/msbench/results/realtime/e850-yolo11n-320-tflite-gl-fp32-t4-b6-dvslive-gpu-p1.json
+== yolo11n-320 ncnn fp16 bind
+{"camera_fps": 15.11, "detect_fps": 7.89, "frames_dropped": 217, "mean_detections": 0.74, "process_cpu_cores": 1.77}
+  wait         {'n': 237, 'median': 0.01, 'p95': 0.03, 'mean': 0.02, 'max': 0.11}
+  rgb          {'n': 237, 'median': 11.35, 'p95': 24.15, 'mean': 13.55, 'max': 37.38}
+  prep         {'n': 237, 'median': 3.01, 'p95': 11.51, 'mean': 3.64, 'max': 16.36}
+  infer        {'n': 237, 'median': 104.09, 'p95': 130.59, 'mean': 105.09, 'max': 150.8}
+  nms          {'n': 237, 'median': 3.73, 'p95': 10.8, 'mean': 4.42, 'max': 22.74}
+  e2e          {'n': 237, 'median': 220.18, 'p95': 266.52, 'mean': 222.82, 'max': 276.64}
+  age_at_take  {'n': 237, 'median': 95.33, 'p95': 127.05, 'mean': 96.13, 'max': 136.62}
+wrote /home/philip/msbench/results/realtime/e850-yolo11n-320-ncnn-fp16-t4-b6-dvslive-aion-bind2.json
+== Thu Nov 26 08:50:29 UTC 2026 restored mpv: 377928
+done-gpu

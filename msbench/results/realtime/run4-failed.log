@@ -1,0 +1,16 @@
+== Thu Nov 26 08:45:54 UTC 2026 mpv:  ai: 0 threads 3
+== yolo11n-320 tflite-gl fp16 partitions 1
+== yolo11n-320 tflite-gl fp16 partitions 2
+== yolo11n-320 tflite-gl fp32 partitions 1
+== yolo11n-320 ncnn fp16 bind
+{"camera_fps": 15.14, "detect_fps": 8.0, "frames_dropped": 215, "mean_detections": 0.75, "process_cpu_cores": 1.76}
+  wait         {'n': 241, 'median': 0.01, 'p95': 0.02, 'mean': 0.02, 'max': 0.08}
+  rgb          {'n': 241, 'median': 11.88, 'p95': 24.56, 'mean': 13.9, 'max': 41.26}
+  prep         {'n': 241, 'median': 2.97, 'p95': 3.84, 'mean': 3.44, 'max': 26.73}
+  infer        {'n': 241, 'median': 102.45, 'p95': 132.32, 'mean': 103.39, 'max': 153.21}
+  nms          {'n': 241, 'median': 3.73, 'p95': 5.92, 'mean': 4.23, 'max': 25.57}
+  e2e          {'n': 241, 'median': 219.96, 'p95': 261.81, 'mean': 220.55, 'max': 281.78}
+  age_at_take  {'n': 241, 'median': 94.09, 'p95': 124.35, 'mean': 95.59, 'max': 130.59}
+wrote /home/philip/msbench/results/realtime/e850-yolo11n-320-ncnn-fp16-t4-b6-dvslive-aion-bind2.json
+== Thu Nov 26 08:46:42 UTC 2026 restored mpv: 376317
+done-gpu

@@ -1,22 +1,52 @@
 diff --git a/include/drm-uapi/panfrost_drm.h b/include/drm-uapi/panfrost_drm.h
-index 778a5e0..8093440 100644
+index 778a5e0..6b6bc00 100644
 --- a/include/drm-uapi/panfrost_drm.h
 +++ b/include/drm-uapi/panfrost_drm.h
-@@ -88,6 +88,9 @@ struct drm_panfrost_wait_bo {
+@@ -88,6 +88,12 @@ struct drm_panfrost_wait_bo {
  
  #define PANFROST_BO_NOEXEC	1
  #define PANFROST_BO_HEAP	2
 +/* e850 kbase shim only (a real kernel rejects it): Mesa reports every CPU write to this BO with
 + * MMAP_BO, so the shim cleans the CPU cache before a submit only after such a report */
 +#define PANFROST_BO_E850_CPU_TRACKED	(1u << 31)
++/* e850 kbase shim only: CPU-cached at any size and never cleaned or invalidated by the shim; the
++ * owner syncs with MEM_SYNC (panvk's non-coherent memory type, 11.118) */
++#define PANFROST_BO_E850_CACHED	(1u << 30)
  
  /**
   * struct drm_panfrost_create_bo - ioctl argument for creating Panfrost BOs.
+diff --git a/src/compiler/nir/nir_lower_io.c b/src/compiler/nir/nir_lower_io.c
+index 4acd8f8..4b171ac 100644
+--- a/src/compiler/nir/nir_lower_io.c
++++ b/src/compiler/nir/nir_lower_io.c
+@@ -2239,8 +2239,10 @@ nir_lower_explicit_io_impl(nir_function_impl *impl, nir_variable_mode modes,
+    }
+ 
+    if (progress) {
+-      nir_metadata_preserve(impl, nir_metadata_block_index |
+-                                  nir_metadata_dominance);
++      /* e850 11.118: bounded-global and addr-mode checks add control flow (nir_push_if),
++       * so block indices and dominance are stale; keeping them made nir_lower_vars_to_ssa
++       * drop phis (undef -> 0) in NCNN's shaders on panvk. */
++      nir_metadata_preserve(impl, nir_metadata_none);
+    } else {
+       nir_metadata_preserve(impl, nir_metadata_all);
+    }
 diff --git a/src/drm-shim/device.c b/src/drm-shim/device.c
-index f731475..4c85d79 100644
+index f731475..d853a9c 100644
 --- a/src/drm-shim/device.c
 +++ b/src/drm-shim/device.c
-@@ -359,13 +359,16 @@ drm_shim_bo_get(struct shim_bo *bo)
+@@ -278,6 +278,9 @@ ioctl_fn_t core_ioctls[] = {
+    [_IOC_NR(DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD)] = drm_shim_ioctl_stub,
+    [_IOC_NR(DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE)] = drm_shim_ioctl_stub,
+    [_IOC_NR(DRM_IOCTL_SYNCOBJ_WAIT)] = drm_shim_ioctl_stub,
++   /* e850 11.118: room for the kbase shim's reset/signal (panvk fences) */
++   [_IOC_NR(DRM_IOCTL_SYNCOBJ_RESET)] = drm_shim_ioctl_stub,
++   [_IOC_NR(DRM_IOCTL_SYNCOBJ_SIGNAL)] = drm_shim_ioctl_stub,
+ };
+ 
+ /**
+@@ -359,13 +362,16 @@ drm_shim_bo_get(struct shim_bo *bo)
  void
  drm_shim_bo_put(struct shim_bo *bo)
  {
@@ -256,7 +286,7 @@ index 081bd0f..1facfad 100644
          if (nir->info.stage != MESA_SHADER_VERTEX)
                  return false;
 diff --git a/src/panfrost/drm-shim/panfrost_kbase.c b/src/panfrost/drm-shim/panfrost_kbase.c
-index f984e7f..9d8c13e 100644
+index f984e7f..19c3a59 100644
 --- a/src/panfrost/drm-shim/panfrost_kbase.c
 +++ b/src/panfrost/drm-shim/panfrost_kbase.c
 @@ -22,16 +22,24 @@
@@ -293,7 +323,7 @@ index f984e7f..9d8c13e 100644
  
  #define PROP_NAME(n) [MALI_GPUPROP_ ## n] = #n
  
-@@ -152,6 +160,329 @@ static const char * const prop_names[] = {
+@@ -152,6 +160,360 @@ static const char * const prop_names[] = {
  bool drm_shim_driver_prefers_first_render_node = true;
  
  static int kbase_fd = -1;
@@ -312,6 +342,7 @@ index f984e7f..9d8c13e 100644
 +struct kbase_bo {
 +   struct shim_bo base; /* first: drm-shim frees the struct through this pointer */
 +   bool cached;
++   bool explicit_sync; /* PANFROST_BO_E850_CACHED: the owner syncs with MEM_SYNC, the shim never does */
 +   bool tracked; /* PANFROST_BO_E850_CPU_TRACKED: Mesa reports CPU writes with MMAP_BO */
 +   bool dirty;   /* tracked BO written by the CPU since the last clean */
 +   ino_t ino; /* dma-buf inode of an imported BO (0 = allocated here): one handle per buffer */
@@ -387,7 +418,7 @@ index f984e7f..9d8c13e 100644
 +static void
 +kbase_bo_sync(struct shim_bo *bo, int type)
 +{
-+   if (!((struct kbase_bo *)bo)->cached)
++   if (!((struct kbase_bo *)bo)->cached || ((struct kbase_bo *)bo)->explicit_sync)
 +      return;
 +
 +   stats_on();
@@ -593,6 +624,36 @@ index f984e7f..9d8c13e 100644
 +   return 0;
 +}
 +
++/* Reset and signal: panvk's fences (vkResetFences, e850 11.118; the GL driver never calls them). A
++ * reset syncobj waits until a submit or a sync-file import gives it a seq; until then it counts as
++ * the newest possible atom (PENDING).
++ * shortcut: a wait that starts on a PENDING syncobj does not see a later submit from another thread
++ * and runs to its timeout; NCNN and panvk reset, submit and then wait in one thread. */
++#define PENDING (UINT64_MAX - 1)
++static int
++syncobj_set_all(void *arg, uint64_t seq)
++{
++   struct drm_syncobj_array *a = arg;
++   const uint32_t *h = (const uint32_t *)(uintptr_t) a->handles;
++   pthread_mutex_lock(&job_lock);
++   for (unsigned i = 0; i < a->count_handles; i++)
++      table_set(syncobjs, h[i], seq);
++   pthread_mutex_unlock(&job_lock);
++   return 0;
++}
++
++static int
++pan_ioctl_syncobj_reset(int fd, unsigned long request, void *arg)
++{
++   return syncobj_set_all(arg, PENDING);
++}
++
++static int
++pan_ioctl_syncobj_signal(int fd, unsigned long request, void *arg)
++{
++   return syncobj_set_all(arg, 0);
++}
++
 +static int
 +pan_ioctl_syncobj_wait(int fd, unsigned long request, void *arg)
 +{
@@ -623,7 +684,7 @@ index f984e7f..9d8c13e 100644
  static uint8_t *gpuprops;
  static unsigned gpuprops_size;
  
-@@ -301,7 +632,9 @@ pan_ioctl_get_param(int fd, unsigned long request, void *arg)
+@@ -301,7 +663,9 @@ pan_ioctl_get_param(int fd, unsigned long request, void *arg)
        LOG("tiler features: %"PRIx64"\n", (uint64_t) gp->value);
        return 0;
     case DRM_PANFROST_PARAM_AFBC_FEATURES:
@@ -634,7 +695,7 @@ index f984e7f..9d8c13e 100644
        return 0;
     default:
        fprintf(stderr, "Unknown DRM_IOCTL_PANFROST_GET_PARAM %d\n", gp->param);
-@@ -315,18 +648,29 @@ pan_ioctl_create_bo(int fd, unsigned long request, void *arg)
+@@ -315,18 +679,31 @@ pan_ioctl_create_bo(int fd, unsigned long request, void *arg)
     struct drm_panfrost_create_bo *create = arg;
  
     struct shim_fd *shim_fd = drm_shim_fd_lookup(fd);
@@ -656,8 +717,10 @@ index f984e7f..9d8c13e 100644
        }
     };
  
-+   kbo->cached = (create->flags & PANFROST_BO_NOEXEC) && !(create->flags & PANFROST_BO_HEAP) &&
-+                 size >= (1 << 20) && size <= (64 << 20) && !getenv("PAN_KBASE_UNCACHED");
++   kbo->explicit_sync = create->flags & PANFROST_BO_E850_CACHED;
++   kbo->cached = kbo->explicit_sync ||
++                 ((create->flags & PANFROST_BO_NOEXEC) && !(create->flags & PANFROST_BO_HEAP) &&
++                  size >= (1 << 20) && size <= (64 << 20) && !getenv("PAN_KBASE_UNCACHED"));
 +   if (kbo->cached)
 +      kcreate.in.flags |= MALI_MEM_CACHED_CPU;
 +   kbo->tracked = create->flags & PANFROST_BO_E850_CPU_TRACKED;
@@ -666,7 +729,7 @@ index f984e7f..9d8c13e 100644
     if (create->flags & PANFROST_BO_HEAP) {
        size_t align_size = 2 * 1024 * 1024 / 4096; /* 2 MB */
  
-@@ -379,8 +723,121 @@ pan_ioctl_mmap_bo(int fd, unsigned long request, void *arg)
+@@ -379,11 +756,124 @@ pan_ioctl_mmap_bo(int fd, unsigned long request, void *arg)
     struct shim_fd *shim_fd = drm_shim_fd_lookup(fd);
     struct shim_bo *bo = drm_shim_bo_lookup(shim_fd, mmap_bo->handle);
  
@@ -675,10 +738,10 @@ index f984e7f..9d8c13e 100644
     mmap_bo->offset = drm_shim_bo_get_mmap_offset(shim_fd, bo);
 +   ((struct kbase_bo *)bo)->dirty = true; /* Mesa calls MMAP_BO again after each CPU write */
 +   drm_shim_bo_put(bo);
-+
-+   return 0;
-+}
-+
+ 
+    return 0;
+ }
+ 
 +static int
 +pan_ioctl_get_bo_offset(int fd, unsigned long request, void *arg)
 +{
@@ -764,7 +827,7 @@ index f984e7f..9d8c13e 100644
 +   if (((struct kbase_bo *)bo)->ino)
 +      close(((struct kbase_bo *)bo)->dmabuf);
 +}
- 
++
 +/* dma-buf export (DRI3 hands window buffers to X this way): only imported BOs, as a dup of the
 + * imported fd. Mesa's kmsro puts every shared buffer on the KMS device, so those are imported.
 + * shortcut: a kbase allocation cannot be exported (EINVAL), e.g. a glamor pixmap asked for with
@@ -785,10 +848,13 @@ index f984e7f..9d8c13e 100644
 +   if (out < 0)
 +      return -EINVAL;
 +   args->fd = out;
-    return 0;
- }
- 
-@@ -417,65 +874,108 @@ static int
++   return 0;
++}
++
+ static int
+ pan_ioctl_madvise(int fd, unsigned long request, void *arg)
+ {
+@@ -417,65 +907,108 @@ static int
  pan_ioctl_submit(int fd, unsigned long request, void *arg)
  {
     struct drm_panfrost_submit *submit = arg;
@@ -875,15 +941,15 @@ index f984e7f..9d8c13e 100644
  
 -   struct mali_jd_event_v2 event = {0};
 -   read(kbase_fd, &event, sizeof(event));
+-
+-   if (event.event_code != 1)
+-       fprintf(stderr, "Event 0x%x for atom %i\n", event.event_code, event.atom_number);
 +   double t1 = now_s();
 +   submit_s += t1 - t0;
 +   n_submit++;
 +   if (stats_on() && t1 - stats_t0 >= 5)
 +      print_sync_stats();
  
--   if (event.event_code != 1)
--       fprintf(stderr, "Event 0x%x for atom %i\n", event.event_code, event.atom_number);
--
 -   /* Assume the event was because our job finished, don't bother
 -    * looping */
 +   frostwrap_dump();
@@ -929,7 +995,7 @@ index f984e7f..9d8c13e 100644
     [DRM_PANFROST_PERFCNT_ENABLE] = pan_ioctl_noop,
     [DRM_PANFROST_PERFCNT_DUMP] = pan_ioctl_noop,
     [DRM_PANFROST_MADVISE] = pan_ioctl_madvise,
-@@ -489,6 +989,16 @@ drm_shim_driver_init(void)
+@@ -489,6 +1022,18 @@ drm_shim_driver_init(void)
     shim_device.driver_name = "panfrost";
     shim_device.driver_ioctls = driver_ioctls;
     shim_device.driver_ioctl_count = ARRAY_SIZE(driver_ioctls);
@@ -941,6 +1007,8 @@ index f984e7f..9d8c13e 100644
 +   core_ioctls[_IOC_NR(DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD)] = pan_ioctl_syncobj_handle_to_fd;
 +   core_ioctls[_IOC_NR(DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE)] = pan_ioctl_syncobj_fd_to_handle;
 +   core_ioctls[_IOC_NR(DRM_IOCTL_SYNCOBJ_WAIT)] = pan_ioctl_syncobj_wait;
++   core_ioctls[_IOC_NR(DRM_IOCTL_SYNCOBJ_RESET)] = pan_ioctl_syncobj_reset;
++   core_ioctls[_IOC_NR(DRM_IOCTL_SYNCOBJ_SIGNAL)] = pan_ioctl_syncobj_signal;
 +   syncobjs = _mesa_hash_table_u64_create(NULL);
 +   sync_fds = _mesa_hash_table_u64_create(NULL);
  
@@ -979,19 +1047,21 @@ index 0e3b963..02be199 100644
          .cmd = PRFCNT_CONTROL_CMD_SAMPLE_SYNC,
      };
 diff --git a/src/panfrost/lib/pan_bo.c b/src/panfrost/lib/pan_bo.c
-index 28b3da2..c9196ef 100644
+index 28b3da2..20da473 100644
 --- a/src/panfrost/lib/pan_bo.c
 +++ b/src/panfrost/lib/pan_bo.c
-@@ -70,6 +70,8 @@ panfrost_bo_alloc(struct panfrost_device *dev, size_t size,
+@@ -70,6 +70,10 @@ panfrost_bo_alloc(struct panfrost_device *dev, size_t size,
                  if (!(flags & PAN_BO_EXECUTE))
                          create_bo.flags |= PANFROST_BO_NOEXEC;
          }
 +        if (flags & PAN_BO_CPU_TRACKED)
 +                create_bo.flags |= PANFROST_BO_E850_CPU_TRACKED;
++        if (flags & PAN_BO_E850_CACHED)
++                create_bo.flags |= PANFROST_BO_E850_CACHED;
  
          ret = drmIoctl(dev->fd, DRM_IOCTL_PANFROST_CREATE_BO, &create_bo);
          if (ret) {
-@@ -349,6 +351,15 @@ panfrost_bo_mmap(struct panfrost_bo *bo)
+@@ -349,6 +353,15 @@ panfrost_bo_mmap(struct panfrost_bo *bo)
          }
  }
  
@@ -1007,20 +1077,20 @@ index 28b3da2..c9196ef 100644
  static void
  panfrost_bo_munmap(struct panfrost_bo *bo)
  {
-@@ -379,7 +390,7 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size,
+@@ -379,7 +392,7 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size,
          if (flags & PAN_BO_GROWABLE)
                  assert(flags & PAN_BO_INVISIBLE);
  
 -        flags = flags & PAN_BO_EXECUTE;
-+        flags = flags & (PAN_BO_EXECUTE | PAN_BO_CPU_TRACKED); /* e850: keep the shim's write tracking */
++        flags = flags & (PAN_BO_EXECUTE | PAN_BO_CPU_TRACKED | PAN_BO_E850_CACHED); /* e850: keep the shim's flags */
  
          /* Before creating a BO, we first want to check the cache but without
           * waiting for BO readiness (BOs in the cache can still be referenced
 diff --git a/src/panfrost/lib/pan_bo.h b/src/panfrost/lib/pan_bo.h
-index e267cb4..9c1fecd 100644
+index e267cb4..c13550e 100644
 --- a/src/panfrost/lib/pan_bo.h
 +++ b/src/panfrost/lib/pan_bo.h
-@@ -50,6 +50,10 @@
+@@ -50,6 +50,13 @@
   * cached locally */
  #define PAN_BO_SHARED             (1 << 4)
  
@@ -1028,10 +1098,13 @@ index e267cb4..9c1fecd 100644
 + * CPU writes go through a transfer), so the shim skips cleaning the CPU cache otherwise */
 +#define PAN_BO_CPU_TRACKED        (1 << 5)
 +
++/* e850 kbase shim: CPU-cached, the owner flushes and invalidates with MEM_SYNC (panvk, 11.118) */
++#define PAN_BO_E850_CACHED        (1 << 6)
++
  /* GPU access flags */
  
  /* BO is either shared (can be accessed by more than one GPU batch) or private
-@@ -126,6 +130,8 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size,
+@@ -126,6 +133,8 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size,
                     uint32_t flags, const char *label);
  void
  panfrost_bo_mmap(struct panfrost_bo *bo);
@@ -1040,3 +1113,115 @@ index e267cb4..9c1fecd 100644
  struct panfrost_bo *
  panfrost_bo_import(struct panfrost_device *dev, int fd);
  int
+diff --git a/src/panfrost/vulkan/panvk_device.c b/src/panfrost/vulkan/panvk_device.c
+index 1617b3a..a028793 100644
+--- a/src/panfrost/vulkan/panvk_device.c
++++ b/src/panfrost/vulkan/panvk_device.c
+@@ -885,11 +885,19 @@ panvk_GetPhysicalDeviceMemoryProperties2(VkPhysicalDevice physicalDevice,
+       .memoryHeapCount = 1,
+       .memoryHeaps[0].size = panvk_get_system_heap_size(),
+       .memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+-      .memoryTypeCount = 1,
++      .memoryTypeCount = 2,
++      /* e850 11.118: type 0 is CPU-cached, not coherent (the Mali is not IO-coherent): the app
++       * flushes and invalidates (vkFlush/InvalidateMappedMemoryRanges -> MEM_SYNC), so CPU reads of
++       * GPU results run at cache speed and the shim does not clean whole BOs on every submit. It
++       * comes first because NCNN takes the first device-local type for its blobs and maps them. */
+       .memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+-                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
++                                      VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+       .memoryTypes[0].heapIndex = 0,
++      .memoryTypes[1].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
++                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
++                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
++      .memoryTypes[1].heapIndex = 0,
+    };
+ }
+ 
+@@ -1220,7 +1228,8 @@ panvk_AllocateMemory(VkDevice _device,
+       close(fd_info->fd);
+    } else {
+       mem->bo = panfrost_bo_create(&device->physical_device->pdev,
+-                                   pAllocateInfo->allocationSize, 0,
++                                   pAllocateInfo->allocationSize,
++                                   pAllocateInfo->memoryTypeIndex == 0 ? PAN_BO_E850_CACHED : 0,
+                                    "User-requested memory");
+    }
+ 
+@@ -1280,12 +1289,37 @@ panvk_UnmapMemory(VkDevice _device, VkDeviceMemory _memory)
+ {
+ }
+ 
++/* e850 11.118: cache maintenance of the non-coherent memory type through the kbase shim's MEM_SYNC
++ * (1 = clean for the device, 2 = invalidate for the CPU). Coherent (uncached) memory needs none. */
++static VkResult
++panvk_sync_ranges(VkDevice _device, uint32_t count, const VkMappedMemoryRange *ranges, uint8_t type)
++{
++   VK_FROM_HANDLE(panvk_device, device, _device);
++
++   for (uint32_t i = 0; i < count; i++) {
++      VK_FROM_HANDLE(panvk_device_memory, mem, ranges[i].memory);
++      if (!mem || !(mem->bo->flags & PAN_BO_E850_CACHED) || !mem->bo->ptr.cpu)
++         continue;
++      uint64_t size = ranges[i].size == VK_WHOLE_SIZE ? mem->bo->size - ranges[i].offset : ranges[i].size;
++      /* the GPU VA: the shim's kbase mapping of the BO (SAME_VA), which kbase knows; ptr.cpu is a
++       * second mapping of the same pages and the A55's data cache is physically tagged */
++      struct drm_panfrost_mem_sync s = {
++         .va = mem->bo->ptr.gpu + ranges[i].offset,
++         .size = size,
++         .type = type,
++      };
++      if (drmIoctl(device->physical_device->pdev.fd, DRM_IOCTL_PANFROST_MEM_SYNC, &s))
++         return vk_error(device, VK_ERROR_DEVICE_LOST);
++   }
++   return VK_SUCCESS;
++}
++
+ VkResult
+ panvk_FlushMappedMemoryRanges(VkDevice _device,
+                               uint32_t memoryRangeCount,
+                               const VkMappedMemoryRange *pMemoryRanges)
+ {
+-   return VK_SUCCESS;
++   return panvk_sync_ranges(_device, memoryRangeCount, pMemoryRanges, 1);
+ }
+ 
+ VkResult
+@@ -1293,7 +1327,7 @@ panvk_InvalidateMappedMemoryRanges(VkDevice _device,
+                                    uint32_t memoryRangeCount,
+                                    const VkMappedMemoryRange *pMemoryRanges)
+ {
+-   return VK_SUCCESS;
++   return panvk_sync_ranges(_device, memoryRangeCount, pMemoryRanges, 2);
+ }
+ 
+ void
+@@ -1306,7 +1340,8 @@ panvk_GetBufferMemoryRequirements2(VkDevice device,
+    const uint64_t align = 64;
+    const uint64_t size = align64(buffer->vk.size, align);
+ 
+-   pMemoryRequirements->memoryRequirements.memoryTypeBits = 1;
++   /* e850 11.118: buffers may live in either type (0 cached, 1 coherent) */
++   pMemoryRequirements->memoryRequirements.memoryTypeBits = 3;
+    pMemoryRequirements->memoryRequirements.alignment = align;
+    pMemoryRequirements->memoryRequirements.size = size;
+ }
+@@ -1321,7 +1356,7 @@ panvk_GetImageMemoryRequirements2(VkDevice device,
+    const uint64_t align = 4096;
+    const uint64_t size = panvk_image_get_total_size(image);
+ 
+-   pMemoryRequirements->memoryRequirements.memoryTypeBits = 1;
++   pMemoryRequirements->memoryRequirements.memoryTypeBits = 2;   /* e850 11.118: the coherent type */
+    pMemoryRequirements->memoryRequirements.alignment = align;
+    pMemoryRequirements->memoryRequirements.size = size;
+ }
+@@ -1689,7 +1724,7 @@ panvk_GetMemoryFdPropertiesKHR(VkDevice _device,
+                                VkMemoryFdPropertiesKHR *pMemoryFdProperties)
+ {
+    assert(handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
+-   pMemoryFdProperties->memoryTypeBits = 1;
++   pMemoryFdProperties->memoryTypeBits = 2;   /* e850 11.118: imported memory is the coherent type */
+    return VK_SUCCESS;
+ }
+ 

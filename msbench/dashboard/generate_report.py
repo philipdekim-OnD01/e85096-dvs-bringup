@@ -20,7 +20,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RES = os.path.join(ROOT, 'results')
 DEV_NAME = {'e850': 'E850 (Cortex-A55 ×8)', 'orin-nano': 'Orin Nano (Cortex-A78AE ×6)', 'agx-orin': 'AGX Orin'}
 NA = [('AGX Orin, DLA', '장비 없음. Orin Nano에는 DLA가 없다'),
-      ('E850 GPU (Mali-G52)', 'OpenCL·Vulkan 드라이버 없음: ORT·NCNN·TFLite GPU 경로 없음'),
+      ('E850 GPU INT8, 그 밖의 GPU 런타임', 'Mali-G52는 TFLite GL(GLES 3.1 compute, Mesa panfrost)과 NCNN Vulkan(Mesa panvk, 11.118)으로 잰다. GL 백엔드에는 정수 연산이 없고, NCNN의 INT8은 CPU에서만 돈다. OpenCL이 없어 ORT·ArmNN GPU 경로는 없다'),
+      ('E850 NCNN Vulkan H2D·계산·D2H', 'NCNN Python에는 GPU 버퍼를 따로 올리고 내리는 API가 없어 나눠 재지 않았다. 전체(입력 numpy→출력 numpy, 동기)만 잰다'),
+      ('E850 GPU YOLO 전부', 'GL에 TRANSPOSE·BATCH_MATMUL 셰이더와 상수 텐서 SUB(박스 디코드)가 없어 346개 중 167개(분할 1개)만 GPU, 나머지는 CPU 4스레드'),
       ('E850 전력·에너지', '전력 센서 없음. 외부 전력계가 필요하다'),
       ('Jetson PyTorch·onnxruntime CUDA INT8', '이 모델들에 INT8 CUDA 커널 경로가 없다(QDQ는 CUDA에서 FP32 합성곱으로 풀린다). GPU INT8은 TensorRT만'),
       ('Jetson GPU 클럭 고정', 'jetson_clocks에 sudo 필요: GPU DVFS(306~1020 MHz) 그대로 쟀고 블록 끝 클럭을 기록'),
@@ -61,7 +63,8 @@ def main():
         b = r.get('blocks') or []
         d = {k: r.get(k) for k in ('device', 'model', 'runtime', 'precision', 'threads', 'rss_peak_mb', 'load_ms',
                                    'file_bytes', 'error', 'fps', 'warmup_runs', 'run', 'env')}
-        d['gpu'] = r.get('gpu_phases_ms')
+        d['gpu'] = r.get('gpu_phases_ms') or ({'h2d': None, 'compute': None, 'd2h': None}
+                                              if r.get('runtime') == 'ncnn-vk' else None)   # GPU row without phases
         d['gpu_mhz'] = b[-1].get('gpu_mhz_after') if b else None
         d['cpus'] = r.get('cpus')
         lm = r.get('latency_ms') or {}
@@ -139,7 +142,7 @@ svg text{fill:var(--text2);font-size:11.5px}.na{color:var(--muted)}
 <div class="legend" id="lg"></div></div>
 <div class="card"><svg id="chart" width="100%" role="img" aria-label="런타임별 지연 막대그래프"></svg></div>
 <h2>장비별 가장 빠른 설정 (FP32보다 정확도가 0.02 넘게 떨어진 설정은 뺌, 환경 변수를 바꾼 판 포함)</h2><div class="card wrap" id="best"></div>
-<h2>Jetson GPU (호스트 1스레드, 입력 numpy→출력 numpy, 동기)</h2><div class="card wrap" id="gpu"></div>
+<h2>GPU (Jetson은 호스트 1스레드, E850 TFLite GL·NCNN Vulkan은 CPU 폴백 4스레드; 입력 numpy→출력 numpy, 동기)</h2><div class="card wrap" id="gpu"></div>
 <h2>Jetson / E850 속도 비 (같은 모델·런타임·정밀도·스레드)</h2><div class="card wrap" id="ratio"></div>
 <h2>정확도 (같은 200장, 스레드 최대에서 한 번)</h2><div class="card wrap" id="acc"></div>
 <h2>모델 변환 검증 (TorchScript FP32 대비, 보정 이미지 4장)</h2><div class="card wrap" id="par"></div>
@@ -196,11 +199,11 @@ const accs=r=>{const v=accv(r);return v==null?'정확도 N/A':(r.model.startsWit
 const ok=r=>{const ref=Math.max(...D.rows.filter(q=>q.device==r.device&&q.model==r.model&&q.precision=='fp32').map(accv).filter(v=>v!=null));const v=accv(r);return v!=null&&isFinite(ref)&&v>=ref-0.02};
 const best=(d,m,gpu)=>D.rows.filter(r=>r.device==d&&r.model==m&&!!r.gpu==gpu&&r.median!=null&&ok(r)).sort((x,y)=>x.median-y.median)[0];
 const bs=r=>r?`${f2(r.median)} ms <span class=na>${r.runtime} ${r.precision.toUpperCase()}${r.gpu?'':' t'+r.threads}${r.env?' + '+esc(r.env):''}, ${accs(r)}</span>`:null;
-{const body=models.map(m=>{const e=best('e850',m,false),j=best('orin-nano',m,false),g=best('orin-nano',m,true);
- return [m,'','','',bs(e),bs(j),bs(g),e&&j?(e.median/j.median).toFixed(1)+'×':null,e&&g?(e.median/g.median).toFixed(0)+'×':null]});
- table($('#best'),['모델','','','','E850 CPU','Jetson CPU','Jetson GPU','E850/Jetson CPU','E850 CPU/Jetson GPU'],body)}
-{const G=D.rows.filter(r=>r.gpu);if(G.length)table($('#gpu'),['모델','런타임','정밀도','','중앙값','p95','H2D','계산','D2H','GPU MHz','VDD_IN W','J/추론','정확도'],
- G.map(r=>[r.model,r.runtime,r.precision.toUpperCase(),'',f2(r.median),f2(r.p95),r.gpu.h2d,r.gpu.compute,r.gpu.d2h,r.gpu_mhz,r.power,r.energy,accs(r)]));else $('#gpu').textContent='GPU 결과 없음'}
+{const body=models.map(m=>{const e=best('e850',m,false),j=best('orin-nano',m,false),g=best('orin-nano',m,true),eg=best('e850',m,true);
+ return [m,'','','',bs(e),bs(eg),bs(j),bs(g),e&&j?(e.median/j.median).toFixed(1)+'×':null,e&&g?(e.median/g.median).toFixed(0)+'×':null]});
+ table($('#best'),['모델','','','','E850 CPU','E850 GPU','Jetson CPU','Jetson GPU','E850/Jetson CPU','E850 CPU/Jetson GPU'],body)}
+{const G=D.rows.filter(r=>r.gpu);if(G.length)table($('#gpu'),['모델','런타임','정밀도','장비','중앙값','p95','H2D','계산','D2H','GPU MHz','VDD_IN W','J/추론','정확도'],
+ G.map(r=>[r.model,r.runtime+(r.env?' + '+esc(r.env):''),r.precision.toUpperCase(),D.names[r.device],f2(r.median),f2(r.p95),r.gpu.h2d,r.gpu.compute,r.gpu.d2h,r.gpu_mhz,r.power,r.energy,accs(r)]));else $('#gpu').textContent='GPU 결과 없음'}
 $('#na').innerHTML=D.na.map(([a,b])=>`<div><b>${esc(a)}</b>: ${esc(b)}</div>`).join('');
 </script></main></body></html>'''
 

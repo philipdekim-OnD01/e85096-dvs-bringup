@@ -68,18 +68,24 @@ class TFLite:
 
 class NCNN:
     FP16 = False        # ncnn's own default on ARMv8.2 (A55, A78AE) is FP16 storage and arithmetic: off = real FP32
+    VK = False
 
     def __init__(self, d, f, threads):
         import ncnn
         self.n = ncnn
         self.net = ncnn.Net()
         o = self.net.opt
-        o.use_vulkan_compute = False
+        o.use_vulkan_compute = self.VK
+        if self.VK and ncnn.get_gpu_count() < 1:
+            raise RuntimeError('ncnn sees no Vulkan GPU (source e850gpu/vk-env.sh first)')
+        if self.VK:     # the winograd 4x4 transform needs 36 vec4 live: Bifrost RA spills one by one, minutes per shader
+            o.use_winograd_convolution = False
         o.num_threads = threads
         o.use_int8_inference = True
         o.use_fp16_packed = o.use_fp16_storage = o.use_fp16_arithmetic = self.FP16
         assert self.net.load_param(os.path.join(d, f[0])) == 0 and self.net.load_model(os.path.join(d, f[1])) == 0
-        self.info = {'ncnn': ncnn.__version__, 'threads': threads, 'fp16_storage_arithmetic': self.FP16}
+        self.info = {'ncnn': ncnn.__version__, 'threads': threads, 'fp16_storage_arithmetic': self.FP16,
+                     **({'vulkan': 'panvk (Mesa 22.2-devel) on kbase'} if self.VK else {})}
 
     def prepare(self, x):
         a = np.ascontiguousarray(x.transpose(2, 0, 1), np.float32) / 255
@@ -92,6 +98,17 @@ class NCNN:
 
 
 class NCNN16(NCNN):
+    FP16 = True
+
+
+class NCNNVK(NCNN):
+    """NCNN's Vulkan path on the E850's Mali-G52 (11.118): Mesa's panvk on the vendor kbase (e850gpu/build-panvk.sh),
+    environment from e850gpu/vk-env.sh before Python starts. Layers without a Vulkan kernel run on the CPU with
+    `threads`. panvk has no 16-bit storage or arithmetic, so FP16 here is only fp16-packed buffers (fp32 math)."""
+    VK = True
+
+
+class NCNNVK16(NCNNVK):
     FP16 = True
 
 
@@ -251,6 +268,114 @@ class TRT:
         return _phases(lambda: self._h2d(x), self._compute, self._d2h, self.stream.synchronize)
 
 
+class TFLiteGL:
+    """TFLite on the E850's Mali-G52 (11.117): the GPU delegate (v2) restricted to its OpenGL ES 3.1 compute backend
+    (GL_ONLY), on the GLES driver the boards already have (Mesa panfrost on the vendor kbase, 11.82), so no OpenCL or
+    Vulkan is needed. Our own build of the TFLite C API and libtensorflowlite_gpu_delegate.so from one TensorFlow tag
+    (e850gpu/build-tflite-gl.sh), called through ctypes; the driver environment (LD_PRELOAD shim,
+    EGL_PLATFORM=surfaceless) comes from e850gpu/gpu-env.sh before Python starts. FP16 = the same FP32 model with
+    precision loss allowed. The delegate takes at most MSB_GL_PARTITIONS runs of supported layers (TFLite's default
+    is 1); the rest run on the CPU with `threads`. info['delegated'] is the delegate's own count. The GL context
+    belongs to the thread that made it."""
+    FP16 = False
+
+    def __init__(self, d, f, threads):
+        import ctypes as C
+        import re
+        import tempfile
+        lib = os.environ.get('MSB_TFLITE_GL') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
+                                                                'e850gpu', 'lib')
+        self.c = c = C.CDLL(os.path.join(lib, 'libtensorflowlite_c.so'))
+        g = C.CDLL(os.path.join(lib, 'libtensorflowlite_gpu_delegate.so'))
+
+        class Opts(C.Structure):                                 # TfLiteGpuDelegateOptionsV2 (delegate_options.h)
+            _fields_ = [('is_precision_loss_allowed', C.c_int32), ('inference_preference', C.c_int32),
+                        ('inference_priority1', C.c_int32), ('inference_priority2', C.c_int32),
+                        ('inference_priority3', C.c_int32), ('experimental_flags', C.c_int64),
+                        ('max_delegated_partitions', C.c_int32), ('serialization_dir', C.c_char_p),
+                        ('model_token', C.c_char_p)]
+        P = C.c_void_p
+        for n, res, args in [('TfLiteModelCreateFromFile', P, [C.c_char_p]), ('TfLiteInterpreterOptionsCreate', P, []),
+                             ('TfLiteInterpreterOptionsSetNumThreads', None, [P, C.c_int32]),
+                             ('TfLiteInterpreterOptionsAddDelegate', None, [P, P]),
+                             ('TfLiteInterpreterCreate', P, [P, P]), ('TfLiteInterpreterAllocateTensors', C.c_int, [P]),
+                             ('TfLiteInterpreterGetInputTensor', P, [P, C.c_int32]),
+                             ('TfLiteInterpreterGetOutputTensor', P, [P, C.c_int32]),
+                             ('TfLiteInterpreterInvoke', C.c_int, [P]), ('TfLiteTensorByteSize', C.c_size_t, [P]),
+                             ('TfLiteTensorNumDims', C.c_int32, [P]), ('TfLiteTensorDim', C.c_int32, [P, C.c_int32]),
+                             ('TfLiteTensorCopyFromBuffer', C.c_int, [P, P, C.c_size_t]),
+                             ('TfLiteTensorCopyToBuffer', C.c_int, [P, P, C.c_size_t]), ('TfLiteVersion', C.c_char_p, [])]:
+            fn = getattr(c, n)
+            fn.restype, fn.argtypes = res, args
+        g.TfLiteGpuDelegateOptionsV2Default.restype = Opts
+        g.TfLiteGpuDelegateV2Create.restype, g.TfLiteGpuDelegateV2Create.argtypes = P, [C.POINTER(Opts)]
+        o = g.TfLiteGpuDelegateOptionsV2Default()
+        o.is_precision_loss_allowed = int(self.FP16)
+        o.inference_preference = 1                              # SUSTAINED_SPEED: compile once, run many times
+        o.experimental_flags = 1 << 2                           # GL_ONLY (no OpenCL on this GPU)
+        o.max_delegated_partitions = int(os.environ.get('MSB_GL_PARTITIONS', '1'))
+        err, saved = tempfile.TemporaryFile(), os.dup(2)        # TFLite and Mesa report on stderr: keep it for info
+        os.dup2(err.fileno(), 2)
+        try:
+            self.dg = g.TfLiteGpuDelegateV2Create(C.byref(o))
+            self.m = c.TfLiteModelCreateFromFile(os.path.join(d, f).encode())
+            op = c.TfLiteInterpreterOptionsCreate()
+            c.TfLiteInterpreterOptionsSetNumThreads(op, threads)
+            if self.dg:
+                c.TfLiteInterpreterOptionsAddDelegate(op, self.dg)
+            self.it = c.TfLiteInterpreterCreate(self.m, op)
+            ok = bool(self.dg and self.it) and c.TfLiteInterpreterAllocateTensors(self.it) == 0
+        finally:
+            os.dup2(saved, 2)
+            os.close(saved)
+            err.seek(0)
+            log = err.read().decode(errors='replace')
+        m = re.search(r'Replacing (\d+) out of (\d+) node\(s\) with delegate \(TfLiteGpuDelegate.*?yielding (\d+) partitions', log)
+        if not ok or not m:
+            raise RuntimeError('TFLite GL delegate did not take the model: ' + log[-1500:])
+        self.inp = c.TfLiteInterpreterGetInputTensor(self.it, 0)
+        self.outp = c.TfLiteInterpreterGetOutputTensor(self.it, 0)
+        self.out = np.empty([c.TfLiteTensorDim(self.outp, i) for i in range(c.TfLiteTensorNumDims(self.outp))],
+                            np.float32)
+        assert self.out.nbytes == c.TfLiteTensorByteSize(self.outp)
+        self.info = {'tflite_c': c.TfLiteVersion().decode(), 'delegate': 'GPU v2, GL_ONLY (OpenGL ES 3.1 compute)',
+                     'precision_loss_allowed': bool(self.FP16), 'threads_cpu_fallback': threads,
+                     'max_delegated_partitions': o.max_delegated_partitions,
+                     'delegated': {'nodes': int(m.group(1)), 'of': int(m.group(2)), 'partitions': int(m.group(3))},
+                     'gpu_lock': rd_first('/sys/class/misc/mali0/device/dvfs_min_lock_status'),
+                     'log': log[-600:]}
+
+    def prepare(self, x):
+        return np.ascontiguousarray(x[None], np.float32) / 255                # NHWC, like TFLite on the CPU
+
+    def infer(self, x):
+        c = self.c
+        if c.TfLiteTensorCopyFromBuffer(self.inp, x.ctypes.data, x.nbytes) or c.TfLiteInterpreterInvoke(self.it) or \
+                c.TfLiteTensorCopyToBuffer(self.outp, self.out.ctypes.data, self.out.nbytes):
+            raise RuntimeError('TFLite GL invoke failed')
+        return self.out.copy()                    # the buffer is reused by the next call
+
+    def phases(self, x):
+        # h2d/d2h here are the copies into and out of the TFLite tensors on the CPU; the delegate's own upload to the
+        # GPU, the layout conversion (BHWC <-> PHWC4) and the read-back all happen inside invoke ('compute').
+        c = self.c
+        return _phases(lambda: c.TfLiteTensorCopyFromBuffer(self.inp, x.ctypes.data, x.nbytes),
+                       lambda _: c.TfLiteInterpreterInvoke(self.it),
+                       lambda _: c.TfLiteTensorCopyToBuffer(self.outp, self.out.ctypes.data, self.out.nbytes),
+                       lambda: None)
+
+
+class TFLiteGL16(TFLiteGL):
+    FP16 = True
+
+
+def rd_first(p):
+    try:
+        return open(p).read().strip()
+    except OSError:
+        return None
+
+
 # (runtime, precision) -> (adapter, manifest file key)
 RUNTIMES = {('pytorch', 'fp32'): (Torch, 'torchscript'), ('onnxruntime', 'fp32'): (ORT, 'onnx'),
             ('onnxruntime', 'int8'): (ORT, 'onnx_int8'), ('tflite', 'fp32'): (TFLite, 'tflite_fp32'),
@@ -263,6 +388,12 @@ GPU = {('pytorch-cuda', 'fp32'): (TorchCUDA, 'torchscript'), ('pytorch-cuda', 'f
        ('tensorrt', 'fp32'): (TRT, 'onnx'), ('tensorrt', 'fp16'): (TRT, 'onnx_fp16'),
        ('tensorrt', 'int8'): (TRT, 'onnx_int8_sym'), ('tensorrt', 'int8fp16'): (TRT, 'onnx_int8_fp16')}
 RUNTIMES.update(GPU)
+# E850 Mali-G52 through GLES 3.1 compute (11.117). INT8 is N/A there: the GL backend has no integer arithmetic (a
+# quantized model would be dequantized and run in float), so only the float model is measured, at FP32 and FP16.
+E850GPU = {('tflite-gl', 'fp32'): (TFLiteGL, 'tflite_fp32'), ('tflite-gl', 'fp16'): (TFLiteGL16, 'tflite_fp32'),
+           ('ncnn-vk', 'fp32'): (NCNNVK, 'ncnn'), ('ncnn-vk', 'fp16'): (NCNNVK16, 'ncnn')}   # panvk (11.118)
+GPU.update(E850GPU)
+RUNTIMES.update(E850GPU)
 
 COCO91 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 31, 32, 33, 34,
           35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,

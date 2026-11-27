@@ -1,0 +1,202 @@
+{
+ "secs": 30.0,
+ "cpu_worker": "ncnn fp16, 4 threads, OMP places CPU4-7, the main Python thread",
+ "gpu_worker": "ncnn-vk fp32, 1 thread, Python thread re-pinned to CPU3 before every run",
+ "driver": {
+  "VK_ICD_FILENAMES": "/home/philip/gpu/mesa-vk/icd.json",
+  "PAN_KBASE_UNCACHED": "1"
+ },
+ "cases": [
+  {
+   "cpu_model": "mobilenetv2",
+   "gpu_model": "mobilenetv2",
+   "cpu_alone": {
+    "n": 1347,
+    "ips": 44.897,
+    "median_ms": 22.09,
+    "p90_ms": 23.36,
+    "thread_cores": 0.983
+   },
+   "clock_cpu_alone": {
+    "cpu4_mhz": 1670,
+    "little1_c": 86.0,
+    "g3d_c": 73.8
+   },
+   "gpu_alone": {
+    "n": 219,
+    "ips": 7.281,
+    "median_ms": 137.04,
+    "p90_ms": 143.72,
+    "thread_cores": 0.157
+   },
+   "clock_gpu_alone": {
+    "cpu4_mhz": 685,
+    "little1_c": 69.8,
+    "g3d_c": 72.4
+   },
+   "cpu_with": {
+    "n": 1213,
+    "ips": 40.425,
+    "median_ms": 24.27,
+    "p90_ms": 27.14,
+    "thread_cores": 0.981
+   },
+   "gpu_with": {
+    "n": 208,
+    "ips": 6.927,
+    "median_ms": 143.92,
+    "p90_ms": 151.76,
+    "thread_cores": 0.157
+   },
+   "clock_with": {
+    "cpu4_mhz": 1483,
+    "little1_c": 89.5,
+    "g3d_c": 83.4
+   },
+   "sum_over_cpu_alone": 0.0547
+  },
+  {
+   "cpu_model": "resnet18",
+   "gpu_model": "resnet18",
+   "cpu_alone": {
+    "n": 596,
+    "ips": 19.846,
+    "median_ms": 49.59,
+    "p90_ms": 53.46,
+    "thread_cores": 0.973
+   },
+   "clock_cpu_alone": {
+    "cpu4_mhz": 1567,
+    "little1_c": 88.6,
+    "g3d_c": 76.8
+   },
+   "gpu_alone": {
+    "n": 47,
+    "ips": 1.542,
+    "median_ms": 648.37,
+    "p90_ms": 653.85,
+    "thread_cores": 0.026
+   },
+   "clock_gpu_alone": {
+    "cpu4_mhz": 591,
+    "little1_c": 70.9,
+    "g3d_c": 74.4
+   },
+   "cpu_with": {
+    "n": 540,
+    "ips": 17.982,
+    "median_ms": 55.43,
+    "p90_ms": 60.93,
+    "thread_cores": 0.977
+   },
+   "gpu_with": {
+    "n": 46,
+    "ips": 1.532,
+    "median_ms": 652.72,
+    "p90_ms": 660.31,
+    "thread_cores": 0.027
+   },
+   "clock_with": {
+    "cpu4_mhz": 1343,
+    "little1_c": 89.3,
+    "g3d_c": 84.7
+   },
+   "sum_over_cpu_alone": -0.0167
+  },
+  {
+   "cpu_model": "yolo11n-320",
+   "gpu_model": "yolo11n-320",
+   "cpu_alone": {
+    "n": 613,
+    "ips": 20.406,
+    "median_ms": 48.16,
+    "p90_ms": 50.77,
+    "thread_cores": 0.979
+   },
+   "clock_cpu_alone": {
+    "cpu4_mhz": 1601,
+    "little1_c": 87.3,
+    "g3d_c": 76.4
+   },
+   "gpu_alone": {
+    "n": 84,
+    "ips": 2.784,
+    "median_ms": 356.51,
+    "p90_ms": 378.67,
+    "thread_cores": 0.215
+   },
+   "clock_gpu_alone": {
+    "cpu4_mhz": 636,
+    "little1_c": 70.7,
+    "g3d_c": 73.3
+   },
+   "cpu_with": {
+    "n": 558,
+    "ips": 18.574,
+    "median_ms": 52.5,
+    "p90_ms": 60.7,
+    "thread_cores": 0.974
+   },
+   "gpu_with": {
+    "n": 81,
+    "ips": 2.673,
+    "median_ms": 372.96,
+    "p90_ms": 391.23,
+    "thread_cores": 0.223
+   },
+   "clock_with": {
+    "cpu4_mhz": 1422,
+    "little1_c": 89.2,
+    "g3d_c": 83.3
+   },
+   "sum_over_cpu_alone": 0.0412
+  },
+  {
+   "cpu_model": "yolo11n-320",
+   "gpu_model": "resnet18",
+   "cpu_alone": {
+    "n": 612,
+    "ips": 20.378,
+    "median_ms": 48.5,
+    "p90_ms": 50.71,
+    "thread_cores": 0.981
+   },
+   "clock_cpu_alone": {
+    "cpu4_mhz": 1593,
+    "little1_c": 87.4,
+    "g3d_c": 76.7
+   },
+   "gpu_alone": {
+    "n": 47,
+    "ips": 1.551,
+    "median_ms": 643.77,
+    "p90_ms": 651.88,
+    "thread_cores": 0.023
+   },
+   "clock_gpu_alone": {
+    "cpu4_mhz": 611,
+    "little1_c": 71.5,
+    "g3d_c": 75.0
+   },
+   "cpu_with": {
+    "n": 564,
+    "ips": 18.772,
+    "median_ms": 52.76,
+    "p90_ms": 57.99,
+    "thread_cores": 0.978
+   },
+   "gpu_with": {
+    "n": 47,
+    "ips": 1.537,
+    "median_ms": 649.89,
+    "p90_ms": 656.55,
+    "thread_cores": 0.026
+   },
+   "clock_with": {
+    "cpu4_mhz": 1428,
+    "little1_c": 88.9,
+    "g3d_c": 84.7
+   }
+  }
+ ]
+}

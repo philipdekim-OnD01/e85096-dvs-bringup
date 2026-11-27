@@ -86,7 +86,10 @@ def clocks(cpus):
 
 def gpu_mhz():
     f = glob.glob('/sys/class/devfreq/*.gpu/cur_freq')
-    return int(rd(f[0], 0)) // 1000000 if f else None
+    if f:
+        return int(rd(f[0], 0)) // 1000000
+    v = rd('/sys/class/misc/mali0/device/clock')            # E850 Mali-G52 (kbase): kHz, 0 while powered down
+    return int(v) // 1000 if v and v.isdigit() else None
 
 
 def temps():
@@ -153,7 +156,7 @@ def child(cfg):
     cls, key = RUNTIMES[(cfg['runtime'], cfg['precision'])]
     yolo = cfg['model'].startswith('yolo')
     size = man['input']['size']
-    norm = yolo and cfg['runtime'] == 'tflite' and man['tflite_coords_normalized']
+    norm = yolo and cfg['runtime'].startswith('tflite') and man['tflite_coords_normalized']
     data = np.load(os.path.join(cfg['data_dir'], 'coco-eval-%d.npz' % size if yolo else 'imagenet-eval-224.npz'))
     xs = data['x']
     r = dict(cfg, file=man['files'][key], file_bytes=man['bytes'][key])
@@ -226,8 +229,9 @@ def child(cfg):
                                 'bbox': [round(float(x1), 2), round(float(y1), 2), round(float(x2 - x1), 2),
                                          round(float(y2 - y1), 2)], 'score': round(float(s), 5)})
             os.makedirs(cfg['det_dir'], exist_ok=True)
-            f = os.path.join(cfg['det_dir'], '%s-%s-%s-%s.json' % (cfg['device'], cfg['model'], cfg['runtime'],
-                                                                  cfg['precision']))
+            f = os.path.join(cfg['det_dir'], '%s-%s-%s-%s%s.json' % (cfg['device'], cfg['model'], cfg['runtime'],
+                                                                    cfg['precision'],    # --env runs keep their own
+                                                                    ''.join('-' + c for c in cfg['env'].replace('=', '').split())))
             json.dump(det, open(f, 'w'))
             r['accuracy'] = {'detections_file': os.path.relpath(f, ROOT), 'images': len(xs), 'detections': len(det)}
         else:
@@ -299,10 +303,12 @@ def main():
     if a.sensor in ('dvs', 'fusion'):
         sys.exit('--sensor %s: not implemented yet (Phase %s: needs a DVS-trained YOLO11n and labelled DVS recordings, '
                  'see README)' % (a.sensor, 4 if a.sensor == 'dvs' else 5))
-    from runtimes import GPU, RUNTIMES
-    # 'all' = the CPU runtimes, 'gpu' = the Jetson GPU ones, or names
+    from runtimes import E850GPU, GPU, RUNTIMES
+    # 'all' = the CPU runtimes, 'gpu' = the GPU ones of this device (Jetson CUDA/TensorRT, E850 TFLite GL), or names.
+    # E850 ncnn-vk only by name: it needs vk-env.sh, whose LD_PRELOAD differs from gpu-env.sh's (11.118)
     rts = [k for k in RUNTIMES if (k[0] in a.runtime.split(',') or a.runtime == 'all' and k not in GPU
-                                   or a.runtime == 'gpu' and k in GPU)
+                                   or a.runtime == 'gpu' and k in GPU and (k in E850GPU) == (dev == 'e850')
+                                   and k[0] != 'ncnn-vk')
            and (a.precision == 'all' or k[1] in a.precision.split(','))]
     ncpu = os.cpu_count()
     sets = CPUSETS.get(dev, {1: [0], ncpu: list(range(ncpu))})

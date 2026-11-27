@@ -1,0 +1,118 @@
+{
+ "secs": 30,
+ "cpu_worker": "ncnn fp16, 4 threads, CPU4-7, OMP_PROC_BIND=close OMP_PLACES=cores",
+ "gpu_worker": "per case: tflite-gl fp16 or ncnn-vk fp32, CPU0-3",
+ "gpu_lock_khz": "[0:0][1:1001000][2:0][3:0][4:0][5:0]",
+ "cases": [
+  {
+   "case": "mobilenetv2:mobilenetv2",
+   "cpu_alone": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "mobilenetv2",
+    "n": 1371,
+    "ips": 45.67,
+    "median_ms": 21.78,
+    "p90_ms": 23.07,
+    "cores": 3.93,
+    "delegated": null
+   },
+   "gpu_alone": {
+    "runtime": "tflite-gl",
+    "precision": "fp16",
+    "model": "mobilenetv2",
+    "n": 434,
+    "ips": 14.444,
+    "median_ms": 69.04,
+    "p90_ms": 70.58,
+    "cores": 0.27,
+    "delegated": {
+     "nodes": 71,
+     "of": 71,
+     "partitions": 1
+    }
+   },
+   "cpu_with_gpu": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "mobilenetv2",
+    "n": 1230,
+    "ips": 40.988,
+    "median_ms": 23.88,
+    "p90_ms": 27.15,
+    "cores": 3.94,
+    "delegated": null
+   },
+   "gpu_with_cpu": {
+    "runtime": "tflite-gl",
+    "precision": "fp16",
+    "model": "mobilenetv2",
+    "n": 405,
+    "ips": 13.49,
+    "median_ms": 73.77,
+    "p90_ms": 76.12,
+    "cores": 0.32,
+    "delegated": {
+     "nodes": 71,
+     "of": 71,
+     "partitions": 1
+    }
+   }
+  },
+  {
+   "case": "resnet18:resnet18",
+   "cpu_alone": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "resnet18",
+    "n": 610,
+    "ips": 20.303,
+    "median_ms": 48.57,
+    "p90_ms": 51.41,
+    "cores": 3.92,
+    "delegated": null
+   },
+   "gpu_alone": {
+    "runtime": "tflite-gl",
+    "precision": "fp16",
+    "model": "resnet18",
+    "n": 57,
+    "ips": 1.894,
+    "median_ms": 528.12,
+    "p90_ms": 530.86,
+    "cores": 0.02,
+    "delegated": {
+     "nodes": 38,
+     "of": 38,
+     "partitions": 1
+    }
+   },
+   "cpu_with_gpu": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "resnet18",
+    "n": 545,
+    "ips": 18.166,
+    "median_ms": 54.69,
+    "p90_ms": 60.56,
+    "cores": 3.92,
+    "delegated": null
+   },
+   "gpu_with_cpu": {
+    "runtime": "tflite-gl",
+    "precision": "fp16",
+    "model": "resnet18",
+    "n": 56,
+    "ips": 1.856,
+    "median_ms": 538.7,
+    "p90_ms": 543.92,
+    "cores": 0.02,
+    "delegated": {
+     "nodes": 38,
+     "of": 38,
+     "partitions": 1
+    }
+   }
+  }
+ ]
+}

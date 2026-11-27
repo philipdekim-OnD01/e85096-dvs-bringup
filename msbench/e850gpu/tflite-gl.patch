@@ -1,0 +1,14 @@
+diff --git a/tensorflow/lite/delegates/gpu/delegate.cc b/tensorflow/lite/delegates/gpu/delegate.cc
+index cfad3789..02e83d23 100644
+--- a/tensorflow/lite/delegates/gpu/delegate.cc
++++ b/tensorflow/lite/delegates/gpu/delegate.cc
+@@ -1536,6 +1536,9 @@ TfLiteStatus DelegatePrepare(TfLiteContext* context, TfLiteDelegate* delegate) {
+   if (!cl::OpenCLSupported()) {
+     excluded_ops.insert(kTfLiteBuiltinSplit);
+     excluded_ops.insert(kTfLiteBuiltinSplitV);
++    // msbench 11.117: the OpenGL ES backend has no shader for these ("No shader implementation for transpose").
++    excluded_ops.insert(kTfLiteBuiltinTranspose);
++    excluded_ops.insert(kTfLiteBuiltinBatchMatmul);
+   }
+ #ifndef TFLITE_DEBUG_DELEGATE
+   TfLiteIntArray* ops_to_replace =

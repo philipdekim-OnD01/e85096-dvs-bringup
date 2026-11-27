@@ -1,0 +1,306 @@
+{
+ "secs": 30,
+ "cpu_worker": "ncnn fp16, 4 threads, CPU4-7, OMP_PROC_BIND=close OMP_PLACES=cores",
+ "gpu_worker": "per case: tflite-gl fp16 or ncnn-vk fp32, CPU0-3",
+ "gpu_lock_khz": "[0:0][1:1001000][2:0][3:0][4:0][5:0]",
+ "cases": [
+  {
+   "case": "resnet18:resnet18:1:ncnn-vk",
+   "cpu_alone": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "resnet18",
+    "n": 618,
+    "ips": 20.585,
+    "median_ms": 48.26,
+    "p90_ms": 51.19,
+    "cores": 3.94,
+    "delegated": null
+   },
+   "gpu_alone": {
+    "runtime": "ncnn-vk",
+    "precision": "fp32",
+    "model": "resnet18",
+    "n": 46,
+    "ips": 1.527,
+    "median_ms": 654.03,
+    "p90_ms": 662.06,
+    "cores": 0.03,
+    "delegated": null
+   },
+   "cpu_with_gpu": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "resnet18",
+    "n": 572,
+    "ips": 19.059,
+    "median_ms": 51.68,
+    "p90_ms": 57.72,
+    "cores": 3.92,
+    "delegated": null
+   },
+   "gpu_with_cpu": {
+    "runtime": "ncnn-vk",
+    "precision": "fp32",
+    "model": "resnet18",
+    "n": 46,
+    "ips": 1.527,
+    "median_ms": 654.46,
+    "p90_ms": 662.37,
+    "cores": 0.03,
+    "delegated": null
+   }
+  },
+  {
+   "case": "mobilenetv2:mobilenetv2:1:ncnn-vk",
+   "cpu_alone": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "mobilenetv2",
+    "n": 1337,
+    "ips": 44.564,
+    "median_ms": 22.21,
+    "p90_ms": 23.61,
+    "cores": 3.92,
+    "delegated": null
+   },
+   "gpu_alone": {
+    "runtime": "ncnn-vk",
+    "precision": "fp32",
+    "model": "mobilenetv2",
+    "n": 217,
+    "ips": 7.202,
+    "median_ms": 139.29,
+    "p90_ms": 144.56,
+    "cores": 0.17,
+    "delegated": null
+   },
+   "cpu_with_gpu": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "mobilenetv2",
+    "n": 1262,
+    "ips": 42.045,
+    "median_ms": 23.49,
+    "p90_ms": 25.46,
+    "cores": 3.94,
+    "delegated": null
+   },
+   "gpu_with_cpu": {
+    "runtime": "ncnn-vk",
+    "precision": "fp32",
+    "model": "mobilenetv2",
+    "n": 207,
+    "ips": 6.87,
+    "median_ms": 145.2,
+    "p90_ms": 151.94,
+    "cores": 0.17,
+    "delegated": null
+   }
+  },
+  {
+   "case": "yolo11n-320:yolo11n-320:1:ncnn-vk",
+   "cpu_alone": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 628,
+    "ips": 20.914,
+    "median_ms": 47.42,
+    "p90_ms": 49.67,
+    "cores": 3.85,
+    "delegated": null
+   },
+   "gpu_alone": {
+    "runtime": "ncnn-vk",
+    "precision": "fp32",
+    "model": "yolo11n-320",
+    "n": 80,
+    "ips": 2.637,
+    "median_ms": 380.79,
+    "p90_ms": 398.09,
+    "cores": 0.33,
+    "delegated": null
+   },
+   "cpu_with_gpu": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 591,
+    "ips": 19.677,
+    "median_ms": 50.05,
+    "p90_ms": 53.85,
+    "cores": 3.85,
+    "delegated": null
+   },
+   "gpu_with_cpu": {
+    "runtime": "ncnn-vk",
+    "precision": "fp32",
+    "model": "yolo11n-320",
+    "n": 77,
+    "ips": 2.543,
+    "median_ms": 391.45,
+    "p90_ms": 412.29,
+    "cores": 0.32,
+    "delegated": null
+   }
+  },
+  {
+   "case": "yolo11n-320:resnet18:1:ncnn-vk",
+   "cpu_alone": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 635,
+    "ips": 21.139,
+    "median_ms": 47.33,
+    "p90_ms": 49.24,
+    "cores": 3.87,
+    "delegated": null
+   },
+   "gpu_alone": {
+    "runtime": "ncnn-vk",
+    "precision": "fp32",
+    "model": "resnet18",
+    "n": 46,
+    "ips": 1.533,
+    "median_ms": 652.59,
+    "p90_ms": 659.43,
+    "cores": 0.03,
+    "delegated": null
+   },
+   "cpu_with_gpu": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 597,
+    "ips": 19.899,
+    "median_ms": 49.1,
+    "p90_ms": 53.69,
+    "cores": 3.86,
+    "delegated": null
+   },
+   "gpu_with_cpu": {
+    "runtime": "ncnn-vk",
+    "precision": "fp32",
+    "model": "resnet18",
+    "n": 46,
+    "ips": 1.528,
+    "median_ms": 653.86,
+    "p90_ms": 661.17,
+    "cores": 0.03,
+    "delegated": null
+   }
+  },
+  {
+   "case": "yolo11n-320:yolo11n-320:2",
+   "cpu_alone": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 631,
+    "ips": 21.002,
+    "median_ms": 47.53,
+    "p90_ms": 49.39,
+    "cores": 3.86,
+    "delegated": null
+   },
+   "gpu_alone": {
+    "runtime": "tflite-gl",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 117,
+    "ips": 3.875,
+    "median_ms": 258.08,
+    "p90_ms": 274.64,
+    "cores": 0.59,
+    "delegated": {
+     "nodes": 301,
+     "of": 346,
+     "partitions": 4
+    }
+   },
+   "cpu_with_gpu": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 581,
+    "ips": 19.336,
+    "median_ms": 50.27,
+    "p90_ms": 56.53,
+    "cores": 3.85,
+    "delegated": null
+   },
+   "gpu_with_cpu": {
+    "runtime": "tflite-gl",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 111,
+    "ips": 3.67,
+    "median_ms": 272.01,
+    "p90_ms": 286.18,
+    "cores": 0.59,
+    "delegated": {
+     "nodes": 301,
+     "of": 346,
+     "partitions": 4
+    }
+   }
+  },
+  {
+   "case": "yolo11n-320:resnet18",
+   "cpu_alone": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 629,
+    "ips": 20.949,
+    "median_ms": 47.52,
+    "p90_ms": 49.44,
+    "cores": 3.86,
+    "delegated": null
+   },
+   "gpu_alone": {
+    "runtime": "tflite-gl",
+    "precision": "fp16",
+    "model": "resnet18",
+    "n": 57,
+    "ips": 1.897,
+    "median_ms": 526.38,
+    "p90_ms": 530.55,
+    "cores": 0.02,
+    "delegated": {
+     "nodes": 38,
+     "of": 38,
+     "partitions": 1
+    }
+   },
+   "cpu_with_gpu": {
+    "runtime": "ncnn",
+    "precision": "fp16",
+    "model": "yolo11n-320",
+    "n": 565,
+    "ips": 18.818,
+    "median_ms": 51.4,
+    "p90_ms": 58.59,
+    "cores": 3.86,
+    "delegated": null
+   },
+   "gpu_with_cpu": {
+    "runtime": "tflite-gl",
+    "precision": "fp16",
+    "model": "resnet18",
+    "n": 56,
+    "ips": 1.84,
+    "median_ms": 543.24,
+    "p90_ms": 549.19,
+    "cores": 0.02,
+    "delegated": {
+     "nodes": 38,
+     "of": 38,
+     "partitions": 1
+    }
+   }
+  }
+ ]
+}

@@ -10,7 +10,8 @@ import os
 RP = [('pytorch', 'fp32'), ('onnxruntime', 'fp32'), ('onnxruntime', 'int8'), ('tflite', 'fp32'), ('tflite', 'int8'),
       ('ncnn', 'fp32'), ('ncnn', 'fp16'), ('ncnn', 'int8')]
 GP = [('pytorch-cuda', 'fp32'), ('pytorch-cuda', 'fp16'), ('ort-cuda', 'fp32'), ('ort-cuda', 'fp16'),
-      ('tensorrt', 'fp32'), ('tensorrt', 'fp16'), ('tensorrt', 'int8'), ('tensorrt', 'int8fp16')]
+      ('tensorrt', 'fp32'), ('tensorrt', 'fp16'), ('tensorrt', 'int8'), ('tensorrt', 'int8fp16'),
+      ('tflite-gl', 'fp32'), ('tflite-gl', 'fp16'), ('ncnn-vk', 'fp32'), ('ncnn-vk', 'fp16')]
 MODELS = ['yolo11n-640', 'yolo11n-320', 'resnet18', 'mobilenetv2']
 
 
@@ -54,28 +55,29 @@ def main():
             print('| %s %s | %s | %s | %s |' % (rt, p.upper(), ' | '.join(map(fmt, x)), ' | '.join(map(fmt, y)),
                                                 ' | '.join(ratio)))
     if any(k[4] == 'gpu' for k in d):
-        print('\n**Jetson GPU** (호스트 1스레드 CPU5, 중앙값 ms; H2D·계산·D2H는 따로 잰 100회 중앙값)\n')
+        print('\n**GPU** (Jetson 호스트 1스레드 CPU5, E850 TFLite GL은 CPU 폴백 스레드 수대로; 중앙값 ms; H2D·계산·D2H는 따로 '
+              '잰 100회 중앙값, TFLite GL의 H2D·D2H는 CPU 텐서 복사이고 GPU 올리기·내리기는 계산에 들어감)\n')
         print('| 모델 | 런타임 | 전체 | p95 | H2D | 계산 | D2H | GPU MHz | VDD_IN W | J/추론 | 정확도 |')
         print('|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|')
         for m in MODELS:
-            for rt, p in GP:
-                r = d.get(('orin-nano', m, rt, p, 'gpu'))
+            for (rt, p), dev in [(k, 'orin-nano') for k in GP] + [(k, 'e850') for k in GP]:
+                r = d.get((dev, m, rt, p, 'gpu'))
                 if not r:
                     continue
                 if 'latency_ms' not in r:
                     print('| %s | %s %s | 오류: %s |' % (m, rt, p.upper(), r.get('error', '?')[-120:].replace('\n', ' ')))
                     continue
-                g, b = r['gpu_phases_ms'], r['blocks'][-1]
-                print('| %s | %s %s | %s | %s | %.2f | %.2f | %.2f | %s | %s | %s | %s |' % (
-                    m, rt, p.upper(), fmt(r['latency_ms']['median']), fmt(r['latency_ms']['p95']), g['h2d'],
-                    g['compute'], g['d2h'], b.get('gpu_mhz_after'), (b.get('power_w') or {}).get('VDD_IN', '—'),
-                    (b.get('energy_j_per_inference') or {}).get('VDD_IN', '—'), accs('orin-nano', m, rt, p)))
+                g, b = r.get('gpu_phases_ms') or {}, r['blocks'][-1]     # NCNN Vulkan: no phases (11.118)
+                print('| %s | %s %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |' % (
+                    m, rt, p.upper() + ('' if dev == 'orin-nano' else ' (E850 t%d)' % r['threads']), fmt(r['latency_ms']['median']), fmt(r['latency_ms']['p95']),
+                    *('—' if g.get(k) is None else '%.2f' % g[k] for k in ('h2d', 'compute', 'd2h')), b.get('gpu_mhz_after'), (b.get('power_w') or {}).get('VDD_IN', '—'),
+                    (b.get('energy_j_per_inference') or {}).get('VDD_IN', '—'), accs(dev, m, rt, p)))
     if tuned:
         print('\n**환경 변수를 바꾼 판** (중앙값 ms, 같은 설정의 기본 판과 비교)\n')
         print('| 장비 | 모델 | 런타임 | 스레드 | 환경 | 기본 | 바꾼 판 | 비 |')
         print('|---|---|---|---:|---|---:|---:|---:|')
         for r in tuned:
-            t = str(r['threads']) if r['threads'] in (1, 4) else 'max'
+            t = 'gpu' if (r['runtime'], r['precision']) in GP else str(r['threads']) if r['threads'] in (1, 4) else 'max'
             x, y = med(r['device'], r['model'], r['runtime'], r['precision'], t), r.get('latency_ms', {}).get('median')
             print('| %s | %s | %s %s | %d | `%s` | %s | %s | %s |' % (r['device'], r['model'], r['runtime'],
                   r['precision'].upper(), r['threads'], r['env'], fmt(x), fmt(y), '%.2f×' % (x / y) if x and y else '—'))

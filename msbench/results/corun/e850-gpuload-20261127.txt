@@ -1,0 +1,133 @@
+# gpuload.sh (11.118): CPU worker ncnn fp16 4 threads CPU4-7 for 30 s, alone / with gltest load fma|copy on CPU0
+cd ~/msbench && export PYTHONPATH=py/3.11
+cpuw() { OMP_PROC_BIND=close OMP_PLACES=cores taskset -c 4-7 python3 e850gpu/corun.py worker ncnn fp16 $1 4 1 30 $(date +%s) 2>/dev/null | tail -1; }
+load() { ( . e850gpu/gpu-env.sh; taskset -c 0 e850gpu/gltest load $1 40 2>&1 | grep "^load" ) & }
+for m in resnet18 yolo11n-320 mobilenetv2; do
+  echo "== $m alone";      cpuw $m
+  echo "== $m + gpu fma";  load fma;  sleep 5; cpuw $m; wait
+  echo "== $m + gpu copy"; load copy; sleep 5; cpuw $m; wait
+  echo "== $m alone";      cpuw $m
+done
+echo LOADDONE
+# output
+== resnet18 alone
+{"runtime": "ncnn", "precision": "fp16", "model": "resnet18", "n": 626, "ips": 20.844, "median_ms": 47.78, "p90_ms": 50.31, "cores": 3.94, "delegated": null}
+== resnet18 + gpu fma
+{"runtime": "ncnn", "precision": "fp16", "model": "resnet18", "n": 568, "ips": 18.92, "median_ms": 52.16, "p90_ms": 56.97, "cores": 3.93, "delegated": null}
+load fma 37.6 GFLOPS for 40.1 s
+== resnet18 + gpu copy
+{"runtime": "ncnn", "precision": "fp16", "model": "resnet18", "n": 401, "ips": 13.343, "median_ms": 74.11, "p90_ms": 79.12, "cores": 3.9, "delegated": null}
+load copy 5.77 GB/s for 40.0 s
+== resnet18 alone
+{"runtime": "ncnn", "precision": "fp16", "model": "resnet18", "n": 600, "ips": 19.997, "median_ms": 49.38, "p90_ms": 52.67, "cores": 3.93, "delegated": null}
+== yolo11n-320 alone
+{"runtime": "ncnn", "precision": "fp16", "model": "yolo11n-320", "n": 607, "ips": 20.232, "median_ms": 48.65, "p90_ms": 51.1, "cores": 3.87, "delegated": null}
+== yolo11n-320 + gpu fma
+{"runtime": "ncnn", "precision": "fp16", "model": "yolo11n-320", "n": 563, "ips": 18.726, "median_ms": 52.13, "p90_ms": 58.67, "cores": 3.87, "delegated": null}
+load fma 37.6 GFLOPS for 40.1 s
+== yolo11n-320 + gpu copy
+{"runtime": "ncnn", "precision": "fp16", "model": "yolo11n-320", "n": 455, "ips": 15.137, "median_ms": 64.46, "p90_ms": 69.02, "cores": 3.77, "delegated": null}
+load copy 5.86 GB/s for 40.0 s
+== yolo11n-320 alone
+{"runtime": "ncnn", "precision": "fp16", "model": "yolo11n-320", "n": 604, "ips": 20.124, "median_ms": 48.87, "p90_ms": 51.84, "cores": 3.87, "delegated": null}
+== mobilenetv2 alone
+{"runtime": "ncnn", "precision": "fp16", "model": "mobilenetv2", "n": 1308, "ips": 43.6, "median_ms": 22.53, "p90_ms": 24.01, "cores": 3.92, "delegated": null}
+== mobilenetv2 + gpu fma
+{"runtime": "ncnn", "precision": "fp16", "model": "mobilenetv2", "n": 1169, "ips": 38.959, "median_ms": 25.41, "p90_ms": 28.91, "cores": 3.92, "delegated": null}
+load fma 37.6 GFLOPS for 40.0 s
+== mobilenetv2 + gpu copy
+{"runtime": "ncnn", "precision": "fp16", "model": "mobilenetv2", "n": 969, "ips": 32.296, "median_ms": 30.17, "p90_ms": 33.22, "cores": 3.91, "delegated": null}
+load copy 5.56 GB/s for 40.0 s
+== mobilenetv2 alone
+{"runtime": "ncnn", "precision": "fp16", "model": "mobilenetv2", "n": 1334, "ips": 44.455, "median_ms": 22.01, "p90_ms": 23.44, "cores": 3.92, "delegated": null}
+LOADDONE
+# gpuload-clk.sh: resnet18 CPU worker 20 s, samples every 0.5 s: cpu4 kHz, cpu0 kHz, LITTLE1 mC, G3D mC, gpu kHz
+cd ~/msbench && export PYTHONPATH=py/3.11
+samp() { i=0; while [ $i -lt 36 ]; do echo "$(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(cat /sys/class/thermal/thermal_zone1/temp) $(cat /sys/class/thermal/thermal_zone2/temp) $(cat /sys/devices/platform/11500000.mali/clock 2>/dev/null || cat /sys/class/misc/mali0/device/clock)"; sleep 0.5; i=$((i+1)); done > /var/tmp/clk-$1.txt; }
+cpuw() { OMP_PROC_BIND=close OMP_PLACES=cores taskset -c 4-7 python3 e850gpu/corun.py worker ncnn fp16 resnet18 4 1 20 $(date +%s) 2>/dev/null | tail -1; }
+echo "== alone"; ( sleep 1; samp alone ) & cpuw; wait
+( . e850gpu/gpu-env.sh; taskset -c 0 e850gpu/gltest load fma 30 2>&1 | grep "^load" ) & sleep 5
+echo "== fma"; ( sleep 1; samp fma ) & cpuw; wait
+for f in alone fma; do echo "-- $f: cpu4 MHz, cpu0 MHz, LITTLE1, G3D, gpu"; sort /var/tmp/clk-$f.txt | uniq -c | sort -rn | head -6; done
+## clk-alone
+2002000 1182822 74000 65000 0
+1846000 2002000 83000 68000 1001000
+1846000 1219479 85000 70000 0
+1846000 546000 87000 71000 0
+1586000 2002000 87000 72000 0
+1846000 2002000 88000 73000 0
+1586000 684277 86000 73000 0
+1586000 546000 87000 74000 0
+1586000 1287907 87000 74000 0
+1586000 2002000 86000 74000 0
+1586000 972651 87000 74000 0
+1586000 1248806 86000 74000 0
+1586000 867565 85000 74000 0
+1586000 559641 87000 75000 0
+1586000 2002000 88000 75000 0
+1586000 1825554 89000 75000 0
+1586000 877341 86000 75000 0
+1586000 1588500 86000 75000 0
+1586000 1720468 90000 76000 0
+1586000 2002000 88000 76000 0
+1586000 2002000 87000 76000 0
+1586000 1846000 91000 76000 0
+1586000 1586000 89000 77000 0
+1586000 613405 88000 77000 1001000
+1586000 2002000 88000 77000 0
+1586000 657395 89000 77000 1001000
+1586000 1160827 89000 77000 0
+1586000 1422319 89000 77000 0
+1586000 2002000 89000 77000 0
+1586000 1405212 88000 77000 0
+1586000 1302570 88000 77000 0
+1586000 2002000 89000 76000 0
+1586000 1258581 87000 77000 0
+1586000 2002000 89000 77000 0
+1586000 662282 88000 77000 0
+1586000 1175490 88000 77000 0
+## clk-fma
+1846000 552309 82000 81000 1001000
+1586000 546000 88000 83000 1001000
+1586000 2002000 90000 84000 1001000
+1053000 546000 89000 85000 1001000
+1586000 1107062 91000 86000 1001000
+1586000 574304 91000 86000 1001000
+1053000 546000 89000 86000 1001000
+1053000 546000 90000 87000 1001000
+1586000 1846000 90000 86000 1001000
+1053000 601186 90000 87000 1001000
+1586000 591411 90000 87000 1001000
+1586000 1001977 90000 87000 1001000
+1586000 1846000 90000 87000 1001000
+1586000 1846000 92000 88000 1001000
+1586000 1846000 92000 88000 1001000
+1586000 1846000 92000 87000 1001000
+1586000 848015 91000 88000 1001000
+1053000 546000 91000 88000 1001000
+1586000 1846000 91000 88000 1001000
+1586000 1725356 91000 88000 1001000
+1053000 684277 91000 88000 1001000
+1053000 1846000 92000 88000 1001000
+1053000 1846000 92000 88000 1001000
+1586000 1846000 93000 88000 1001000
+1586000 1231699 92000 89000 1001000
+1053000 546000 90000 88000 1001000
+1053000 1846000 90000 88000 1001000
+1053000 1776677 92000 89000 1001000
+1053000 833352 91000 88000 1001000
+1586000 1846000 92000 89000 1001000
+1053000 1586000 91000 88000 1001000
+1053000 1586000 92000 89000 1001000
+1586000 1846000 92000 89000 1001000
+1053000 1637377 92000 89000 1001000
+1053000 546000 91000 89000 1001000
+1053000 1846000 92000 88000 1001000
+## gpuload-clk.sh worker output (printed to the terminal, copied here)
+== alone
+{"runtime": "ncnn", "precision": "fp16", "model": "resnet18", "ips": 20.28, "median_ms": 48.56, "p90_ms": 51.84, "cores": 3.94}
+== fma
+{"runtime": "ncnn", "precision": "fp16", "model": "resnet18", "ips": 17.799, "median_ms": 55.52, "p90_ms": 62.63, "cores": 3.92}
+load fma 37.6 GFLOPS for 30.0 s
+## means of the samples: alone cpu4 1626 MHz (1586-2002), LITTLE1 87.2 C (max 91.0), G3D 74.8 C; fma cpu4 1342 MHz (1053-1846), LITTLE1 90.7 C (max 93.0), G3D 87.3 C
+## LITTLE1 trip points (mC): 20000 76000 81000 86000 91000 96000 101000 115000

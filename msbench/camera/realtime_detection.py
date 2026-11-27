@@ -166,7 +166,7 @@ def main():
     cls, key = RUNTIMES[(a.runtime, a.precision)]
     rt = cls(os.path.join(a.models_dir, a.model), man['files'][key], a.threads)
     s = man['input']['size']
-    norm = a.runtime == 'tflite' and man['tflite_coords_normalized']
+    norm = a.runtime.startswith('tflite') and man['tflite_coords_normalized']
     w, h = map(int, a.size.split('x'))
     cam = UVC(a.video or find_uvc(), w, h)
     latest, lock, stop = [None], threading.Lock(), threading.Event()
