@@ -5,6 +5,7 @@
 #   docker run --rm -v e850-out:/o:ro -v "$PWD/tools/linux510:/t:ro" -v "$PWD/out:/out" \
 #       -v ~/Desktop/E850_Android10_backup_20261031:/b:ro \
 #       ubuntu:22.04 sh /t/build-bootimg.sh [root=PARTLABEL=userdata]
+#   installer boot image (docs 11.120): sh /t/build-bootimg.sh "root=PARTLABEL=userdata e850.install"
 #
 # Inputs : /o   = kernel build output (Image, dtb, dtbo, *.ko, modules.order)
 #          /t   = this directory (init, helper scripts, mkbootimg_v2.py, autoload.deny,
@@ -16,7 +17,7 @@ set -eu
 ROOTARG=${1:-}
 
 apt-get -qq update >/dev/null
-apt-get -qq install -y busybox-static kmod device-tree-compiler cpio binutils python3 >/dev/null 2>&1
+apt-get -qq install -y busybox-static kmod device-tree-compiler cpio binutils python3 gcc libc6-dev >/dev/null 2>&1
 
 KVER=$(cat /o/include/config/kernel.release)
 IRD=/tmp/initramfs
@@ -26,7 +27,8 @@ rm -rf $IRD && mkdir -p $IRD/bin $IRD/dev $MODDIR /out
 # 1. busybox + init + rescue helpers; /dev/console so the kernel can open the initial console
 cp /bin/busybox $IRD/bin/busybox
 cp /t/init $IRD/init && chmod 755 $IRD/init
-for h in part-dev restore-android to-fastboot; do cp /t/$h $IRD/bin/$h && chmod 755 $IRD/bin/$h; done
+for h in part-dev restore-android to-fastboot e850-install; do cp /t/$h $IRD/bin/$h && chmod 755 $IRD/bin/$h; done
+gcc -O2 -static -o $IRD/bin/simg-write /t/simg-write.c     # for e850-install
 cp /t/rebootarg/rebootarg $IRD/bin/rebootarg && chmod 755 $IRD/bin/rebootarg
 mknod -m 600 $IRD/dev/console c 5 1
 if [ -f /b/mmcblk0p15.img.gz ]; then

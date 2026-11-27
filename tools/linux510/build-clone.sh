@@ -15,21 +15,25 @@ set -eu
 BLOCKS=${BLOCKS:-786432}     # 4 KiB blocks = 3 GiB, mmcblk0p24 of the first board
 UUID=${UUID:-de77216b-a7d7-4c77-9fec-51c801b1fb77}
 I=/tmp/rootfs.ext4 R=/mnt/r
+# TAR, OUT: elsewhere than /x (OUT=/dev/fd/3 streams the image out of the container: install SD, 11.120)
+TAR=${TAR:-/x/rootfs.tar} OUT=${OUT:-/x/rootfs.simg}
 
 apt-get -qq update >/dev/null
 apt-get -qq install -y e2fsprogs android-sdk-libsparse-utils >/dev/null 2>&1
 # tar keeps ACLs by user name (journald's user:philip on user journals): resolve names as the board does
-tar -x -f /x/rootfs.tar -C / ./etc/passwd ./etc/group
+tar -x -f $TAR -C / ./etc/passwd ./etc/group
 
 rm -f $I
 mke2fs -q -t ext4 -L rootfs -U $UUID -b 4096 $I $BLOCKS
 mkdir -p $R
 mount -o loop $I $R
-tar -x -p --xattrs --xattrs-include='*' --acls --numeric-owner -f /x/rootfs.tar -C $R
+tar -x -p --xattrs --xattrs-include='*' --acls --numeric-owner -f $TAR -C $R
 # MACHINE_ID: a board flashed again keeps its own id (and so its DHCP address); a new random one otherwise
 echo "${MACHINE_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}" > $R/etc/machine-id
 cp $R/etc/machine-id $R/var/lib/dbus/machine-id
 rm -f $R/var/lib/systemd/random-seed
+# the GPU desktop session lost its x bit on boards 4 and 6 in 11.107 (e850-x then starts an empty X, 11.119)
+[ ! -f $R/opt/e850-features/desktop/session.sh ] || chmod 755 $R/opt/e850-features/desktop/session.sh
 # files changed on the source since the tar (BOARD-CLONE.md 4), at their paths under /x/overlay; cp onto an
 # existing file keeps its owner and mode
 if [ -d /x/overlay ]; then cp -r /x/overlay/. $R/; echo "overlay: $(cd /x/overlay && find . -type f | wc -l) file(s)"; fi
@@ -40,5 +44,5 @@ echo "machine-id $(cat $R/etc/machine-id), $(df -h $R | tail -1)"
 (cd $R && find usr lib var/tmp root home opt -xdev -type f -print0 | sort -z | xargs -0 md5sum) > /x/manifest.md5
 umount $R
 e2fsck -fn $I
-img2simg $I /x/rootfs.simg
-ls -l /x/rootfs.simg
+img2simg $I $OUT
+ls -l $OUT

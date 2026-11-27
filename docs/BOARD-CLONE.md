@@ -237,3 +237,42 @@ for f in $(ls $D/part.simg.* | sort -t. -k3 -n); do ~/e850-logs/fbmini flash use
 - 보드6에서 새로 받은 판이다: `~/e850-logs/clone-20261127-b6/`(rootfs.tar md5 `bd019b52…`, 8.2 GB, 3.2 MB/s). 사용량이 7.7 GB라 `BLOCKS=3145728`(12 GiB)로 만들었고, 조각은 12개다.
 - 보드3은 전원을 넣었을 때 eMMC 읽기 오류로 initramfs 셸에 떨어져 있었다. 거기서 `to-fastboot`을 실행했다. 보드6 `rootfs-send`는 사용자가 sudo로 띄웠다. 받는 43분 동안 보드3은 fastboot에서 기다렸다.
 - 12조각 모두 OKAY였다(합계 1,884초). 45초 뒤 Wi-Fi에 나왔다. running, failed 0, philip이 읽을 수 있는 파일 44,019개가 manifest와 같았다.
+
+## 13. SD 카드로 설치하기 (설치용 boot 이미지, 2026-11-27)
+
+여러 대에 같은 시스템을 넣을 때 쓴다(E85096-LINUX510-BOOT.md 11.120). 보드마다 USB로 굽는 것은 설치용 boot 이미지(64 MB) 하나다. userdata는 보드가 SD 카드에서 eMMC로 직접 쓴다. 대상마다 이미지를 다시 만들 일도, 굽고 나서 sudo로 할 일(`resize2fs`, machine-id)도 없다.
+
+**준비 (Mac, 한 번).**
+1. userdata 이미지: 4~5장처럼 `rootfs.tar`를 받아 `build-clone.sh`로 만든다. `MACHINE_ID`는 주지 않는다(설치가 보드마다 정한다). Mac 디스크가 모자라면 이미지를 표준 출력으로 받아 카드에 바로 쓴다:
+   ```sh
+   docker run --rm --privileged -e BLOCKS=3145728 -e TAR=/src/rootfs.tar -e OUT=/dev/fd/3 \
+       -v <dir>/rootfs.tar:/src/rootfs.tar:ro -v "$PWD/tools/linux510:/t:ro" -v <dir>:/x \
+       ubuntu:22.04 sh -c 'sh /t/build-clone.sh 3>&1 1>&2' 2><dir>/build.log > "/Volumes/<카드>/e850-install/userdata.simg"
+   ```
+   카드(`/Volumes/...`)를 Docker에 `-v`로 붙이지 않는다. 컨테이너가 시작하지 못하고, 그 뒤의 `docker run`까지 모두 멈췄다(2026-11-27).
+2. 설치용 boot: `build-bootimg.sh "root=PARTLABEL=userdata e850.install"` → `~/e850-logs/boot-install/boot.img`. 명령줄 말고는 보통 boot와 같다. 카드가 없으면 보통 부팅을 한다.
+3. 카드(exFAT. FAT32는 4 GB 넘는 파일을 못 담는다): `sh tools/host/make-install-sd.sh "/Volumes/<카드>" ~/e850-logs/boot-nocpu/boot.img <dir>/userdata.simg`. 카드에 `e850-install/{boot.img,userdata.simg,MD5SUMS}`가 생긴다. MD5SUMS는 원본에서 잰다. **카드에는 이미지의 비밀 값이 들어 있다.** 쓴 뒤 지우거나 갖고 다닌다.
+
+**보드마다.**
+1. fastboot에 넣는다(6장).
+2. `~/e850-logs/fbmini flash boot ~/e850-logs/boot-install/boot.img`(Mac에 fastboot 보드는 하나만 꽂는다. fbmini는 처음 찾은 장치를 쓴다). stock `fastboot flash boot`은 보드7에서 2분 넘게 끝나지 않았고, 그 뒤 LK가 답하지 않아 전원을 다시 넣어야 했다(2026-11-27).
+3. 카드를 끝까지(딸깍) 꽂고 `~/e850-logs/fbmini reboot`. USB-C는 이때 뽑아도 된다.
+4. 기다린다. 설치하는 동안 HDMI는 까맣다. 끝나면 보드가 혼자 다시 부팅하고, 새 시스템의 tty1이 HDMI에 뜬다. 그러면 카드를 빼서 다음 보드로 옮긴다.
+5. 실패하면 HDMI가 까만 채로 있다. 카드의 `e850-install/log/<SoC 일련번호>.txt`에 이유가 있다. boot는 여전히 설치용이라 원인을 고친 카드로 다시 켜면 처음부터 다시 설치한다. USB-C가 꽂혀 있으면 ACM 셸에서 `dmesg | grep install`로도 볼 수 있다.
+
+**설치가 하는 일(`tools/linux510/e850-install`, initramfs).**
+- 모든 모듈을 올린 뒤 SD 카드에서 `e850-install/`을 찾는다. 10초 안에 없으면 보통 부팅을 한다.
+- 검사한다(하나라도 틀리면 아무것도 쓰지 않는다):
+  - boot.img가 `ANDROID!`로 시작하는지, 설치용 이미지(`e850.install`)가 아닌지, boot 파티션보다 크지 않은지, md5가 맞는지 본다.
+  - 쓸 곳은 이름이 `userdata`와 `boot`인 파티션이다. 둘 다 eMMC(`device/type` = MMC) 위에 하나씩만 있어야 하고 같은 디스크여야 한다. SD가 먼저 잡혀 eMMC 번호가 바뀌어도 맞는 곳에 쓴다.
+  - userdata.simg가 파티션보다 크면 쓰기 전에 멈춘다(`simg-write`).
+- 지금 userdata에 우리 Linux가 있으면 그 machine-id를 남긴다. DHCP 주소가 그대로다. 없으면 새로 만든다.
+- userdata.simg를 쓴다(`simg-write`). 쓰는 동안 md5를 재고, MD5SUMS와 다르면 boot를 바꾸지 않고 멈춘다.
+- 새 파일시스템에 machine-id를 넣고 파티션 전체(54 GiB)로 늘린다.
+- boot.img를 쓰고 다시 읽어 md5를 확인한 뒤 재부팅한다.
+
+**보드7에 처음 써 본 기록(2026-11-27, 11.120).**
+- 새 보드다. 전원을 넣자 fastboot에 들어갔다. `fbmini flash boot` 2.4 s, 설치 906 s(그때 판: `wc -c` 136 s, 파이프 때문에 쓰기 752 s). 지금 판은 같은 이미지를 195 s에 쓴다(보드에서 파일로 잼).
+- 카드가 덜 꽂혀 있으면 감지되지 않는다(감지 핀 `hi`). 딸깍 소리가 날 때까지 넣는다.
+- 설치 뒤 첫 부팅이 eMMC `Input/output error`로 initramfs에 남았다. 리셋하면 fastboot로 가니 `fbmini reboot`을 한다. 그다음은 정상이었다(78 s에 Wi-Fi). HDMI가 1~2분 넘게 까맣고 Wi-Fi에 안 나오면 이것을 의심한다.
+- 고친 판으로 새 보드8·9에도 넣었다. 둘 다 전원을 넣으면 fastboot에 들어갔고, `fbmini flash boot`부터 Wi-Fi까지 약 4분이었다. 첫 부팅 정상(E85096-LINUX510-BOOT.md 11.120 표).

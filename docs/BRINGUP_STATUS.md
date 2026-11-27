@@ -2,7 +2,9 @@
 
 이 문서는 새 세션에서 바로 이어서 일할 수 있도록 지금 상태를 정리한 것이다.
 
+**2026-11-27(11.120):** SD 카드 설치용 boot 이미지(`~/e850-logs/boot-install/boot.img`, `tools/linux510/e850-install`, `simg-write.c`, BOARD-CLONE.md 13장). fbmini로 boot만 굽고(2.4 s) 카드를 꽂아 켜면 userdata·machine-id·54 GiB 확장·boot를 보드가 직접 한다. 새 보드7(`000008f54c9c23e0`, 192.168.0.196)에 보드6 이미지를 넣었다(906 s, running). 고친 판으로 새 보드8(.176)·9(.222)에 넣었다: `fbmini reboot`부터 Wi-Fi까지 약 4분, 첫 부팅 정상. 보드7에서는 설치 뒤 첫 부팅이 eMMC I/O 오류로 initramfs에 남았다(리셋 → `fbmini reboot`).
 **2026-11-27(11.119):** 보드6을 보드3(192.168.0.234)에 전체 복제했다. 보드6에서 새로 받은 rootfs(8.2 GB, md5 보드6과 같음)로 12 GiB 이미지(`~/e850-logs/clone-20261127-b6/`)를 만들어 보드3 machine-id로 구웠다(12조각 모두 OKAY).
+- 보드3·4·6의 `/opt/e850-features/desktop/session.sh`가 644라(11.107에서 빠짐) `e850-x`가 Xorg만 띄우고 세션을 못 띄운다. root로 `chmod 755`가 필요하다. 보드4·6은 고쳤다. 보드3은 아직이다.
 - 보드3은 running이고 failed 0이다. 읽을 수 있는 파일 44,019개가 manifest와 같다(root 전용 104개는 비교 못 함).
 - 전원을 넣은 첫 부팅에서 eMMC 0번 섹터 I/O 오류로 initramfs에 멈췄다(원인 미확인). 그 셸에서 fastboot에 넣었다. 그래서 보드3의 옛 자료는 백업하지 못했다.
 - `resize2fs`는 사용자가 했다(54G, 43G 남음). 남은 일: BT 다시 페어링. 보드3에도 이제 ACM이 없다(`e850-scope`가 USB 호스트).

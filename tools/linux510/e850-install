@@ -1,0 +1,117 @@
+#!/bin/sh
+# e850-install: put the system on an SD card onto this board's eMMC (docs 11.120, BOARD-CLONE.md 13).
+# init runs it after all modules when the kernel command line has e850.install (the installer boot image).
+# The card (exFAT or FAT32) has a folder e850-install/ (tools/host/make-install-sd.sh):
+#   boot.img        the system's boot image (not an installer one)
+#   userdata.simg   its root filesystem as an Android sparse image (build-clone.sh)
+#   MD5SUMS         "md5 name" lines for both
+# Steps: check the files, write userdata (md5 checked on the way), keep this board's machine-id (a new one on a
+# board without our Linux), grow the filesystem to the whole partition, write boot, reboot into the new system.
+# Writes only to the eMMC partitions called userdata and boot. Log: the kernel log (UART) and
+# e850-install/log/<SoC serial>.txt on the card.
+# Exit 1: no card with e850-install/, nothing written: init boots as usual. Exit 2: failed, init stays in its
+# shell (ACM if USB-C is connected); boot is still the installer, so the next boot tries again. Success: reboot.
+SD=/sd NEW=/newroot L=/tmp/install.log D=/sd/e850-install
+# the initramfs has no soc0 (chipid is a module of the system); LK passes androidboot.serialno (= fastboot serial)
+SERIAL=$(sed -n 's/.*androidboot.serialno=\([0-9a-f]*\).*/\1/p' /proc/cmdline)
+[ -n "$SERIAL" ] || SERIAL=$(cat /sys/devices/soc0/serial_number 2>/dev/null || echo unknown)
+T0=$(cut -d. -f1 /proc/uptime)
+
+log() { echo "[install] $*" > /dev/kmsg; echo "$(cut -d' ' -f1 /proc/uptime) $*" >> $L; }
+save() { [ -d $D ] && mkdir -p $D/log && cp $L "$D/log/$SERIAL.txt"; sync; }
+fail() { log "FAILED: $*"; umount $NEW 2>/dev/null; save; umount $SD 2>/dev/null; exit 2; }
+# run a command with its output into the log; its exit status
+run() { { "$@"; echo $? > /tmp/rc; } 2>&1 | while read -r l; do log "$l"; done; return "$(cat /tmp/rc)"; }
+# the disk a block device is on (itself for a whole disk), and that disk's kind: MMC (the eMMC) or SD
+disk() { d=$(basename "$(dirname "$(readlink -f /sys/class/block/$1)")"); [ "$d" = block ] && d=$1; echo $d; }
+kind() { cat /sys/class/block/$(disk $1)/device/type 2>/dev/null; }
+# /dev/<the eMMC partition called $1>, only if there is exactly one
+emmc_part() {
+    f=
+    for u in /sys/class/block/*/uevent; do
+        grep -qx "PARTNAME=$1" $u || continue
+        p=$(sed -n 's/^DEVNAME=//p' $u)
+        [ "$(kind $p)" = MMC ] || continue
+        [ -z "$f" ] || return 1
+        f=$p
+    done
+    [ -n "$f" ] && echo /dev/$f
+}
+# mount the SD card that has e850-install/ on $SD
+sd_mount() {
+    for b in /sys/class/block/*; do
+        n=${b##*/}
+        [ "$(kind $n)" = SD ] || continue
+        for t in exfat vfat; do
+            mount -t $t /dev/$n $SD 2>/dev/null || continue
+            [ -d $D ] && { echo /dev/$n; return 0; }
+            umount $SD
+            break
+        done
+    done
+    return 1
+}
+md5of() { awk -v f="$1" '$2 == f || $2 == "*" f { print $1 }' $D/MD5SUMS; }
+
+mkdir -p $SD $NEW
+i=0
+until dev=$(sd_mount); do              # the card shows up a second or two after dw_mmc
+    i=$((i + 1))
+    [ $i -lt 10 ] || { log "no SD card with e850-install/: booting as usual"; exit 1; }
+    sleep 1
+done
+log "board $SERIAL, card $dev"
+for f in boot.img userdata.simg MD5SUMS; do [ -f $D/$f ] || fail "no e850-install/$f on the card"; done
+[ "$(head -c 8 $D/boot.img)" = "ANDROID!" ] || fail "boot.img is not an Android boot image"
+! grep -q e850.install $D/boot.img || fail "boot.img is an installer image: it would install again at every boot"
+i=0
+until BOOT=$(emmc_part boot) && UD=$(emmc_part userdata); do
+    i=$((i + 1))
+    [ $i -lt 30 ] || fail "no single eMMC partition called boot and userdata"
+    sleep 1
+done
+[ "$(disk ${BOOT#/dev/})" = "$(disk ${UD#/dev/})" ] || fail "boot ($BOOT) and userdata ($UD) on different disks"
+bsz=$(stat -c %s $D/boot.img)      # not wc -c: busybox reads the whole file
+[ $bsz -le $(( $(cat /sys/class/block/${BOOT#/dev/}/size) * 512 )) ] || fail "boot.img is bigger than $BOOT"
+[ "$(md5sum < $D/boot.img | cut -d' ' -f1)" = "$(md5of boot.img)" ] || fail "boot.img: md5 differs from MD5SUMS"
+[ -n "$(md5of userdata.simg)" ] || fail "no userdata.simg line in MD5SUMS"
+
+# this board's machine-id (its DHCP address) if it already runs our Linux
+MID=
+if mount -t ext4 -o ro,noload $UD $NEW 2>/dev/null; then
+    MID=$(cat $NEW/etc/machine-id 2>/dev/null)
+    umount $NEW
+fi
+echo "$MID" | grep -qx '[0-9a-f]\{32\}' && log "keeping machine-id $MID" ||
+    { MID=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n'); log "new machine-id $MID"; }
+
+log "writing userdata.simg ($(stat -c %s $D/userdata.simg) bytes) to $UD"
+# md5sum reads the same file alongside: both go at the card's speed and share the page cache. Not cat | tee |
+# simg-write: that pipe ran at 12 MB/s (board 7: 752 s for this image, 195 s this way; 11.120)
+md5sum $D/userdata.simg > /tmp/md5.out &
+M=$!
+run simg-write $D/userdata.simg $UD || { kill $M 2>/dev/null; fail "simg-write failed"; }
+wait $M
+[ "$(cut -d' ' -f1 /tmp/md5.out)" = "$(md5of userdata.simg)" ] ||
+    fail "userdata.simg on the card does not match MD5SUMS (userdata is now incomplete; boot is unchanged)"
+
+mount -t ext4 $UD $NEW || fail "cannot mount the new userdata"
+[ -L $NEW/sbin/init ] || [ -x $NEW/sbin/init ] || fail "no /sbin/init in the new system"
+echo $MID > $NEW/etc/machine-id
+[ -f $NEW/var/lib/dbus/machine-id ] && [ ! -L $NEW/var/lib/dbus/machine-id ] && echo $MID > $NEW/var/lib/dbus/machine-id
+run simg-write --grow $NEW $UD || log "warning: the filesystem was not grown (sudo resize2fs $UD on the board)"
+sync
+umount $NEW || fail "cannot unmount the new userdata"
+
+log "writing boot.img to $BOOT"
+run dd if=$D/boot.img of=$BOOT bs=1M conv=fsync ||
+    fail "writing $BOOT failed: the board may not boot; flash boot.img with fastboot"
+echo 3 > /proc/sys/vm/drop_caches
+[ "$(head -c $bsz $BOOT | md5sum | cut -d' ' -f1)" = "$(md5of boot.img)" ] ||
+    fail "$BOOT reads back wrong: flash boot.img with fastboot"
+log "done in $(( $(cut -d. -f1 /proc/uptime) - T0 )) s; rebooting into the new system"
+save
+umount $SD
+sync
+reboot -f
+sleep 60

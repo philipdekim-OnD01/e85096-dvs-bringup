@@ -8359,3 +8359,79 @@ RQ8. DVS 선택적 추론 E850이 RGB 연속 추론 Jetson보다 에너지에서
 **그 밖에 바꾼 것.**
 - 처음에는 보드4에 복제하려 해서 보드4의 11.118 자료(결과, panvk 빌드 3벌, 11-25 이후 `/var/tmp` 파일)를 Mac `~/e850-logs/board4-backup-20261127/board4-20261127.tgz`(193 MB)에 받아 두었다. 보드4는 바꾸지 않았다.
 - Mac `~/e850-logs`에서 17:19에 하위 디렉터리 12개가 없어졌다. 11-14·11-15 복제 디렉터리와 옛 boot 디렉터리(`boot-dvs`, `boot-dvs2`, `boot-mpidr`, `boot-c2t` 등)다. 이 작업과 별도로 정리한 것이다(CLAUDE.md "로그와 백업 위치"에 같은 날 적혀 있다). `boot-dvs3`, `boot-nocpu`, `boot-nokvm`(복구용)은 남아 있다.
+
+**`e850-x`가 데스크톱을 띄우지 못함 (같은 날, 원인 찾음).**
+- 관찰: 사용자가 보드3 tty1 root 프롬프트에서 `e850-x`를 두 번 실행했다. 두 번 모두 Xorg :1(glamor, HDMI-1 1920x1080)은 떴고, 세션(openbox, lxpanel, pcmanfm 등)은 없었다. 화면은 빈 X였다.
+- 원인: `/opt/e850-features/desktop/session.sh`가 `-rw-r--r--`다. `x-kms.sh`는 `[ -x $S ] || { echo "… missing: e850-feature install desktop"; exit 1; }`에서 끝나 `runuser`까지 가지 않는다. 그 메시지는 tty1에 찍히고 화면은 vt8이라 보이지 않는다.
+- 출처: 보드6(.208)과 보드4(.244)도 같은 644다(11-25 14:xx, 11.107에서 이 디렉터리를 손으로 갱신할 때 실행 권한이 빠졌다). 11.107은 세션을 손으로 띄워서 드러나지 않았다. 보드3은 보드6에서 그대로 받았다. 저장소 `features/desktop/session.sh`는 755라서 `e850-feature install desktop`으로 새로 깔면 문제없다.
+- 다른 권한 없는 스크립트(`bt/e850-btbridge.py`, `audio/mixer-path.py`, `dvs/dvsx11.py`, `/var/tmp/e850-kms/load.sh`)는 인터프리터로 불리고 11-24부터 그 상태라 손대지 않았다.
+- 우회: ssh의 philip으로 x-kms.sh와 같은 환경을 주고 `setsid sh session.sh`를 하니 데스크톱이 떴다(xshot으로 확인).
+- 고치는 법: root로 `chmod 755 /opt/e850-features/desktop/session.sh`(보드3·4·6). 복제 이미지 `clone-20261127-b6`에도 644로 들어 있으니, 그 이미지로 구운 보드는 굽고 나서 같은 chmod를 한다.
+- 보드에 바꾼 것: 사용자가 보드6·4에서 sudo로 chmod 755를 했다(ls로 확인). 보드3은 아직 644다.
+
+### 11.120 SD 카드 설치용 boot 이미지, 보드7 (2026-11-27)
+
+사용자: "보드를 복사하는데 가장 쉽고 간단한 방법은? 10대를 복사한다고 하면", "설치 전용 boot 이미지를 하나 만들자", "바로 만들어, sdcard는 넣었어".
+
+**만든 것.** 절차는 BOARD-CLONE.md 13장에 있다.
+- `tools/linux510/e850-install`(initramfs): `e850.install`이 명령줄에 있으면 init이 모든 모듈을 올린 뒤 부른다. 하는 일은 다음과 같다.
+  - SD 카드의 `e850-install/`(boot.img, userdata.simg, MD5SUMS)을 찾는다.
+  - 검사한 뒤 userdata를 쓴다.
+  - machine-id를 정한다(있던 것을 남기거나 새로 만든다).
+  - 파일시스템을 파티션 전체로 늘린다.
+  - boot를 쓰고 다시 읽어 확인한 뒤 재부팅한다.
+  - 카드가 없으면 보통 부팅을 한다. 실패하면 셸에 남고, boot는 설치용 그대로다.
+- `tools/linux510/simg-write.c`: sparse 이미지를 블록 장치에 쓴다. 쓰기 전에 크기를 검사하고, `--grow`로 `EXT4_IOC_RESIZE_FS`를 부른다. 정적 aarch64로 initramfs에 들어간다. 시험은 `test_simg_write.sh`(Docker)이고 5개 모두 통과했다: simg2img와 같은 결과, 파이프 입력, resparse 조각, 작은 장치 거부, grow 뒤 e2fsck, 쓰레기·잘린 입력 거부.
+- `build-bootimg.sh`가 둘을 모든 boot 이미지에 넣는다. 설치용은 `"root=PARTLABEL=userdata e850.install"`로 만든다. `~/e850-logs/boot-install/boot.img`(최종 md5 `59685cb1…`).
+- `build-clone.sh`: `TAR`, `OUT`(`/dev/fd/3`이면 이미지를 표준 출력으로 낸다), `session.sh` 755(11.119).
+- `tools/host/make-install-sd.sh`: 카드에 파일과 MD5SUMS를 넣는다.
+
+**이미지.** 보드6 `rootfs.tar`(clone-20261127-b6)로 12 GiB 이미지를 만들었다(5분, e2fsck 깨끗, 56,036 파일, 8.6 GB 사용). 7,974,922,004 B, md5 `970c3890…`. Mac 디스크가 12 GiB밖에 없어서 카드(32 GB exFAT "NO NAME")에 바로 흘려 썼다. 카드에서 다시 읽은 md5가 같았다.
+- 자리를 만들려고 `clone-20261127-b6`의 `rootfs.simg`와 `part.simg.0~11`(보드3 전용, 16 GB)을 지웠다. 같은 폴더의 `rootfs.tar`로 다시 만들 수 있다. 지운 블록은 Time Machine 로컬 스냅숏이 잡고 있다가 나중에 풀렸다.
+- 카드를 Docker에 `-v /Volumes/…`로 붙이자 그 컨테이너가 시작하지 못하고, 뒤의 `docker run`도 모두 멈췄다. 그 컨테이너를 지우자 풀렸다. 그 뒤 Docker VM이 볼륨을 잡고 있어 `diskutil eject`가 거부됐다. `sync` 뒤 `unmountDisk force`로 꺼냈다.
+
+**보드7(새 보드, fastboot `000008f54c9c23e0`) 설치 기록(관찰).**
+- 전원을 넣자 LK가 바로 fastboot에 들어갔다(보드3과 같다. 리셋 버튼을 눌러도 fastboot로 간다).
+- stock `fastboot flash boot`은 2분 19초 동안 끝나지 않았다. 끊은 뒤 LK가 답하지 않아(`LIBUSB_ERROR_TIMEOUT`) 사용자가 리셋했다. `fbmini flash boot`은 2.4 s에 OKAY였다.
+- 첫 설치 부팅은 32 s에 `no SD card`로 넘어갔다. 카드 감지 핀(`DWMCI_EXT_CD`)이 `hi`였고, 사용자가 카드를 다시 꽂자 `lo`가 되며 `mmc1: card inserted`(SDR104 29.7 GiB)가 나왔다. 카드가 덜 들어가 있었던 것으로 본다. initramfs 셸(ACM)에서 `e850-install`을 손으로 띄웠다.
+- 카드의 로그(`e850-install/log/unknown.txt`):
+  - 설치는 906 s였다. 그중 136 s는 busybox `wc -c`가 8 GB를 끝까지 읽은 시간이다(크기도 32비트로 넘쳐 3,679,954,708로 찍혔다). `simg-write`는 752 s, 33,187청크, 12 GiB였다.
+  - grow 3,069,730 → 13,896,301블록, boot 확인, `done in 906 s`.
+- 설치 뒤 첫 부팅: 9 s에 `mmc0: cqhci` 레지스터 덤프가 나왔고, 30 s에 userdata 마운트가 `Input/output error`였다. initramfs 셸에 남았다. 보드3(11.119 첫 부팅)·보드4(11.102 두 번째 부팅)와 같은 모습이다. 리셋 → fastboot → `fbmini reboot` 뒤에는 정상이었다. 원인은 모른다.
+- 정상 부팅 뒤 확인:
+  - 78 s에 Wi-Fi 192.168.0.196(DHCP)이었다. machine-id `2a7e7070f9cbb74a6a43f03c7840d5dd`.
+  - 루트 54G(7.8G 사용), `session.sh` 755, running, failed 0, boot-nocpu, SD는 `/media/philip/NO NAME`에 자동 마운트됐다.
+  - 23.2 s에 `v4l_querycap` WARNING(v4l2-ioctl.c:1115)이 한 번 있었다. 보드6 dmesg에는 없다. 시스템은 정상이다.
+
+**속도(보드7에서 잼).**
+
+| 항목 | 속도 |
+|---|---|
+| eMMC 쓰기, direct | 232 MB/s |
+| eMMC 쓰기, 버퍼+fsync | 107 MB/s |
+| SD 읽기, direct | 66 MB/s |
+| busybox `md5sum` | 168 MB/s |
+| Debian `md5sum` | 218 MB/s |
+| busybox `cat \| tee` | 45 MB/s |
+
+- 설치에서 데이터 구간은 약 12 MB/s였다. 0으로 채우는 구간은 5%에 3~8 s였다. 막힌 곳은 `cat | tee fifo | simg-write` 파이프다.
+- `simg-write`가 파일을 직접 읽고 `md5sum`이 같은 파일을 옆에서 읽게 하니 같은 이미지가 195 s였다(보드7 `/var/tmp`의 파일에 씀, md5 같음). `e850-install`을 이렇게 바꿨다. 로그 이름은 `androidboot.serialno`로, 크기는 `stat -c %s`로 바꿨다. 바꾼 판으로 보드8·9에 설치했다(아래).
+
+**고친 판으로 보드8·9(새 보드) 설치(관찰, 2026-11-27 23:41~23:58 KST).**
+
+| 보드 | fastboot | 설치 시작(`fbmini reboot`) | 쓰기 시작 | 설치 끝(ACM 사라짐) | Wi-Fi | machine-id |
+|---|---|---|---|---|---|---|
+| 8 | `00000bf4f49c23e0` | 23:41:40 | 23:42:37 이전 | 23:45:35~50 | 23:46:05, .176 | `0e0b29f0…` |
+| 9 | `00000a0d2c9c23e0` | 23:53:54 | 23:54:52 이전 | 23:57:10~26 | 23:57:59, .222 | `d9ab8cb4…` |
+
+- 두 보드 모두 전원을 넣자 fastboot에 들어갔다. `fbmini flash boot`부터 Wi-Fi까지 약 4분이다. 카드를 처음부터 끝까지 꽂아 두어 바로 찾았다. 로그 이름(일련번호)과 크기(7,974,922,004)가 맞게 찍혔다.
+- 둘 다 설치 뒤 첫 부팅이 정상이었다. 보드7의 eMMC 오류는 두 번 다 나지 않았다.
+- 보드9 확인: 루트 54G(7.8G 사용), `session.sh` 755, running, failed 0. `v4l_querycap` WARNING은 보드7과 같다. cqhci 덤프는 없다.
+- 보드8은 machine-id만 확인했다. 54G, 서비스, 카드의 두 보드 로그는 보지 못했다. 사용자가 확인 뒤 바로 전원을 껐다("다 완료해서 파워오프했어").
+
+**보드에 바꾼 것.** 보드8·9: boot = boot-nocpu, userdata = 보드6 이미지. 보드7: boot = boot-nocpu, userdata = 보드6 이미지. 시험 파일(`/var/tmp/busybox`, `simg-write`, 12 GiB `out.img`)은 지웠다. 보드3은 바꾸지 않았다.
+
+**남은 것.**
+- 설치 뒤 첫 부팅의 eMMC 오류. 이것 때문에 보드마다 리셋, fastboot, `fbmini reboot`(Mac)이 한 번 더 든다.
+- 설치 뒤 첫 부팅 eMMC 오류는 보드7에서만 났다(고친 판의 보드8·9에서는 안 남).
+- 커밋하지 않았다.
