@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E850·Jetson AI 벤치마크 결과</title>
+<style>
+  :root { --paper: #fff; --ink: #1c1c1a; --dim: #5f5f59; --line: #d9d9d3; --soft: #f3f3ef; --desk: #e9e9e4;
+          --ok: #1f6f3d; --warn: #9a4a12; --no: #8a1f1f; --accent: #1d4f91; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --desk: #1b1b1a; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--desk); color: var(--ink); font: 15px/1.65 "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif; }
+  .bar { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+         padding: 8px 16px; background: #2b2b29; color: #eee; font-size: 13px; }
+  .bar span { flex: 1 1 200px; }
+  .bar button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid #777; background: #444; color: #fff; cursor: pointer; }
+  main { max-width: 210mm; margin: 16px auto; padding: 18mm 16mm; background: var(--paper); box-shadow: 0 1px 4px rgba(0,0,0,.15); outline: none; }
+  main:focus-within { box-shadow: 0 0 0 2px var(--accent); }
+  h1 { font-size: 24px; line-height: 1.3; margin: 0 0 4px; }
+  .meta { color: var(--dim); font-size: 13px; margin: 0 0 18px; }
+  h2 { font-size: 18px; margin: 26px 0 8px; padding-bottom: 4px; border-bottom: 2px solid var(--ink); }
+  h3 { font-size: 15.5px; margin: 18px 0 6px; }
+  p, li { margin: 4px 0; }
+  ul, ol { padding-left: 20px; margin: 4px 0 8px; }
+  .verdict { background: var(--soft); border-left: 4px solid var(--accent); padding: 10px 14px; margin: 10px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 5px 8px; vertical-align: top; text-align: left; }
+  th { background: var(--soft); font-weight: 600; }
+  p.cap { break-after: avoid; margin-top: 10px; }
+  td.n, th.n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  table.wide { font-size: 12px; } table.wide th, table.wide td { padding: 3px 5px; }
+  .ok { color: var(--ok); font-weight: 600; } .warn { color: var(--warn); font-weight: 600; } .no { color: var(--no); font-weight: 600; }
+  code { font: 12.5px ui-monospace, Menlo, monospace; background: var(--soft); padding: 1px 4px; border-radius: 3px; word-break: break-all; }
+  .tag { display: inline-block; font-size: 11.5px; padding: 0 6px; border-radius: 9px; border: 1px solid currentColor; white-space: nowrap; }
+  .tag.ok { color: var(--ok); } .tag.warn { color: var(--warn); } .tag.no { color: var(--no); }
+  .sub { color: var(--dim); font-size: 12px; }
+  .note { color: var(--dim); font-size: 13px; }
+  @media (max-width: 700px) { main { margin: 0; padding: 20px 16px; box-shadow: none; } table { font-size: 12.5px; display: block; overflow-x: auto; } }
+  @page { size: A4 portrait; margin: 14mm; }
+  @media print { body { background: #fff; } .bar { display: none; } main { margin: 0; padding: 0; max-width: none; box-shadow: none; }
+                 h2, h3 { break-after: avoid; } table, .verdict { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<div class="bar"><span>본문을 눌러 바로 고칠 수 있습니다. 고친 뒤 "HTML로 저장"을 누르면 고친 판이 파일로 내려받아집니다.</span>
+  <button id="save" type="button">HTML로 저장</button><button type="button" onclick="print()">인쇄 · PDF</button></div>
+<main contenteditable="true" spellcheck="false">
+<h1>E850과 Jetson Orin Nano의 AI 런타임 벤치마크 결과</h1>
+<p class="meta">2026-11-26 · E850-96(Exynos 850, Cortex-A55 ×8) 보드4·보드6 · NVIDIA Jetson Orin Nano(Cortex-A78AE ×6, Ampere GPU) · 명세 "E850 vs NVIDIA Jetson 기반 Multi-Sensor AI Runtime Benchmark" · 작업 기록 <code>docs/E85096-LINUX510-BOOT.md</code> 11.115~11.117 · 원자료 <code>msbench/results/</code></p>
+
+<h2>1. 요약</h2>
+<div class="verdict">
+<p><b>결론.</b></p>
+<ul>
+  <li>같은 모델과 같은 입력이면 두 장비의 정확도가 소수 셋째 자리까지 같다. INT8도 같다.</li>
+  <li>CPU만 쓰면 Jetson이 3.0~3.8배 빠르다. 각 장비에서 가장 빠르면서 정확도가 유지되는 설정끼리 비교한 값이다.</li>
+  <li>Jetson GPU(TensorRT FP16)를 쓰면 E850 CPU보다 14~49배 빠르다.</li>
+  <li>E850 GPU(Mali-G52, 이미 있는 GLES 드라이버 위의 TFLite GL)는 정확도가 CPU와 같다. 그러나 E850 CPU의 가장 빠른 설정보다 3~11배 느리다. 대신 CPU를 거의 쓰지 않는다: ResNet18은 0.02코어로 돈다(5.2절).</li>
+  <li>E850에서 가장 빠른 런타임은 네 모델 모두 NCNN FP16이다.
+    <ul>
+      <li>YOLO는 4스레드에서 스레드마다 코어를 묶어야 제 속도가 난다. E850 스케줄러가 스레드를 적은 코어에 몰아 놓기 때문이다.</li>
+      <li>코어를 묶는 것만으로 보드6의 실시간 검출이 3.2배 빨라졌다.</li>
+    </ul>
+  </li>
+  <li>차이는 클럭에서 오지 않는다. E850 클럭이 오히려 1.49배 높다. 차이는 코어 구조에서 온다: in-order 대 out-of-order, 발행 폭, 메모리 읽기 겹침, FMA 폭, int8 내적 명령의 유무.</li>
+  <li>DVS 검출, 융합, 에너지를 묻는 질문(RQ5~RQ8)에는 답하지 못했다. 라벨 있는 DVS 데이터와 E850 전력계가 없다.</li>
+</ul>
+</div>
+<table>
+  <tr><th style="width:36%">무엇을 쟀나</th><th>결과</th></tr>
+  <tr><td>가장 빠른 YOLO11n-640 추론<br><span class="sub">정확도가 FP32보다 0.02 넘게 떨어지는 설정은 뺌</span></td><td>E850 CPU <b>186 ms</b> · Jetson CPU 59.5 ms · Jetson GPU <b>6.4 ms</b></td></tr>
+  <tr><td>E850 GPU(Mali-G52) TFLite GL FP16<br><span class="sub">보드4, CPU 폴백 4스레드</span></td><td>YOLO11n-640 1050 ms(CPU 0.39코어) · ResNet18 525 ms(CPU 0.02코어) · MobileNetV2 68.6 ms(CPU 0.39코어). 정확도는 CPU FP32와 같다</td></tr>
+  <tr><td>같은 런타임·정밀도, 1스레드 속도 비</td><td>FP32·FP16은 Jetson이 2.4~3.7배, INT8은 3.3~6.2배 빠르다</td></tr>
+  <tr><td>정확도(COCO 200장, YOLO11n-640 mAP50-95)</td><td>FP32 0.440, NCNN FP16 0.438, ORT INT8 0.418이다. 두 장비가 같다. TFLite INT8은 0.123으로 망가진다(원인은 확인함, 4장)</td></tr>
+  <tr><td>실시간 USB 카메라 YOLO11n-320<br><span class="sub">카메라 15.1 fps, DVS 실시간 중</span></td><td>Jetson TensorRT FP16: 15.1 fps, 카메라→검출 79 ms<br>보드6 NCNN FP16 + 코어 고정: DVS AI 켬 7.5 fps(226 ms), AI 끔 14.4 fps(163 ms)</td></tr>
+  <tr><td>E850 4스레드의 스레드 몰림</td><td>표본의 70%에서 몰려 있었다. 스레드마다 코어를 묶으면 1.4~2.65배 빨라진다</td></tr>
+  <tr><td>추론 한 번의 증분 에너지(Jetson VDD_IN)</td><td>TensorRT FP16 YOLO11n-320 10 mJ, 640 31 mJ다. E850은 전력 센서가 없어 재지 못했다(N/A)</td></tr>
+</table>
+
+<h2>2. 실험 환경과 방법</h2>
+<table>
+  <tr><th style="width:18%">항목</th><th>E850-96</th><th>Jetson Orin Nano</th></tr>
+  <tr><td>CPU</td><td>Cortex-A55 ×8, 546~2002 MHz. in-order 2-issue, Armv8.2, <b>int8 내적(DotProd) 없음</b></td><td>Cortex-A78AE ×6, 25W 모드 1344 MHz. out-of-order, Armv8.2 + DotProd</td></tr>
+  <tr><td>GPU</td><td>Mali-G52. AI 런타임이 쓸 OpenCL·Vulkan 드라이버가 없어서 CPU만 쓴다</td><td>Ampere(sm_87). 측정 중 918 MHz</td></tr>
+  <tr><td>소프트웨어</td><td>vendor Linux 5.10 + Debian 12</td><td>L4T R39.2.1, Ubuntu 24.04. TensorRT 11.4.1, PyTorch 2.14.1+cu130, onnxruntime-gpu 1.24.0은 sudo 없이 홈에 설치</td></tr>
+  <tr><td>전력 센서</td><td><span class="no">없음</span></td><td>INA3221 VDD_IN(모듈 입력)</td></tr>
+  <tr><td>배경 부하</td><td>보드4: 현미경 뷰어 + Chrome(약 12%). 보드6: DVS 실시간 + AI 스레드</td><td>DVS 실시간 + GNOME 데스크톱</td></tr>
+  <tr><td>코어 배치</td><td>1스레드 CPU5, 4스레드 CPU4~7, 8스레드 전부</td><td>1스레드 CPU5, 4스레드 CPU2~5, 6스레드 전부. DVS 디코더가 있는 CPU1은 피했다</td></tr>
+</table>
+<ul>
+  <li><b>모델.</b>
+    <ul>
+      <li>검출: YOLO11n 640·320, COCO val2017 200장.</li>
+      <li>분류: ResNet18, MobileNetV2(torchvision), Imagenette 200장.</li>
+    </ul>
+  </li>
+  <li><b>CPU 런타임.</b> PyTorch, ONNX Runtime(ORT), TFLite(LiteRT), NCNN. 정밀도는 FP32, FP16(NCNN), INT8이다.</li>
+  <li><b>GPU 런타임(Jetson).</b> PyTorch CUDA, ORT CUDA, TensorRT. 정밀도는 FP32, FP16, INT8, INT8+FP16이다.</li>
+  <li><b>측정 규칙.</b>
+    <ul>
+      <li>입력: 모든 장비와 런타임이 레터박스한 같은 uint8 배열을 받는다. INT8 보정에는 모두 같은 100장을 썼다.</li>
+      <li>횟수: 워밍업 50회 뒤 500회씩 3블록을 돈다. 표의 값은 중앙값이다.</li>
+      <li>기록: 블록마다 클럭, 온도, Jetson 전력을 남긴다.</li>
+      <li>GPU 지연은 호스트 입력부터 호스트 출력까지다(복사 포함). FP32에서는 TF32를 껐다.</li>
+    </ul>
+  </li>
+  <li><b>원칙.</b> 재지 않은 값은 쓰지 않았다. 재지 못한 것은 N/A로 적고 원인을 붙였다. 센서 초기화, Setfile, PLL, MIPI 설정은 바꾸지 않았다.</li>
+</ul>
+
+<h2>3. 같은 데이터로 CPU 런타임 비교</h2>
+<h3>3.1 장비별 가장 빠른 설정</h3>
+<table>
+  <tr><th>모델</th><th>E850 CPU</th><th>Jetson CPU</th><th>Jetson GPU</th><th class="n">CPU 비</th><th class="n">E850 ÷ Jetson GPU</th></tr>
+  <tr><td>YOLO11n-640</td><td>NCNN FP16 4스레드 + 코어 고정 <b>186.0 ms</b></td><td>NCNN FP16 4스레드 59.5 ms</td><td>TensorRT FP16 6.41 ms</td><td class="n">3.13×</td><td class="n">29×</td></tr>
+  <tr><td>YOLO11n-320</td><td>NCNN FP16 4스레드 + 코어 고정 <b>48.6 ms</b></td><td>NCNN FP16 4스레드 16.2 ms</td><td>TensorRT FP16 3.39 ms</td><td class="n">3.00×</td><td class="n">14×</td></tr>
+  <tr><td>ResNet18</td><td>NCNN FP16 8스레드 <b>49.0 ms</b></td><td>NCNN FP16 4스레드 13.0 ms</td><td>TensorRT INT8+FP16 0.99 ms</td><td class="n">3.77×</td><td class="n">49×</td></tr>
+  <tr><td>MobileNetV2</td><td>NCNN FP16 4스레드 <b>22.4 ms</b></td><td>NCNN FP16 4스레드 6.36 ms</td><td>TensorRT FP16 1.32 ms</td><td class="n">3.52×</td><td class="n">17×</td></tr>
+</table>
+
+<h3>3.2 전체 표</h3>
+<p class="note">값은 중앙값 ms다. "비"는 E850 ÷ Jetson이다. E850 4스레드 열은 코어를 묶지 않은 기본 판이다(묶은 판은 3.3절). Jetson 6스레드 열은 DVS와 코어를 같이 쓴 첫 측정이다. 굵은 글씨는 정확도가 FP32보다 0.02 넘게 떨어지지 않는 설정 중 그 장비의 최솟값이다(TFLite INT8 YOLO와 MobileNetV2, NCNN INT8 YOLO는 빠짐).</p>
+<p class="cap"><b>YOLO11n-640</b></p>
+<table class="wide">
+  <tr><th>런타임</th><th class="n">E850 1</th><th class="n">E850 4</th><th class="n">E850 8</th><th class="n">Jetson 1</th><th class="n">Jetson 4</th><th class="n">Jetson 6</th><th class="n">비 1</th><th class="n">비 4</th><th class="n">비 최대</th></tr>
+  <tr><td>PyTorch FP32</td><td class="n">1712.2</td><td class="n">1638.8</td><td class="n">912.7</td><td class="n">613.2</td><td class="n">242.1</td><td class="n">395.7</td><td class="n">2.79×</td><td class="n">6.77×</td><td class="n">2.31×</td></tr>
+  <tr><td>ORT FP32</td><td class="n">1399.8</td><td class="n">568.8</td><td class="n">601.6</td><td class="n">476.2</td><td class="n">142.1</td><td class="n">165.1</td><td class="n">2.94×</td><td class="n">4.00×</td><td class="n">3.64×</td></tr>
+  <tr><td>ORT INT8</td><td class="n">1112.6</td><td class="n">452.2</td><td class="n">421.4</td><td class="n">262.2</td><td class="n">101.7</td><td class="n">125.0</td><td class="n">4.24×</td><td class="n">4.45×</td><td class="n">3.37×</td></tr>
+  <tr><td>TFLite FP32</td><td class="n">1127.7</td><td class="n">643.6</td><td class="n">423.6</td><td class="n">412.2</td><td class="n">113.9</td><td class="n">118.6</td><td class="n">2.74×</td><td class="n">5.65×</td><td class="n">3.57×</td></tr>
+  <tr><td>TFLite INT8 <span class="sub">정확도 망가짐</span></td><td class="n">669.1</td><td class="n">381.3</td><td class="n">272.8</td><td class="n">129.8</td><td class="n">45.8</td><td class="n">60.6</td><td class="n">5.16×</td><td class="n">8.32×</td><td class="n">4.50×</td></tr>
+  <tr><td>NCNN FP32</td><td class="n">853.6</td><td class="n">731.2</td><td class="n">454.9</td><td class="n">345.3</td><td class="n">112.0</td><td class="n">217.7</td><td class="n">2.47×</td><td class="n">6.53×</td><td class="n">2.09×</td></tr>
+  <tr><td>NCNN FP16</td><td class="n">425.6</td><td class="n">448.6</td><td class="n"><b>238.5</b></td><td class="n">174.5</td><td class="n"><b>59.5</b></td><td class="n">157.9</td><td class="n">2.44×</td><td class="n">7.53×</td><td class="n">1.51×</td></tr>
+  <tr><td>NCNN INT8</td><td class="n">854.9</td><td class="n">783.5</td><td class="n">409.6</td><td class="n">205.9</td><td class="n">72.5</td><td class="n">207.1</td><td class="n">4.15×</td><td class="n">10.80×</td><td class="n">1.98×</td></tr>
+</table>
+<p class="cap"><b>YOLO11n-320</b></p>
+<table class="wide">
+  <tr><th>런타임</th><th class="n">E850 1</th><th class="n">E850 4</th><th class="n">E850 8</th><th class="n">Jetson 1</th><th class="n">Jetson 4</th><th class="n">Jetson 6</th><th class="n">비 1</th><th class="n">비 4</th><th class="n">비 최대</th></tr>
+  <tr><td>PyTorch FP32</td><td class="n">430.7</td><td class="n">723.6</td><td class="n">329.0</td><td class="n">150.8</td><td class="n">78.7</td><td class="n">172.8</td><td class="n">2.86×</td><td class="n">9.20×</td><td class="n">1.90×</td></tr>
+  <tr><td>ORT FP32</td><td class="n">356.1</td><td class="n">150.6</td><td class="n">159.1</td><td class="n">120.4</td><td class="n">39.8</td><td class="n">48.5</td><td class="n">2.96×</td><td class="n">3.78×</td><td class="n">3.28×</td></tr>
+  <tr><td>ORT INT8</td><td class="n">282.6</td><td class="n">136.3</td><td class="n">134.4</td><td class="n">67.8</td><td class="n">32.8</td><td class="n">39.5</td><td class="n">4.16×</td><td class="n">4.16×</td><td class="n">3.41×</td></tr>
+  <tr><td>TFLite FP32</td><td class="n">254.7</td><td class="n">169.8</td><td class="n">154.9</td><td class="n">100.8</td><td class="n">30.9</td><td class="n">34.7</td><td class="n">2.53×</td><td class="n">5.50×</td><td class="n">4.47×</td></tr>
+  <tr><td>TFLite INT8 <span class="sub">정확도 망가짐</span></td><td class="n">163.0</td><td class="n">118.9</td><td class="n">109.4</td><td class="n">31.9</td><td class="n">14.8</td><td class="n">22.4</td><td class="n">5.10×</td><td class="n">8.04×</td><td class="n">4.89×</td></tr>
+  <tr><td>NCNN FP32</td><td class="n">213.1</td><td class="n">153.8</td><td class="n">133.6</td><td class="n">86.1</td><td class="n">29.5</td><td class="n">108.1</td><td class="n">2.47×</td><td class="n">5.22×</td><td class="n">1.24×</td></tr>
+  <tr><td>NCNN FP16</td><td class="n">105.2</td><td class="n">68.7</td><td class="n"><b>62.0</b></td><td class="n">43.6</td><td class="n"><b>16.2</b></td><td class="n">58.1</td><td class="n">2.42×</td><td class="n">4.23×</td><td class="n">1.07×</td></tr>
+  <tr><td>NCNN INT8</td><td class="n">213.0</td><td class="n">191.1</td><td class="n">128.1</td><td class="n">52.2</td><td class="n">20.1</td><td class="n">98.8</td><td class="n">4.08×</td><td class="n">9.53×</td><td class="n">1.30×</td></tr>
+</table>
+<p class="cap"><b>ResNet18</b></p>
+<table class="wide">
+  <tr><th>런타임</th><th class="n">E850 1</th><th class="n">E850 4</th><th class="n">E850 8</th><th class="n">Jetson 1</th><th class="n">Jetson 4</th><th class="n">Jetson 6</th><th class="n">비 1</th><th class="n">비 4</th><th class="n">비 최대</th></tr>
+  <tr><td>PyTorch FP32</td><td class="n">913.3</td><td class="n">605.5</td><td class="n">302.2</td><td class="n">261.1</td><td class="n">75.7</td><td class="n">115.5</td><td class="n">3.50×</td><td class="n">7.99×</td><td class="n">2.62×</td></tr>
+  <tr><td>ORT FP32</td><td class="n">626.8</td><td class="n">233.5</td><td class="n">256.7</td><td class="n">208.8</td><td class="n">58.1</td><td class="n">63.0</td><td class="n">3.00×</td><td class="n">4.02×</td><td class="n">4.07×</td></tr>
+  <tr><td>ORT INT8</td><td class="n">373.2</td><td class="n">128.5</td><td class="n">108.8</td><td class="n">60.7</td><td class="n">18.3</td><td class="n">19.6</td><td class="n">6.15×</td><td class="n">7.01×</td><td class="n">5.55×</td></tr>
+  <tr><td>TFLite FP32</td><td class="n">488.8</td><td class="n">263.6</td><td class="n">160.1</td><td class="n">183.7</td><td class="n">47.7</td><td class="n">45.6</td><td class="n">2.66×</td><td class="n">5.52×</td><td class="n">3.51×</td></tr>
+  <tr><td>TFLite INT8</td><td class="n">326.0</td><td class="n">161.6</td><td class="n">93.2</td><td class="n">53.1</td><td class="n">14.5</td><td class="n">16.1</td><td class="n">6.14×</td><td class="n">11.13×</td><td class="n">5.78×</td></tr>
+  <tr><td>NCNN FP32</td><td class="n">248.9</td><td class="n">101.1</td><td class="n">121.8</td><td class="n">83.9</td><td class="n">25.2</td><td class="n">55.1</td><td class="n">2.97×</td><td class="n">4.02×</td><td class="n">2.21×</td></tr>
+  <tr><td>NCNN FP16</td><td class="n">124.2</td><td class="n">50.5</td><td class="n"><b>49.0</b></td><td class="n">42.2</td><td class="n"><b>13.0</b></td><td class="n">31.7</td><td class="n">2.94×</td><td class="n">3.89×</td><td class="n">1.55×</td></tr>
+  <tr><td>NCNN INT8</td><td class="n">183.9</td><td class="n">70.1</td><td class="n">67.0</td><td class="n">55.4</td><td class="n">15.2</td><td class="n">35.5</td><td class="n">3.32×</td><td class="n">4.61×</td><td class="n">1.89×</td></tr>
+</table>
+<p class="cap"><b>MobileNetV2</b></p>
+<table class="wide">
+  <tr><th>런타임</th><th class="n">E850 1</th><th class="n">E850 4</th><th class="n">E850 8</th><th class="n">Jetson 1</th><th class="n">Jetson 4</th><th class="n">Jetson 6</th><th class="n">비 1</th><th class="n">비 4</th><th class="n">비 최대</th></tr>
+  <tr><td>PyTorch FP32</td><td class="n">271.3</td><td class="n">296.6</td><td class="n">236.2</td><td class="n">77.4</td><td class="n">48.4</td><td class="n">124.6</td><td class="n">3.51×</td><td class="n">6.13×</td><td class="n">1.90×</td></tr>
+  <tr><td>ORT FP32</td><td class="n">162.0</td><td class="n">64.5</td><td class="n">66.4</td><td class="n">46.9</td><td class="n">15.7</td><td class="n">19.7</td><td class="n">3.46×</td><td class="n">4.12×</td><td class="n">3.37×</td></tr>
+  <tr><td>ORT INT8</td><td class="n">127.7</td><td class="n">53.2</td><td class="n">47.9</td><td class="n">33.4</td><td class="n">13.7</td><td class="n">15.6</td><td class="n">3.83×</td><td class="n">3.89×</td><td class="n">3.07×</td></tr>
+  <tr><td>TFLite FP32</td><td class="n">131.0</td><td class="n">72.4</td><td class="n">56.4</td><td class="n">35.6</td><td class="n">10.3</td><td class="n">11.4</td><td class="n">3.68×</td><td class="n">7.03×</td><td class="n">4.93×</td></tr>
+  <tr><td>TFLite INT8</td><td class="n">78.0</td><td class="n">44.1</td><td class="n">38.4</td><td class="n">19.6</td><td class="n">6.06</td><td class="n">8.29</td><td class="n">3.98×</td><td class="n">7.28×</td><td class="n">4.64×</td></tr>
+  <tr><td>NCNN FP32</td><td class="n">98.8</td><td class="n">51.3</td><td class="n">52.2</td><td class="n">36.6</td><td class="n">12.2</td><td class="n">37.5</td><td class="n">2.70×</td><td class="n">4.20×</td><td class="n">1.39×</td></tr>
+  <tr><td>NCNN FP16</td><td class="n">48.5</td><td class="n"><b>22.4</b></td><td class="n">25.3</td><td class="n">18.8</td><td class="n"><b>6.36</b></td><td class="n">13.8</td><td class="n">2.59×</td><td class="n">3.52×</td><td class="n">1.83×</td></tr>
+  <tr><td>NCNN INT8</td><td class="n">110.0</td><td class="n">41.2</td><td class="n">41.2</td><td class="n">25.8</td><td class="n">8.44</td><td class="n">19.6</td><td class="n">4.26×</td><td class="n">4.88×</td><td class="n">2.10×</td></tr>
+</table>
+
+<h3>3.3 E850 4스레드가 덜 빨라지는 원인: 스레드 몰림</h3>
+<p>E850의 PyTorch는 4스레드가 1스레드보다 느리거나 비슷했다. 같은 코어에서 ORT는 2.4배 빨라졌다. 클럭은 원인이 아니었다: PyTorch는 최고 클럭(2002 MHz)에서 느렸고, ORT는 1586 MHz로 내려간 채 빨랐다. 스레드 위치를 20 ms마다 5초 동안 표본으로 떴다(PyTorch YOLO11n-320, 4스레드).</p>
+<table>
+  <tr><th>경우</th><th class="n">실행 대기 스레드 평균</th><th class="n">그 스레드들이 있는 코어 수</th><th class="n">둘 이상이 한 코어에 몰린 표본</th><th class="n">지연</th></tr>
+  <tr><td>CPU4~7, 기본</td><td class="n">3.45</td><td class="n">2.31</td><td class="n no">70%</td><td class="n">703 ms</td></tr>
+  <tr><td>CPU0~3, 기본</td><td class="n">3.84</td><td class="n">3.81</td><td class="n">3%</td><td class="n">279 ms</td></tr>
+  <tr><td>CPU4~7, 바쁘게 기다림(<code>OMP_WAIT_POLICY=ACTIVE</code>)</td><td class="n">4.00</td><td class="n">4.00</td><td class="n">0%</td><td class="n">254 ms</td></tr>
+  <tr><td>CPU4~7, 스레드마다 코어 고정(<code>OMP_PROC_BIND=close OMP_PLACES=cores</code>)</td><td class="n">3.75</td><td class="n">3.75</td><td class="n ok">0%</td><td class="n">252 ms</td></tr>
+</table>
+<ul>
+  <li>CPU4~7에서는 깨어난 OpenMP 작업 스레드가 주 스레드가 있는 코어 쪽에 놓인다. 한 코어에 둘이 몰리면 barrier에서 모두가 그 코어를 기다린다.</li>
+  <li>클러스터마다 다르게 동작하는 까닭은 확인하지 않았다. 가설은 vendor 스케줄러(EMS)가 스레드를 깨워 놓을 코어를 클러스터별 에너지 표로 고른다는 것이다.</li>
+  <li>TFLite(pthreadpool)도 몰린다(80%). 그런데 TFLite에는 스레드를 코어에 묶는 설정이 없다.</li>
+</ul>
+<p>PyTorch와 NCNN 전부를 코어 고정으로 다시 쟀다. 값은 기본 판 대비 빨라진 배수다.</p>
+<table>
+  <tr><th>모델</th><th class="n">PyTorch 4 / 8</th><th class="n">NCNN FP32 4 / 8</th><th class="n">NCNN FP16 4 / 8</th><th class="n">NCNN INT8 4 / 8</th></tr>
+  <tr><td>YOLO11n-640</td><td class="n">1.85× / 0.95×</td><td class="n">1.95× / 0.92×</td><td class="n">2.41× / 0.99×</td><td class="n">2.18× / 0.84×</td></tr>
+  <tr><td>YOLO11n-320</td><td class="n">2.65× / 0.88×</td><td class="n">1.61× / 0.93×</td><td class="n">1.41× / 0.99×</td><td class="n">2.06× / 0.94×</td></tr>
+  <tr><td>ResNet18</td><td class="n">1.67× / 0.86×</td><td class="n">0.99× / 1.01×</td><td class="n">0.98× / 0.99×</td><td class="n">0.99× / 0.97×</td></tr>
+  <tr><td>MobileNetV2</td><td class="n">1.40× / 0.88×</td><td class="n">1.09× / 0.91×</td><td class="n">0.99× / 0.85×</td><td class="n">0.99× / 0.91×</td></tr>
+</table>
+<p><b>실제로 쓸 결론.</b> E850에서 OpenMP 런타임(PyTorch, NCNN)을 CPU4~7에 4스레드로 쓰면 <code>OMP_PROC_BIND=close OMP_PLACES=cores</code>를 준다. 8스레드에서는 묶지 않는다. 묶으면 0.84~0.99배로 느려진다. 가설은 장치 인터럽트가 모이는 CPU0에 묶인 스레드 하나를 모두가 기다린다는 것이다.</p>
+
+<h3>3.4 Jetson 첫 측정을 바로잡음</h3>
+<p>첫 측정에서는 Jetson의 벤치마크 코어(1스레드 CPU1, 4스레드 CPU0~3)가 DVS 디코더·렌더러·필터와 겹쳤다. 1스레드는 코어의 0.84만 받았다. 그래서 부하가 가장 낮은 코어(1스레드 CPU5, 4스레드 CPU2~5)로 옮겨 다시 쟀다. 다시 잰 판은 첫 판보다 1스레드에서 1.20배(1.17~1.24배), 4스레드에서 1.41배(1.21~1.80배) 빨랐다. 위 표는 다시 잰 값이다.</p>
+
+<h2>4. 정밀도와 정확도</h2>
+<h3>4.1 정확도</h3>
+<p class="note">같은 200장으로 쟀다. 두 장비의 값은 모든 설정에서 소수 셋째 자리까지 같아서 한 값만 적는다. FP32는 PyTorch, ORT, TFLite, NCNN이 모두 같다. 200장이라 ±0.01은 의미가 없다.</p>
+<table>
+  <tr><th>모델</th><th>지표</th><th class="n">FP32</th><th class="n">NCNN FP16</th><th class="n">ORT INT8</th><th class="n">NCNN INT8</th><th class="n">TFLite INT8</th></tr>
+  <tr><td>YOLO11n-640</td><td>mAP50-95 / mAP50</td><td class="n">0.440 / 0.617</td><td class="n">0.438 / 0.616</td><td class="n">0.418 / 0.593</td><td class="n">0.378 / 0.558</td><td class="n no">0.123 / 0.318</td></tr>
+  <tr><td>YOLO11n-320</td><td>mAP50-95 / mAP50</td><td class="n">0.309 / 0.430</td><td class="n">0.309 / 0.433</td><td class="n">0.307 / 0.430</td><td class="n">0.280 / 0.402</td><td class="n no">0.128 / 0.309</td></tr>
+  <tr><td>ResNet18</td><td>top-1 / top-5</td><td class="n">0.795 / 0.960</td><td class="n">0.795 / 0.960</td><td class="n">0.805 / 0.960</td><td class="n">0.770 / 0.960</td><td class="n">0.785 / 0.960</td></tr>
+  <tr><td>MobileNetV2</td><td>top-1 / top-5</td><td class="n">0.800 / 0.945</td><td class="n">0.795 / 0.950</td><td class="n">0.795 / 0.930</td><td class="n">0.780 / 0.945</td><td class="n">0.770 / 0.945</td></tr>
+</table>
+<ul>
+  <li>YOLO11n-640 FP32의 검출 지표(conf 0.25, IoU 0.5)는 P 0.71, R 0.54, 누락률 0.46이다.</li>
+  <li>Jetson GPU의 정확도:
+    <ul>
+      <li>FP32는 CPU와 같다. FP16은 차이가 0.001 이하다.</li>
+      <li>TensorRT INT8 YOLO11n-640은 0.399, INT8+FP16은 0.403이다. 320은 0.285와 0.286이다.</li>
+    </ul>
+  </li>
+  <li><b>TFLite INT8 YOLO가 망가지는 원인(가설을 시험으로 확인).</b>
+    <ul>
+      <li>원인: Ultralytics 내보내기가 상자 복원(DFL softmax, 앵커 덧셈)까지 정수화한다.</li>
+      <li>시험: 복원 앞에서 모델 머리를 잘라 INT8로 만들고, 복원은 float로 했다. mAP50-95가 320에서 0.308, 640에서 0.430으로 FP32와 거의 같아졌다.</li>
+    </ul>
+  </li>
+</ul>
+
+<h3>4.2 정밀도별 속도 효과</h3>
+<table>
+  <tr><th style="width:12%">정밀도</th><th>E850 CPU (A55)</th><th>Jetson CPU (A78AE)</th><th>Jetson GPU (TensorRT)</th></tr>
+  <tr><td>FP16</td><td>NCNN이 FP32보다 2.00~2.04배 빠르다. 정확도는 같다</td><td>NCNN 1.95~1.99배</td><td>FP32보다 1.7~3.0배 빠르다. 네 모델 중 셋에서 가장 빠르다</td></tr>
+  <tr><td>INT8<br><span class="sub">1스레드, FP32 대비</span></td><td>NCNN 0.90~1.35배<br>ORT 1.26~1.68배<br>TFLite 1.5~1.7배</td><td>NCNN 1.42~1.68배<br>ORT 1.40~3.44배<br>TFLite 1.82~3.46배</td><td>YOLO는 FP16보다 느리다(FP16 대비 INT8은 시간 2.2배, INT8+FP16은 1.7~2.3배). ResNet18 INT8+FP16만 FP16보다 1.33배 빠르다</td></tr>
+</table>
+<ul>
+  <li>두 CPU 모두 FP16 FMLA가 FP32의 2배 처리량이다(7장 archbench). NCNN FP16의 정확히 2배와 맞는다.</li>
+  <li>E850에서 INT8 이득이 작은 것은 다음과 맞는다. 이 A55에는 int8 내적 명령 <code>sdot</code>이 없다(실행하면 SIGILL). Jetson A78AE에는 있다.</li>
+  <li>TensorRT INT8이 FP16보다 느린 까닭은 시험하지 않았다. 가설은 둘이다.
+    <ul>
+      <li>Q/DQ 배치(합성곱 입력만)에서 잔차 덧셈과 Concat마다 형식 변환이 생긴다.</li>
+      <li>Orin(sm_87)용 INT8 커널의 선택지가 좁다.</li>
+    </ul>
+  </li>
+</ul>
+
+<h2>5. GPU</h2>
+<h3>5.1 Jetson GPU</h3>
+<p class="note">호스트 1스레드(CPU5)로 쟀다. 값은 전체 지연 중앙값 ms이고, 괄호 안은 추론 한 번의 증분 에너지 mJ다. 증분 에너지는 (측정 중 VDD_IN − 직전 유휴) × 지연으로 계산했다. 유휴 VDD_IN은 약 6.5 W(DVS 실시간 + 데스크톱)였고, GPU 클럭은 모든 블록 끝에서 918 MHz였다. "—"인 칸은 이 모델들에 CUDA INT8 경로가 없어 재지 않은 것이다.</p>
+<table>
+  <tr><th>모델</th><th>런타임</th><th class="n">FP32</th><th class="n">FP16</th><th class="n">INT8</th><th class="n">INT8+FP16</th></tr>
+  <tr><td rowspan="3">YOLO11n-640</td><td>PyTorch CUDA</td><td class="n">20.5 (127)</td><td class="n">20.6 (77)</td><td class="n">—</td><td class="n">—</td></tr>
+  <tr><td>ORT CUDA</td><td class="n">25.1 (154)</td><td class="n">19.9 (102)</td><td class="n">—</td><td class="n">—</td></tr>
+  <tr><td>TensorRT</td><td class="n">15.1 (87)</td><td class="n"><b>6.41 (31)</b></td><td class="n">14.2 (76)</td><td class="n">11.2 (51)</td></tr>
+  <tr><td rowspan="3">YOLO11n-320</td><td>PyTorch CUDA</td><td class="n">17.8 (48)</td><td class="n">19.4 (38)</td><td class="n">—</td><td class="n">—</td></tr>
+  <tr><td>ORT CUDA</td><td class="n">12.6 (47)</td><td class="n">14.0 (37)</td><td class="n">—</td><td class="n">—</td></tr>
+  <tr><td>TensorRT</td><td class="n">5.67 (25)</td><td class="n"><b>3.39 (10)</b></td><td class="n">7.62 (24)</td><td class="n">7.78 (21)</td></tr>
+  <tr><td rowspan="3">ResNet18</td><td>PyTorch CUDA</td><td class="n">7.46 (51)</td><td class="n">7.03 (34)</td><td class="n">—</td><td class="n">—</td></tr>
+  <tr><td>ORT CUDA</td><td class="n">7.40 (61)</td><td class="n">5.63 (32)</td><td class="n">—</td><td class="n">—</td></tr>
+  <tr><td>TensorRT</td><td class="n">3.97 (31)</td><td class="n">1.32 (8)</td><td class="n">1.27 (6)</td><td class="n"><b>0.99 (4)</b></td></tr>
+  <tr><td rowspan="3">MobileNetV2</td><td>PyTorch CUDA</td><td class="n">10.5 (40)</td><td class="n">12.7 (31)</td><td class="n">—</td><td class="n">—</td></tr>
+  <tr><td>ORT CUDA</td><td class="n">5.73 (32)</td><td class="n">5.30 (24)</td><td class="n">—</td><td class="n">—</td></tr>
+  <tr><td>TensorRT</td><td class="n">2.46 (15)</td><td class="n"><b>1.32 (6)</b></td><td class="n">1.47 (5)</td><td class="n">1.58 (5)</td></tr>
+</table>
+<ul>
+  <li>복사 시간(H2D, D2H)은 모두 1 ms 아래다. Orin은 CPU와 GPU가 같은 DRAM을 쓴다.</li>
+  <li>PyTorch CUDA는 모델 크기와 거의 상관없이 17~21 ms였고, FP16에서도 빨라지지 않았다. 가설: 연산마다 커널을 하나씩 내는데, 1.34 GHz CPU 한 코어의 그 비용이 GPU 계산보다 길다. 프로파일러로 확인하지는 않았다.</li>
+  <li>ResNet18 INT8은 처음에 엔진 빌드에 실패했다. 첫 7×7 합성곱의 INT8 조합에 Orin용 구현이 없었다. 그 합성곱 하나만 float로 두니 빌드됐다.</li>
+  <li>TensorRT 11은 정밀도를 ONNX 파일이 정한다(strongly typed). 그래서 FP16, INT8, INT8+FP16용 ONNX를 따로 만들었다.</li>
+</ul>
+<h3>5.2 E850 GPU (Mali-G52 MP1, 11.117)</h3>
+<p class="note">이미 있는 GLES 3.1 드라이버(Mesa panfrost + vendor kbase shim)를 그대로 썼다. 그 위에서 도는 TFLite GPU 위임자의 OpenGL ES 백엔드를 직접 빌드했다(pip 판에는 없다). GPU가 맡지 않은 층은 CPU 4스레드(CPU4~7)가 돌린다. 보드4, GPU 1001 MHz, 값은 중앙값 ms다.</p>
+<table>
+  <tr><th>모델</th><th class="n">GPU가 맡은 연산</th><th class="n">GL FP32</th><th class="n">GL FP16</th><th class="n">GL FP16 CPU 사용(코어)</th><th class="n">E850 CPU 최고(NCNN FP16)</th><th class="n">Jetson GPU(TensorRT FP16)</th><th>정확도</th></tr>
+  <tr><td>YOLO11n-640</td><td class="n">167/346</td><td class="n">1105</td><td class="n">1091</td><td class="n">1.10</td><td class="n">186</td><td class="n">6.41</td><td>mAP50-95 0.440(CPU와 같음)</td></tr>
+  <tr><td>YOLO11n-320</td><td class="n">167/346</td><td class="n">319</td><td class="n">325</td><td class="n">1.41</td><td class="n">48.6</td><td class="n">3.39</td><td>0.309(같음)</td></tr>
+  <tr><td>YOLO11n-640, GPU 분할 2</td><td class="n">301/346</td><td class="n">—</td><td class="n">1050</td><td class="n">0.39</td><td class="n">186</td><td class="n">6.41</td><td>0.440(같음)</td></tr>
+  <tr><td>YOLO11n-320, GPU 분할 2</td><td class="n">301/346</td><td class="n">—</td><td class="n">279</td><td class="n">0.65</td><td class="n">48.6</td><td class="n">3.39</td><td>0.309(같음)</td></tr>
+  <tr><td>ResNet18</td><td class="n">38/38</td><td class="n">710</td><td class="n">525</td><td class="n"><b>0.02</b></td><td class="n">49</td><td class="n">1.32</td><td>top-1 0.795(같음)</td></tr>
+  <tr><td>MobileNetV2</td><td class="n">71/71</td><td class="n">94.6</td><td class="n">68.6</td><td class="n">0.39</td><td class="n">22</td><td class="n">1.32</td><td>top-1 0.800(같음)</td></tr>
+</table>
+<ul>
+  <li>GPU 자체 최고치(GLES compute로 잼): FP32 FMA 38 GFLOPS, 복사 6.8 GB/s, dispatch 하나 0.1~0.23 ms다. A55 한 코어의 FP32 FMA가 15.5 GFLOPS이므로, 이 GPU는 A55 약 2.5코어 몫이다.</li>
+  <li>FP16(mediump)도 38 GFLOPS다. 셰이더 덤프를 보면 이 Mesa(22.2) 컴파일러는 FP16 값을 둘씩 묶지 않는다. 그래서 FP16의 이득(1.35~1.38배)은 저장 대역폭에서만 온다.</li>
+  <li>NCNN FP16 4스레드는 ResNet18을 72 GFLOPS로 돌린다. 이미 이 GPU의 최고치보다 높다. 그래서 GPU는 지연으로는 CPU를 이길 수 없다. GPU 효율은 13~25%였다(TFLite GL 셰이더).</li>
+  <li>GPU의 몫은 CPU를 비우는 것이다. 추론 한 번의 CPU 시간은 ResNet18 GL 10 코어·ms, NCNN FP16 179 코어·ms다.</li>
+  <li>YOLO는 GL에 TRANSPOSE·BATCH_MATMUL(C2PSA 주의 블록)과 상수 텐서 SUB(박스 디코드) 셰이더가 없다. 기본(분할 1)으로는 반만 GPU에 올라가 CPU 사용이 별로 줄지 않는다. 분할 2로 하면 301/346개가 GPU에 올라가고, YOLO11n-640의 CPU 사용이 1.10 → 0.39코어로 준다(분할 2의 FP32는 재지 않았다: 표의 —).</li>
+  <li>보드6 실시간(DVS + AI 켬, YOLO11n-320): GL FP16 분할 2는 3.15 fps, CPU 0.45코어다. NCNN FP16 코어 고정은 7.89 fps, 1.77코어다. 프레임당 CPU는 GPU 쪽이 36% 적지만 fps는 40%다.</li>
+  <li>INT8은 N/A다. GL 백엔드에 정수 연산이 없다. E850 GPU 전력도 센서가 없어 N/A다.</li>
+</ul>
+
+<h2>6. 실시간 USB 카메라 검출</h2>
+<p class="note">두 장비에 같은 카메라 모델(1903:8328, 640×480 YUYV)을 썼다. 카메라는 실제로 15.1 fps로 들어온다. 한 설정에 30초씩 쟀고, DVS 실시간이 도는 중이었다. e2e는 카메라 버퍼 시각(첫 USB 패킷)부터 검출 결과가 나온 때까지다. 값은 중앙값 ms(괄호 안 p95)다.</p>
+<table class="wide">
+  <tr><th>장비·조건</th><th>모델·런타임</th><th class="n">검출 fps</th><th class="n">추론</th><th class="n">e2e</th><th class="n">프로세스 코어</th></tr>
+  <tr><td rowspan="8">Jetson<br><span class="sub">CPU 4스레드 CPU2~5,<br>GPU 호스트 1스레드</span></td><td>YOLO11n-320 NCNN FP16</td><td class="n">14.52</td><td class="n">26.4 (85.3)</td><td class="n">94.9 (156)</td><td class="n">1.71</td></tr>
+  <tr><td>YOLO11n-640 NCNN FP16</td><td class="n">12.10</td><td class="n">59.2 (95.4)</td><td class="n">177 (213)</td><td class="n">2.99</td></tr>
+  <tr><td>YOLO11n-320 ORT INT8</td><td class="n">15.13</td><td class="n">32.7 (35.1)</td><td class="n">101 (104)</td><td class="n">3.51</td></tr>
+  <tr><td>YOLO11n-320 TFLite FP32</td><td class="n">15.11</td><td class="n">43.5 (48.8)</td><td class="n">111 (118)</td><td class="n">2.33</td></tr>
+  <tr><td>YOLO11n-320 <b>TensorRT FP16</b></td><td class="n">15.11</td><td class="n">7.9 (15.3)</td><td class="n"><b>78.8</b> (85.8)</td><td class="n">0.20</td></tr>
+  <tr><td>YOLO11n-640 <b>TensorRT FP16</b></td><td class="n">15.09</td><td class="n">12.2 (23.5)</td><td class="n"><b>103</b> (115)</td><td class="n">0.52</td></tr>
+  <tr><td>YOLO11n-640 TensorRT INT8</td><td class="n">15.09</td><td class="n">17.0 (23.4)</td><td class="n">108 (115)</td><td class="n">0.62</td></tr>
+  <tr><td>YOLO11n-640 PyTorch CUDA FP32</td><td class="n">15.09</td><td class="n">21.9 (25.2)</td><td class="n">113 (120)</td><td class="n">0.74</td></tr>
+  <tr><td rowspan="2">보드6, DVS AI 켬(평소)<br><span class="sub">NCNN FP16 4스레드 CPU4~7</span></td><td>YOLO11n-320 기본 → 코어 고정</td><td class="n">2.35 → <b>7.50</b></td><td class="n">388 → 109</td><td class="n">492 → <b>226</b></td><td class="n">2.07 → 1.71</td></tr>
+  <tr><td>YOLO11n-640 기본 → 코어 고정</td><td class="n">0.97 → 1.97</td><td class="n">951 → 428</td><td class="n">1122 → 604</td><td class="n">1.87 → 1.64</td></tr>
+  <tr><td rowspan="2">보드6, DVS AI 끔</td><td>YOLO11n-320 기본 → 코어 고정</td><td class="n">6.46 → <b>14.41</b></td><td class="n">102 → 52</td><td class="n">208 → <b>163</b></td><td class="n">2.57 → 3.12</td></tr>
+  <tr><td>YOLO11n-640 기본 → 코어 고정</td><td class="n">2.12 → 3.74</td><td class="n">383 → 201</td><td class="n">542 → 355</td><td class="n">2.40 → 2.98</td></tr>
+</table>
+<ul>
+  <li>Jetson은 YOLO11n-640 NCNN CPU를 빼고 모든 설정에서 카메라 프레임을 거의 다 검출했다.</li>
+  <li>GPU 경로의 e2e에서는 카메라 쪽 시간이 추론보다 크다. YOLO11n-640 TensorRT FP16의 103 ms는 다음으로 이루어진다.
+    <ul>
+      <li>프레임 나이 64 ms: 15 fps 간격과 USB 전송이 들어 있다.</li>
+      <li>CPU의 YUYV→RGB 17 ms와 레터박스 7 ms.</li>
+      <li>추론 12 ms.</li>
+    </ul>
+  </li>
+  <li>보드6의 프레임 나이는 약 95~100 ms로 Jetson보다 길다. 원인은 재지 않았다.</li>
+  <li>보드6은 DVS AI(행동 분류, 얼굴)가 CPU4~6을 쓴다. 그래서 같은 코어의 YOLO가 느려진다. 그런데 코어 고정만으로도 AI를 끈 기본 판보다 빨라졌다.</li>
+  <li>이 시험은 속도와 지연만 본 것이다. 검출 개수는 그때 카메라 앞 장면에 따라 달라 정확도로 읽지 않는다.</li>
+</ul>
+
+<h2>7. 아키텍처로 본 원인 (같은 바이너리로 잼, 11.115)</h2>
+<table>
+  <tr><th>항목</th><th class="n">E850 Cortex-A55</th><th class="n">Jetson Cortex-A78AE</th></tr>
+  <tr><td>클럭(잰 값)</td><td class="n">1.99 GHz</td><td class="n">1.34 GHz</td></tr>
+  <tr><td>독립 정수 덧셈/사이클</td><td class="n">1.9</td><td class="n">3.4</td></tr>
+  <tr><td>FP32 <code>fmla.4s</code></td><td class="n">8 flop/사이클 = 15.5 GFLOPS</td><td class="n">16 flop/사이클 = 21.4 GFLOPS</td></tr>
+  <tr><td>FP16 <code>fmla.8h</code></td><td class="n">16 flop/사이클</td><td class="n">32 flop/사이클</td></tr>
+  <tr><td>int8 <code>sdot</code>(DotProd)</td><td class="n no">없음(SIGILL)</td><td class="n">64 연산/사이클</td></tr>
+  <tr><td>L1D / 그다음 단계</td><td class="n">32 KB / 약 512 KB</td><td class="n">64 KB / L2 256 KB + L3 2 MB</td></tr>
+  <tr><td>독립 메모리 읽기 겹침(192 KB / DRAM)</td><td class="n">1.8배 / 2.5배</td><td class="n">4.8배 / 7.9배</td></tr>
+  <tr><td>코어 하나 읽기 대역폭 / 칩 전체</td><td class="n">5.0 / 14.9 GB/s</td><td class="n">11.1 / 40.9 GB/s</td></tr>
+  <tr><td>한 번에 하나씩 쫓는 DRAM 지연</td><td class="n">138 ns</td><td class="n">236 ns</td></tr>
+</table>
+<ul>
+  <li>같은 일을 코어 하나로 하면 Jetson이 다음만큼 빠르다.
+    <ul>
+      <li>DVS 해독 1.5배, 잡음 필터 3.7배.</li>
+      <li>DVS AI 3.4~4.2배(onnxruntime FP32).</li>
+      <li>카메라 YUYV 변환 3배.</li>
+    </ul>
+  </li>
+  <li>모든 코어를 다 쓰면(E850 8코어, Jetson 6코어) 칩 전체로 Jetson이 3.0~3.4배 빠르다. 8코어는 차이를 줄이지만 뒤집지는 못한다.</li>
+  <li>FMA 최고치로만 따지면 Jetson이 약 1.4배(15.5 대 21.4 GFLOPS) 빠를 뿐이다. 그런데 측정된 AI 차이는 2.4~3.7배(1스레드)다.
+    <ul>
+      <li>가설: 나머지는 A55가 in-order라 합성곱 커널의 읽기, 주소 계산, FMA를 겹치지 못하는 데서 온다. 작은 캐시와 작은 메모리 읽기 겹침도 더해진다.</li>
+      <li>모델 실행 중의 PMU 카운터로는 확인하지 않았다.</li>
+    </ul>
+  </li>
+  <li>Arm 버전(ISA)은 두 코어 모두 v8.2 계열이다. 컴파일 대상을 바꿔도 DVS 코드의 차이는 ±4%였다. 두 장비의 차이는 ISA보다 마이크로아키텍처에서 온다.</li>
+  <li>실시간 부하(AI 없이 DVS만 / DVS + 카메라 화면):
+    <ul>
+      <li>보드6은 89% / 127%(8코어 중)다.</li>
+      <li>Jetson은 73% / 95~110%(6코어 중)다.</li>
+      <li>보드6 DVS AI를 켜면 197% / 245%다.</li>
+      <li>두 장비 모두 DVS 30 fps, 카메라 15 fps, 이벤트 손실 0을 지켰다.</li>
+    </ul>
+  </li>
+</ul>
+
+<h2>8. 연구 질문에 대한 답</h2>
+<table>
+  <tr><th style="width:24%">질문</th><th>답</th><th style="width:11%">근거</th></tr>
+  <tr><td>RQ1. 같은 모델에서 두 ARM CPU의 차이</td><td>1스레드 같은 런타임에서 FP32·FP16은 2.4~3.7배, INT8은 3.3~6.2배 Jetson이 빠르다. 서로 가장 빠른 설정끼리는 3.0~3.8배다. E850 클럭이 1.49배 높은데도 그렇다. 차이는 코어 구조에서 온다(7장)</td><td><span class="tag ok">실측</span></td></tr>
+  <tr><td>RQ2. E850에서 가장 효율적인 런타임</td><td>네 모델 모두 NCNN FP16이다. YOLO는 4스레드 코어 고정을 함께 쓴다. 정확도 손실은 0.005 이하다. CPU를 남겨야 하면 ResNet18·MobileNetV2는 E850 GPU(TFLite GL FP16)가 CPU 0.02~0.39코어로 돈다(3~10배 느림, 5.2절). "효율"을 에너지로 보는 답은 E850 전력을 재지 못해 없다</td><td><span class="tag ok">실측</span> <span class="tag warn">에너지 N/A</span></td></tr>
+  <tr><td>RQ3. 정밀도별 효과</td><td>FP16은 두 CPU 모두 2배다. INT8은 E850에서 작고(DotProd 없음) Jetson CPU에서 크다. Jetson GPU는 FP16이 가장 좋다. YOLO INT8은 FP16보다 느렸다(4.2절). E850 GPU FP16은 1.35~1.38배(저장 대역폭만), INT8은 N/A다</td><td><span class="tag ok">실측</span></td></tr>
+  <tr><td>RQ4. 카메라와 DVS의 데이터 양과 AI 비용</td><td>
+    <ul>
+      <li>데이터 양: 카메라 9.3 MB/s(형식에서 계산, 늘 같음). DVS는 장면에 따라 13~69 MB/s(보드6), 28.5 MB/s(Jetson)였다. 이 설정의 DVS는 카메라보다 적지 않다.</li>
+      <li>AI 비용: 같은 일로는 비교하지 못했다. DVS 모델은 행동 분류·얼굴이고 카메라 모델은 COCO 검출이다.</li>
+    </ul></td><td><span class="tag warn">일부</span></td></tr>
+  <tr><td>RQ5. 고속 물체 검출에서 DVS가 유리한가</td><td>고속 장면을 두 센서로 함께 찍은 정답 데이터가 없다. DVS 검출 모델도 없다. 있는 것은 시간 분해능 차이뿐이다(DVS scan 495 µs, 카메라 66 ms)</td><td><span class="tag no">N/A</span></td></tr>
+  <tr><td>RQ6. 카메라+DVS 융합의 효과</td><td>융합(A·B·C)을 구현하지 않았다. 두 광학계의 정렬, 시간 맞춤, 함께 찍은 정답 데이터가 필요하다. 보드6은 두 센서를 동시에 받으므로 하드웨어는 준비되어 있다</td><td><span class="tag no">N/A</span></td></tr>
+  <tr><td>RQ7. 이벤트로 깨우는 AI로 줄이는 추론과 에너지</td><td>깨우는 규칙을 구현하지 않았다. 줄인 비율을 재려면 놓친 검출을 세야 하는데, 그럴 라벨 데이터가 없다. E850 에너지도 잴 수 없다</td><td><span class="tag no">N/A</span></td></tr>
+  <tr><td>RQ8. DVS 선택적 추론 E850이 RGB 연속 추론 Jetson보다 에너지에서 나은 조건</td><td>E850 전력을 재지 못했다. Jetson은 유휴 약 6.5 W다. 15 fps로 연속 추론(YOLO11n-320 TensorRT FP16)해도 유휴보다 약 0.15 W만 늘어난다(잰 값에서 계산). 그래서 비교의 핵심은 두 보드의 유휴 전력일 것이다(가설). 같은 전력계로 두 보드의 DC 입력을 재야 답할 수 있다</td><td><span class="tag no">N/A</span></td></tr>
+</table>
+
+<h2>9. 하지 못한 것과 필요한 것</h2>
+<table>
+  <tr><th style="width:30%">항목</th><th>원인</th><th>풀려면</th></tr>
+  <tr><td>E850 전력·에너지</td><td>전력 센서가 없다</td><td>외부 전력계로 두 보드의 DC 입력을 같은 방법으로 잰다</td></tr>
+  <tr><td>DVS 객체 검출(Phase 4)</td><td>라벨 있는 DVS 검출 데이터가 없다</td><td>보드6으로 녹화하고 라벨을 단다. 또는 공개 이벤트 데이터로 미세조정한다</td></tr>
+  <tr><td>카메라+DVS 융합(Phase 5)</td><td>정렬(호모그래피), 시간 맞춤, 정답 데이터가 없다</td><td>같은 장면을 동시 녹화하고 바둑판으로 정렬한다</td></tr>
+  <tr><td>E850 GPU INT8, ORT·NCNN GPU</td><td>TFLite GL로 FP32·FP16만 쟀다(5.2절). GL 백엔드에 정수 연산이 없다. OpenCL·Vulkan 드라이버가 없다</td><td>이 커널에 맞는 Mali OpenCL·Vulkan 사용자 드라이버</td></tr>
+  <tr><td>E850 GPU의 YOLO 전부</td><td>GL에 TRANSPOSE·BATCH_MATMUL, 상수 텐서 SUB 셰이더가 없다</td><td>GL 셰이더를 더 쓰거나, 그 부분을 모델에서 떼어 CPU로</td></tr>
+  <tr><td>AGX Orin, DLA</td><td>장비가 없다</td><td>AGX Orin</td></tr>
+  <tr><td>Jetson GPU 클럭 고정</td><td><code>jetson_clocks</code>에 sudo가 필요하다</td><td>블록 끝의 클럭을 기록해 두었다(918 MHz)</td></tr>
+  <tr><td>TensorRT INT8 재양자화</td><td>시간</td><td>TensorRT 권장 Q/DQ 배치(ModelOpt 등)로 다시 만든다</td></tr>
+  <tr><td>연산자별 시간, PMU</td><td>범위 밖이다. E850 PMU 실험은 사용자가 있을 때만 한다</td><td>ORT·TFLite·NCNN 프로파일러</td></tr>
+  <tr><td>통합 실시간 뷰어(Phase 10)</td><td>아직 만들지 않았다</td><td>HTML 대시보드(첨부)만 있다</td></tr>
+</table>
+
+<h2>부록</h2>
+<h3>A. 파일</h3>
+<ul>
+  <li>벤치마크 코드와 결과: 저장소 <code>msbench/</code>.
+    <ul>
+      <li>측정: <code>benchmark/run_benchmark.py</code></li>
+      <li>실시간: <code>camera/realtime_detection.py</code></li>
+      <li>보고서: <code>dashboard/generate_report.py</code></li>
+      <li>원자료: <code>results/raw/*.jsonl</code></li>
+    </ul>
+  </li>
+  <li>대화형 대시보드: <code>msbench/results/report.html</code>. 256개 설정 전부를 장비, 모델, 런타임으로 거를 수 있다.</li>
+  <li>작업 기록: <code>docs/E85096-LINUX510-BOOT.md</code>.
+    <ul>
+      <li>11.115: 실시간 비교와 아키텍처 측정.</li>
+      <li>11.116: 이 벤치마크.</li>
+      <li>11.117: E850 GPU(TFLite GL). 코드는 <code>msbench/e850gpu/</code>.</li>
+    </ul>
+  </li>
+  <li>커밋: <code>bcba389</code>(11.115), <code>256b1d3</code>와 <code>345fd1b</code>(11.116). 브랜치는 <code>features-20261121</code>이다.</li>
+</ul>
+<h3>B. 용어</h3>
+<table>
+  <tr><th style="width:24%">용어</th><th>뜻</th></tr>
+  <tr><td>FP32, FP16, INT8</td><td>숫자를 32비트 실수, 16비트 실수, 8비트 정수로 계산하는 것이다. 작을수록 빠르고 정확도가 떨어질 수 있다</td></tr>
+  <tr><td>INT8+FP16</td><td>합성곱은 INT8로, 그 사이의 연산은 FP16으로 하는 것이다(TensorRT)</td></tr>
+  <tr><td>mAP50-95</td><td>검출 정확도다. 상자가 겹치는 기준을 0.5에서 0.95까지 바꿔 가며 낸 평균 정밀도다. 1이 완벽이다</td></tr>
+  <tr><td>top-1, top-5</td><td>분류 정확도다. 첫 번째 답이 맞은 비율, 다섯 답 안에 정답이 있는 비율이다</td></tr>
+  <tr><td>in-order, out-of-order</td><td>in-order 코어는 명령을 쓰인 순서대로 실행한다(A55). out-of-order 코어는 준비된 명령부터 실행해 기다림을 숨긴다(A78AE)</td></tr>
+  <tr><td>메모리 읽기 겹침(MLP)</td><td>서로 상관없는 메모리 읽기 여러 개를 동시에 기다릴 수 있는 정도다</td></tr>
+  <tr><td>DotProd(<code>sdot</code>)</td><td>int8 네 개씩 곱해 더하는 Arm 명령이다. INT8 추론을 빠르게 한다</td></tr>
+  <tr><td>e2e</td><td>카메라가 프레임을 보내기 시작한 때부터 검출 결과가 나온 때까지의 시간이다</td></tr>
+  <tr><td>OpenMP 코어 고정</td><td><code>OMP_PROC_BIND=close OMP_PLACES=cores</code>: 작업 스레드마다 코어 하나를 정해 두는 설정이다</td></tr>
+</table>
+</main>
+<script>
+document.getElementById('save').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['<!doctype html>\n' + document.documentElement.outerHTML], { type: 'text/html' }));
+  a.download = 'MSBENCH-RESULTS-20261126.html';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+</script>
+</body>
+</html>
